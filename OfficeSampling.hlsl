@@ -27,7 +27,7 @@ float3 corrected(float3 c) {
 bool mediaEdge(float edge,float pixel,bool vertical,bool high) {
     float thickness=high?1-edge:edge;
     if(thickness<3*pixel) return false;
-    int content=0;
+    int content=0;float brightestMatte=0;
     [loop] for(int i=0;i<24;++i) {
         float t=(i+.5)/24;
         // Evidence from the outer, middle and inner matte; never blur/mipmap
@@ -36,13 +36,13 @@ bool mediaEdge(float edge,float pixel,bool vertical,bool high) {
             float d=j==0?pixel*.5:j==1?thickness*.5:thickness-2*pixel;
             float at=high?1-d:d;
             float3 c=image.SampleLevel(linearSampler,vertical?float2(at,t):float2(t,at),0).rgb;
-            if(max(c.r,max(c.g,c.b))>.02) return false;
+            brightestMatte=max(brightestMatte,max(c.r,max(c.g,c.b)));
         }
         float inside=edge+(high?-1:1)*3*pixel;
         float3 c=image.SampleLevel(linearSampler,vertical?float2(inside,t):float2(t,inside),0).rgb;
         if(luminance(c)>.045) ++content;
     }
-    return content>=3; // Positive content next to the matte, including dark-frame rejection.
+    return brightestMatte<=.02 && content>=3; // Positive content next to the matte, including dark-frame rejection.
 }
 float4 detectContentPs(Vertex input) : SV_TARGET {
     float4 best=float4(0,0,1,1);
@@ -53,10 +53,10 @@ float4 detectContentPs(Vertex input) : SV_TARGET {
         float ratio=ratios[i];bool vertical=ratio<aspect;
         float extent=vertical?ratio/aspect:aspect/ratio;
         float edge=(1-extent)*.5,pixel=1./(vertical?w:h);
-        if(!mediaEdge(edge,pixel,vertical,false) || !mediaEdge(1-edge,pixel,vertical,true)) continue;
+        bool low=mediaEdge(edge,pixel,vertical,false),high=mediaEdge(1-edge,pixel,vertical,true);
         // Choose the least cropping among candidates within pixel tolerance.
         // A ratio alone is insufficient: matte and content probes must agree.
-        if(extent>bestArea) {best=vertical?float4(edge,0,1-edge,1):float4(0,edge,1,1-edge);bestArea=extent;}
+        if(low && high && extent>bestArea) {best=vertical?float4(edge,0,1-edge,1):float4(0,edge,1,1-edge);bestArea=extent;}
     }
     return best;
 }
