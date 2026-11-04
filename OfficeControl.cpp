@@ -50,6 +50,8 @@
 #include <QSystemTrayIcon>
 #include <QMenu>
 #include <QStyle>
+#include <QProgressBar>
+#include <QGraphicsOpacityEffect>
 #include <QFileDialog>
 #include <functional>
 #include <map>
@@ -388,6 +390,8 @@ class Panel : public QMainWindow {
     QLabel* connectionDetail=new officeui::DotLabel;
     QLabel* zoneSummary=new QLabel;
     QLabel* loadingMessage=new QLabel("Connecting to the local lighting owner…");
+    QLabel* loadingTitle=nullptr;
+    QProgressBar* loadingProgress=nullptr;
     QWidget* footer=nullptr;
     QWidget* dashboardDevices=new QWidget;
     QVBoxLayout* dashboardList=new QVBoxLayout(dashboardDevices);
@@ -489,7 +493,7 @@ class Panel : public QMainWindow {
         QFile log(exportPath+".events.jsonl");
         if(log.open(QIODevice::WriteOnly|QIODevice::Append)) log.write(QByteArray::fromStdString(Json{{"elapsed_ms",clock.elapsed()},{"event",message.toStdString()}}.dump())+'\n');
     }
-    void failure(const QString& message) {trace("error: "+message);qWarning().noquote()<<message;connection->setText("Connection needs attention");connection->setToolTip(message);connection->setStyleSheet("color:#ff9f1c");loadingMessage->setText(message);connectionDetail->setText(message);if(!client.ready())shellPages->setCurrentIndex(1);}
+    void failure(const QString& message) {trace("error: "+message);qWarning().noquote()<<message;connection->setText("Connection needs attention");connection->setToolTip(message);connection->setStyleSheet("color:#ff9f1c");loadingTitle->setText("Connection unavailable");loadingTitle->setStyleSheet("color:#ffb54a");loadingProgress->hide();loadingMessage->setText(message);connectionDetail->setText(message);if(!client.ready())shellPages->setCurrentIndex(1);}
     void response(const Json& value,std::function<void(const Json&)> then={}) {
         pending=false;
         if(!value.value("ok",false)) {failure(text(value.at("error")));return;}
@@ -586,14 +590,18 @@ class Panel : public QMainWindow {
                 connect(on,&QCheckBox::toggled,this,[this,d,g](bool enabled){layout[d]["groups"][g]["enabled"]=enabled;changed();syncTree();buildDevices();});
                 connect(zoneEdit,&QPushButton::clicked,this,[editZone,d,g]{editZone(d,g);});
             }
-            deviceList->addWidget(card);
+            card->content->activate();deviceList->addWidget(card);
+            auto fade=new QGraphicsOpacityEffect(card);fade->setOpacity(layout[d].value("enabled",true)?1.:.48);card->setGraphicsEffect(fade);
             auto dashRow=new QHBoxLayout;auto dashIcon=new QLabel;dashIcon->setPixmap(officeui::icon(glyph).pixmap(20,20));dashRow->addWidget(dashIcon);
             auto dashName=new officeui::Switch(text(layout[d]["name"]));dashName->setChecked(layout[d]["enabled"]);dashRow->addWidget(dashName,1);
             dashRow->addWidget(officeui::label(QString("%1 LEDs · %2 zones").arg(layout[d]["regions"].size()).arg(layout[d]["groups"].size()),"hint"));
-            auto dashEdit=officeui::button("Topology","hub");dashRow->addWidget(dashEdit);auto dashWidget=new QWidget;dashWidget->setLayout(dashRow);dashboardList->addWidget(dashWidget);
+            auto dashEdit=officeui::button("Topology","hub");dashRow->addWidget(dashEdit);auto expand=officeui::button("Zones","hub");expand->setCheckable(true);dashRow->addWidget(expand);auto dashWidget=new QWidget;auto dashLayout=new QVBoxLayout(dashWidget);dashLayout->addLayout(dashRow);auto zones=new QWidget;auto zoneRows=new QVBoxLayout(zones);zoneRows->setContentsMargins(42,0,0,0);for(size_t g=0;g<layout[d]["groups"].size();++g){auto zone=officeui::button(text(layout[d]["groups"][g]["name"]),"hub");zoneRows->addWidget(zone);connect(zone,&QPushButton::clicked,this,[editZone,d,g]{editZone(d,g);});}zones->hide();dashLayout->addWidget(zones);connect(expand,&QPushButton::toggled,zones,&QWidget::setVisible);dashboardList->addWidget(dashWidget);
             connect(dashName,&QCheckBox::toggled,this,[this,d](bool on){layout[d]["enabled"]=on;changed();syncTree();buildDevices();});connect(dashEdit,&QPushButton::clicked,this,[editZone,d]{editZone(d,0);});
-        }deviceList->addStretch();dashboardList->addStretch();
-        if(layout.empty()){auto empty=new officeui::Card("No devices available","device_hub");empty->content->addWidget(officeui::label("Offline maps stay available. Reconnect the native owner or return the KVM devices to this PC."));auto reconnect=officeui::button("Reconnect","refresh");empty->content->addWidget(reconnect);connect(reconnect,&QPushButton::clicked,this,[this]{client.reconnect(state);});deviceList->addWidget(empty);}
+        }dashboardList->addStretch();
+        if(layout.empty()){deviceList->addStretch();auto empty=new officeui::Card("No devices available","device_hub");empty->content->addWidget(officeui::label("Offline maps stay available. Reconnect the native owner or return the KVM devices to this PC."));auto reconnect=officeui::button("Reconnect","refresh");empty->content->addWidget(reconnect);connect(reconnect,&QPushButton::clicked,this,[this]{client.reconnect(state);});deviceList->addWidget(empty);}
+        deviceList->addStretch();deviceList->activate();devicePage->setMinimumHeight(deviceList->minimumSize().height());devicePage->updateGeometry();
+        totalDevices->setText(QString::number(layout.size()));mappedDevices->setText(QString::number(layout.size()));
+        if(layout.empty())inventorySummary->setText("No device maps loaded · reconnect to refresh inventory");
     }
     void syncTree() {
         QSignalBlocker blocker(tree);int d=map->device,g=map->group;buildTree();
@@ -659,10 +667,11 @@ class Panel : public QMainWindow {
         resize(1440,900);result["states"]=Json::array();
         auto renderState=[this,&result](const char* name){QApplication::sendPostedEvents();centralWidget()->layout()->activate();auto file=exportPath+"/state-"+name+".png";if(!grab().save(file))throw std::runtime_error("Could not export UI state");result["states"].push_back({{"name",name},{"path",file.toStdString()},{"fixture",true}});};
         pages->setCurrentIndex(0);auto disclosure=findChild<QPushButton*>("advancedOptions");disclosure->setChecked(true);renderState("advanced");disclosure->setChecked(false);
+        pages->setCurrentIndex(1);select(0,0);auto beforeRotation=layout;map->rotateSelection();showGeometry();renderState("rotation-quarter-turn");layout=beforeRotation;map->resetHistory();map->update();
         auto retainedLayout=layout,retainedSnapshot=lastSnapshot;
         lastSnapshot["online"]=std::vector<bool>(layout.size(),false);buildDevices();pages->setCurrentIndex(2);renderState("offline");
         layout=Json::array();buildDevices();renderState("empty");layout=retainedLayout;lastSnapshot=retainedSnapshot;buildDevices();
-        shellPages->setCurrentIndex(1);loadingMessage->setText("The local lighting owner is unavailable. Reconnect, or continue to Settings to inspect its connection.");renderState("connection-unavailable");shellPages->setCurrentIndex(0);
+        shellPages->setCurrentIndex(1);loadingTitle->setText("Connection unavailable");loadingTitle->setStyleSheet("color:#ffb54a");loadingProgress->hide();loadingMessage->setText("The local lighting owner is unavailable. Reconnect, or continue to Settings to inspect its connection.");renderState("connection-unavailable");shellPages->setCurrentIndex(0);
         QFile output(exportPath+"/panel-export.json");output.open(QIODevice::WriteOnly);output.write(QByteArray::fromStdString(result.dump(2)));
         QCoreApplication::quit();
     }
@@ -671,6 +680,7 @@ class Panel : public QMainWindow {
         // It restores the complete map before any rendered acceptance evidence.
         if(editorPhase==0) {
             editorBaseline=layout;editorRevision=revision;select(0,0);
+            map->rotateSelection();
             zoneName->setText(text(editorBaseline[0]["groups"][0]["name"])+" [UI save check]");
             QMetaObject::invokeMethod(zoneName,"editingFinished",Qt::DirectConnection);
             if(!dirty || !save->isEnabled()) throw std::runtime_error("Editor widget did not produce a saveable draft");
@@ -678,7 +688,8 @@ class Panel : public QMainWindow {
         } else if(editorPhase==1) {
             if(revision!=editorRevision+1 || layout[0]["groups"][0]["name"]==editorBaseline[0]["groups"][0]["name"])
                 throw std::runtime_error("Real Save button did not persist the edited name");
-            select(0,0);zoneName->setText(text(editorBaseline[0]["groups"][0]["name"]));
+            if(layout[0]["rotation_quarters"][0]!=1)throw std::runtime_error("Rotation metadata was not persisted by the real Save action");
+            map->replaceLayout(editorBaseline);select(0,0);zoneName->setText(text(editorBaseline[0]["groups"][0]["name"]));
             QMetaObject::invokeMethod(zoneName,"editingFinished",Qt::DirectConnection);
             editorPhase=2;save->click();
         } else {

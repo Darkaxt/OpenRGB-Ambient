@@ -77,6 +77,7 @@ public:
     void paintEvent(QPaintEvent*) override {
         QPainter p(this);p.fillRect(rect(),QColor("#040c14"));
         QRadialGradient g(QPointF(width()*.25,height()*.48),width()*.7);g.setColorAt(0,QColor(0,92,105,18));g.setColorAt(1,QColor(0,0,0,0));p.fillRect(rect(),g);
+        p.setPen(QColor(130,190,210,3));for(int y=0;y<height();y+=4)p.drawLine(0,y,width(),y);
     }
 };
 class Switch : public QCheckBox {
@@ -138,16 +139,17 @@ public:
     void motionChanged() {sonar.stop();if(isVisible() && !qApp->property("officeReducedMotion").toBool())sonar.start();update();}
     void paintEvent(QPaintEvent*) override {
         QPainter p(this);p.setRenderHint(QPainter::Antialiasing);QPointF c(width()/2.,emblem?height()/2.:41);
-        QRadialGradient glow(c,42);glow.setColorAt(0,QColor(20,245,255,25));glow.setColorAt(1,Qt::transparent);p.setPen(Qt::NoPen);p.setBrush(glow);p.drawEllipse(c,43,43);
-        p.setBrush(Qt::NoBrush);p.setPen(QPen(QColor(20,245,255,30),1));p.drawEllipse(c,39,39);p.setPen(QPen(QColor(20,245,255,80),1));p.drawEllipse(c,21,21);p.setPen(QPen(accent,1));p.drawEllipse(c,18,18);
-        if(sonar.state()==QAbstractAnimation::Running){double phase=sonar.currentValue().toDouble();p.setPen(QPen(QColor(20,245,255,qRound(70*(1-phase))),1));p.drawEllipse(c,22+phase*18,22+phase*18);}
+        double core=emblem?60:18,outer=emblem?92:39;
+        QRadialGradient glow(c,outer);glow.setColorAt(0,QColor(20,245,255,25));glow.setColorAt(1,Qt::transparent);p.setPen(Qt::NoPen);p.setBrush(glow);p.drawEllipse(c,outer,outer);
+        p.setBrush(Qt::NoBrush);p.setPen(QPen(QColor(20,245,255,30),1));p.drawEllipse(c,outer,outer);p.setPen(QPen(QColor(20,245,255,80),1));p.drawEllipse(c,core+3,core+3);p.setPen(QPen(accent,1));p.drawEllipse(c,core,core);
+        if(sonar.state()==QAbstractAnimation::Running){double phase=sonar.currentValue().toDouble();double radius=core+4+phase*(outer-core-4);p.setPen(QPen(QColor(20,245,255,qRound(70*(1-phase))),1));p.drawEllipse(c,radius,radius);}
         if(emblem) {
             // Exact geometry from the recovered loading SVG, in its 56-unit viewBox.
             p.save();p.translate(c-QPointF(28,28));p.setPen(Qt::NoPen);
             for(int i=0;i<3;++i){p.setBrush(QColor(20,245,255,i==0?255:i==1?158:77));p.drawRoundedRect(QRectF(9,20+i*7,38,3.5),1.75,1.75);}
             p.setBrush(Qt::NoBrush);p.setPen(QPen(QColor(20,245,255,217),1.5));p.drawEllipse(QPointF(28,13),5.5,5.5);p.setPen(Qt::NoPen);p.setBrush(QColor(20,245,255,140));p.drawEllipse(QPointF(28,13),2,2);p.restore();
         } else symbol(p,QRectF(c.x()-10,c.y()-10,20,20),"settings_brightness",accent,false,18);
-        p.setPen(QColor(255,255,255,13));p.drawLine(0,height()-1,width(),height()-1);
+        if(!emblem){p.setPen(QColor(255,255,255,13));p.drawLine(0,height()-1,width(),height()-1);}
     }
 };
 inline QString stylesheet() {return R"(
