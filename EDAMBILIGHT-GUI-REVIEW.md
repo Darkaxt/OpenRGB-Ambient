@@ -1,5 +1,12 @@
 # EDAmbilight v1.2.0: recovered GUI contract
 
+> Visual acceptance correction, 2026-11-04: the prior functional reconciliation
+> does not prove resemblance to the corresponding reference pages. The native
+> 0.4.0 candidate fails that visual gate. See
+> [the corresponding-page checklist](design-reference/VISUAL-PARITY-CHECKLIST.md)
+> and [actual recovered iconography](design-reference/iconography/contact-sheet.png).
+> Original fonts/icons were recovered but not adopted by the native UI.
+
 Analysis boundary, 2026-11-04: the user redirected work to REA of the GUI and
 will adjust the device mapping tomorrow using the new tooling. This document
 records the recovered interface and the requirements it creates for the already

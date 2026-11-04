@@ -1,0 +1,607 @@
+{
+  "release": "v1.2.0",
+  "archive_sha256": "9b73dc1b13917d4566a960767d2000894ba23adb4c29e7b8e5bef5d0708c2a7c",
+  "input_directory": "D:\\Tools\\OpenRGB\\validation\\20261104\\edambilight-gui-v1.2.0",
+  "fonts": [
+    {
+      "file": "MaterialSymbolsOutlined.woff2",
+      "bytes": 3846876,
+      "sha256": "841ce0fe3a3d05e8a63b0f5ed60cc1329d1e4f9b50975e4063699b16981b7705",
+      "vendored_path": "third_party/ed-preview/fonts/MaterialSymbolsOutlined.woff2"
+    },
+    {
+      "file": "Orbitron-400.woff2",
+      "bytes": 6396,
+      "sha256": "9320ca80be2f4275e7aaa009bc058b9ea46264d4f92b06f0b822c3405cf45841",
+      "vendored_path": "third_party/ed-preview/fonts/Orbitron-400.woff2"
+    },
+    {
+      "file": "Orbitron-500.woff2",
+      "bytes": 6596,
+      "sha256": "c13360768270c65d6c97701b100a88993885671dfdfd2a400aa58ea0195381ea",
+      "vendored_path": "third_party/ed-preview/fonts/Orbitron-500.woff2"
+    },
+    {
+      "file": "Orbitron-600.woff2",
+      "bytes": 6588,
+      "sha256": "585062e775d70397653192777533f65f3afb707320fcc2a4bc510470e03762e6",
+      "vendored_path": "third_party/ed-preview/fonts/Orbitron-600.woff2"
+    },
+    {
+      "file": "Orbitron-700.woff2",
+      "bytes": 6528,
+      "sha256": "ee6acc5ad5349018f9ca71fab8118144160e110838931874150a1ac3f97db38d",
+      "vendored_path": "third_party/ed-preview/fonts/Orbitron-700.woff2"
+    },
+    {
+      "file": "Orbitron-800.woff2",
+      "bytes": 6740,
+      "sha256": "e2591ec1ac280053b8dc647b0a7d074578a2769a96ff454fb28e4c63257436cc",
+      "vendored_path": "third_party/ed-preview/fonts/Orbitron-800.woff2"
+    },
+    {
+      "file": "Orbitron-900.woff2",
+      "bytes": 6400,
+      "sha256": "ce87e6a1b1955bbc7b1d2d1c30fb5b53af5e34edb5b93a33e28068054892ef74",
+      "vendored_path": "third_party/ed-preview/fonts/Orbitron-900.woff2"
+    },
+    {
+      "file": "Rajdhani-300.woff2",
+      "bytes": 14456,
+      "sha256": "828d4d537471ba0717fec6f6aa717aa6b96dd7aeb35f7e7b6d206775b438982c",
+      "vendored_path": "third_party/ed-preview/fonts/Rajdhani-300.woff2"
+    },
+    {
+      "file": "Rajdhani-400.woff2",
+      "bytes": 14976,
+      "sha256": "759a9000e47b028799d7a4ca602634a7ac7adf415775df070a335d18d9b66f38",
+      "vendored_path": "third_party/ed-preview/fonts/Rajdhani-400.woff2"
+    },
+    {
+      "file": "Rajdhani-500.woff2",
+      "bytes": 15084,
+      "sha256": "23afdb9b5b89b878fab04d80cc30bf41bb4f3f7e8be88e5f16a7cc7671cdb2dc",
+      "vendored_path": "third_party/ed-preview/fonts/Rajdhani-500.woff2"
+    },
+    {
+      "file": "Rajdhani-600.woff2",
+      "bytes": 15732,
+      "sha256": "433a7007e4747a02a790167a6efa2625855f013970ba49b9b739a5d3db8b2601",
+      "vendored_path": "third_party/ed-preview/fonts/Rajdhani-600.woff2"
+    },
+    {
+      "file": "Rajdhani-700.woff2",
+      "bytes": 15688,
+      "sha256": "5b7e4a6f97163c2636724d4de90304fc895653dcfe64c67a7a22f26331ca5c5f",
+      "vendored_path": "third_party/ed-preview/fonts/Rajdhani-700.woff2"
+    }
+  ],
+  "glyphs": [
+    "adjust",
+    "arrow_back",
+    "auto_awesome",
+    "bolt",
+    "center_focus_strong",
+    "check_circle",
+    "delete",
+    "device_hub",
+    "device_unknown",
+    "error",
+    "fiber_manual_record",
+    "fit_screen",
+    "folder_open",
+    "fullscreen",
+    "grid_view",
+    "help",
+    "http",
+    "hub",
+    "info",
+    "keyboard",
+    "linear_scale",
+    "memory",
+    "music_note",
+    "play_arrow",
+    "power_settings_new",
+    "refresh",
+    "restart_alt",
+    "save",
+    "settings_brightness",
+    "swap_horiz",
+    "tune",
+    "volume_up",
+    "warning",
+    "wifi_tethering"
+  ],
+  "occurrences": [
+    {
+      "glyph": "bolt",
+      "source": "web/devices.html",
+      "line": 98,
+      "style": "font-size:16px;",
+      "resolution": "literal"
+    },
+    {
+      "glyph": "device_hub",
+      "source": "web/devices.html",
+      "line": 144,
+      "style": "font-size:44px;color:var(--c-text-ghost);",
+      "resolution": "literal"
+    },
+    {
+      "glyph": "refresh",
+      "source": "web/devices.html",
+      "line": 152,
+      "style": "font-size:16px;",
+      "resolution": "literal"
+    },
+    {
+      "glyph": "hub",
+      "source": "web/devices.html",
+      "line": 204,
+      "style": "font-size:14px;",
+      "resolution": "literal"
+    },
+    {
+      "glyph": "bolt",
+      "source": "web/devices.html",
+      "line": 210,
+      "style": "font-size:14px;",
+      "resolution": "literal"
+    },
+    {
+      "glyph": "keyboard",
+      "source": "web/devices.html",
+      "line": 164,
+      "style": "20px",
+      "resolution": "iconName topology-type selector"
+    },
+    {
+      "glyph": "linear_scale",
+      "source": "web/devices.html",
+      "line": 164,
+      "style": "20px",
+      "resolution": "iconName topology-type selector"
+    },
+    {
+      "glyph": "fiber_manual_record",
+      "source": "web/devices.html",
+      "line": 164,
+      "style": "20px",
+      "resolution": "iconName topology-type selector"
+    },
+    {
+      "glyph": "help",
+      "source": "web/help.html",
+      "line": 137,
+      "style": "font-size:18px;",
+      "resolution": "literal"
+    },
+    {
+      "glyph": "hub",
+      "source": "web/help.html",
+      "line": 149,
+      "style": "font-size:18px;",
+      "resolution": "literal"
+    },
+    {
+      "glyph": "auto_awesome",
+      "source": "web/index.html",
+      "line": 339,
+      "style": "font-size:14px;",
+      "resolution": "literal"
+    },
+    {
+      "glyph": "restart_alt",
+      "source": "web/index.html",
+      "line": 342,
+      "style": "font-size:14px;",
+      "resolution": "literal"
+    },
+    {
+      "glyph": "tune",
+      "source": "web/index.html",
+      "line": 345,
+      "style": "font-size:14px;",
+      "resolution": "literal"
+    },
+    {
+      "glyph": "keyboard",
+      "source": "web/js/ambilight.js",
+      "line": 178,
+      "style": "19px",
+      "resolution": "iconName topology-type selector"
+    },
+    {
+      "glyph": "linear_scale",
+      "source": "web/js/ambilight.js",
+      "line": 178,
+      "style": "19px",
+      "resolution": "iconName topology-type selector"
+    },
+    {
+      "glyph": "fiber_manual_record",
+      "source": "web/js/ambilight.js",
+      "line": 178,
+      "style": "19px",
+      "resolution": "iconName topology-type selector"
+    },
+    {
+      "glyph": "check_circle",
+      "source": "web/js/common.js",
+      "line": 29,
+      "style": "24px",
+      "resolution": "notification type selector"
+    },
+    {
+      "glyph": "error",
+      "source": "web/js/common.js",
+      "line": 29,
+      "style": "24px",
+      "resolution": "notification type selector"
+    },
+    {
+      "glyph": "warning",
+      "source": "web/js/common.js",
+      "line": 29,
+      "style": "24px",
+      "resolution": "notification type selector"
+    },
+    {
+      "glyph": "info",
+      "source": "web/js/common.js",
+      "line": 29,
+      "style": "24px",
+      "resolution": "notification type selector"
+    },
+    {
+      "glyph": "settings_brightness",
+      "source": "web/js/navigation.js",
+      "line": 92,
+      "style": "font-size:18px; color:rgba(20,245,255,.88);\n                                         font-variation-settings:'FILL' 0,'wght' 200,'GRAD' 0,'opsz' 20;",
+      "resolution": "literal"
+    },
+    {
+      "glyph": "settings_brightness",
+      "source": "web/js/navigation.js",
+      "line": 4,
+      "style": "26px; inactive FILL=0,wght=200; active FILL=1,wght=300; GRAD=0,opsz=24",
+      "resolution": "NAV_ITEMS"
+    },
+    {
+      "glyph": "hub",
+      "source": "web/js/navigation.js",
+      "line": 5,
+      "style": "26px; inactive FILL=0,wght=200; active FILL=1,wght=300; GRAD=0,opsz=24",
+      "resolution": "NAV_ITEMS"
+    },
+    {
+      "glyph": "memory",
+      "source": "web/js/navigation.js",
+      "line": 6,
+      "style": "26px; inactive FILL=0,wght=200; active FILL=1,wght=300; GRAD=0,opsz=24",
+      "resolution": "NAV_ITEMS"
+    },
+    {
+      "glyph": "tune",
+      "source": "web/js/navigation.js",
+      "line": 7,
+      "style": "26px; inactive FILL=0,wght=200; active FILL=1,wght=300; GRAD=0,opsz=24",
+      "resolution": "NAV_ITEMS"
+    },
+    {
+      "glyph": "auto_awesome",
+      "source": "web/js/navigation.js",
+      "line": 8,
+      "style": "26px; inactive FILL=0,wght=200; active FILL=1,wght=300; GRAD=0,opsz=24",
+      "resolution": "NAV_ITEMS"
+    },
+    {
+      "glyph": "help",
+      "source": "web/js/navigation.js",
+      "line": 9,
+      "style": "26px; inactive FILL=0,wght=200; active FILL=1,wght=300; GRAD=0,opsz=24",
+      "resolution": "NAV_ITEMS"
+    },
+    {
+      "glyph": "bolt",
+      "source": "web/js/topology-editor.js",
+      "line": 1270,
+      "style": "font-size:16px;",
+      "resolution": "literal"
+    },
+    {
+      "glyph": "warning",
+      "source": "web/loading.html",
+      "line": 320,
+      "style": "",
+      "resolution": "literal"
+    },
+    {
+      "glyph": "warning",
+      "source": "web/preview.html",
+      "line": 250,
+      "style": "font-size:44px;color:rgba(20,245,255,.6);",
+      "resolution": "literal"
+    },
+    {
+      "glyph": "arrow_back",
+      "source": "web/preview.html",
+      "line": 254,
+      "style": "",
+      "resolution": "literal"
+    },
+    {
+      "glyph": "arrow_back",
+      "source": "web/preview.html",
+      "line": 264,
+      "style": "",
+      "resolution": "literal"
+    },
+    {
+      "glyph": "fullscreen",
+      "source": "web/preview.html",
+      "line": 276,
+      "style": "",
+      "resolution": "literal"
+    },
+    {
+      "glyph": "music_note",
+      "source": "web/preview.html",
+      "line": 367,
+      "style": "",
+      "resolution": "literal"
+    },
+    {
+      "glyph": "play_arrow",
+      "source": "web/preview.html",
+      "line": 419,
+      "style": "",
+      "resolution": "literal"
+    },
+    {
+      "glyph": "volume_up",
+      "source": "web/preview.html",
+      "line": 424,
+      "style": "",
+      "resolution": "literal"
+    },
+    {
+      "glyph": "save",
+      "source": "web/preview.html",
+      "line": 488,
+      "style": "",
+      "resolution": "literal"
+    },
+    {
+      "glyph": "delete",
+      "source": "web/preview.html",
+      "line": 489,
+      "style": "",
+      "resolution": "literal"
+    },
+    {
+      "glyph": "restart_alt",
+      "source": "web/preview.html",
+      "line": 490,
+      "style": "",
+      "resolution": "literal"
+    },
+    {
+      "glyph": "hub",
+      "source": "web/settings.html",
+      "line": 92,
+      "style": "font-size:18px;color:rgba(20,245,255,.65);",
+      "resolution": "literal"
+    },
+    {
+      "glyph": "wifi_tethering",
+      "source": "web/settings.html",
+      "line": 130,
+      "style": "font-size:15px;",
+      "resolution": "literal"
+    },
+    {
+      "glyph": "save",
+      "source": "web/settings.html",
+      "line": 134,
+      "style": "font-size:15px;",
+      "resolution": "literal"
+    },
+    {
+      "glyph": "http",
+      "source": "web/settings.html",
+      "line": 149,
+      "style": "font-size:18px;color:rgba(20,245,255,.65);",
+      "resolution": "literal"
+    },
+    {
+      "glyph": "save",
+      "source": "web/settings.html",
+      "line": 164,
+      "style": "font-size:15px;",
+      "resolution": "literal"
+    },
+    {
+      "glyph": "restart_alt",
+      "source": "web/settings.html",
+      "line": 168,
+      "style": "font-size:15px;",
+      "resolution": "literal"
+    },
+    {
+      "glyph": "power_settings_new",
+      "source": "web/settings.html",
+      "line": 182,
+      "style": "font-size:18px;color:rgba(20,245,255,.65);",
+      "resolution": "literal"
+    },
+    {
+      "glyph": "restart_alt",
+      "source": "web/settings.html",
+      "line": 192,
+      "style": "font-size:15px;",
+      "resolution": "literal"
+    },
+    {
+      "glyph": "power_settings_new",
+      "source": "web/settings.html",
+      "line": 196,
+      "style": "font-size:15px;",
+      "resolution": "literal"
+    },
+    {
+      "glyph": "folder_open",
+      "source": "web/settings.html",
+      "line": 200,
+      "style": "font-size:15px;",
+      "resolution": "literal"
+    },
+    {
+      "glyph": "info",
+      "source": "web/settings.html",
+      "line": 214,
+      "style": "font-size:18px;color:rgba(20,245,255,.65);",
+      "resolution": "literal"
+    },
+    {
+      "glyph": "device_unknown",
+      "source": "web/topology-editor.html",
+      "line": 159,
+      "style": "font-size:36px; color:rgba(255,255,255,.14); display:block; margin-bottom:8px; font-variation-settings:'FILL' 0,'wght' 200,'opsz' 40;",
+      "resolution": "literal"
+    },
+    {
+      "glyph": "restart_alt",
+      "source": "web/topology-editor.html",
+      "line": 205,
+      "style": "font-size:14px; font-variation-settings:'FILL' 0,'wght' 200,'opsz' 20;",
+      "resolution": "literal"
+    },
+    {
+      "glyph": "refresh",
+      "source": "web/topology-editor.html",
+      "line": 210,
+      "style": "font-size:14px; font-variation-settings:'FILL' 0,'wght' 200,'opsz' 20;",
+      "resolution": "literal"
+    },
+    {
+      "glyph": "grid_view",
+      "source": "web/topology-editor.html",
+      "line": 214,
+      "style": "font-size:14px; font-variation-settings:'FILL' 0,'wght' 200,'opsz' 20;",
+      "resolution": "literal"
+    },
+    {
+      "glyph": "fit_screen",
+      "source": "web/topology-editor.html",
+      "line": 218,
+      "style": "font-size:14px; font-variation-settings:'FILL' 0,'wght' 200,'opsz' 20;",
+      "resolution": "literal"
+    },
+    {
+      "glyph": "tune",
+      "source": "web/topology-editor.html",
+      "line": 222,
+      "style": "font-size:14px; font-variation-settings:'FILL' 0,'wght' 200,'opsz' 20;",
+      "resolution": "literal"
+    },
+    {
+      "glyph": "adjust",
+      "source": "web/topology-editor.html",
+      "line": 227,
+      "style": "font-size:14px; font-variation-settings:'FILL' 0,'wght' 200,'opsz' 20;",
+      "resolution": "literal"
+    },
+    {
+      "glyph": "save",
+      "source": "web/topology-editor.html",
+      "line": 237,
+      "style": "font-size:14px; font-variation-settings:'FILL' 0,'wght' 200,'opsz' 20;",
+      "resolution": "literal"
+    },
+    {
+      "glyph": "info",
+      "source": "web/topology-editor.html",
+      "line": 246,
+      "style": "font-size:14px; color:var(--c-cyan); flex-shrink:0; font-variation-settings:'FILL' 0,'wght' 200,'opsz' 20;",
+      "resolution": "literal"
+    },
+    {
+      "glyph": "swap_horiz",
+      "source": "web/topology-editor.html",
+      "line": 311,
+      "style": "font-size:14px; font-variation-settings:'FILL' 0,'wght' 200,'opsz' 20;",
+      "resolution": "literal"
+    },
+    {
+      "glyph": "center_focus_strong",
+      "source": "web/topology-editor.html",
+      "line": 340,
+      "style": "font-size:14px; color:var(--c-cyan); font-variation-settings:'FILL' 0,'wght' 200,'opsz' 20;",
+      "resolution": "literal"
+    },
+    {
+      "glyph": "info",
+      "source": "web/topology-editor.html",
+      "line": 365,
+      "style": "font-size:13px; color:var(--c-text-ghost); flex-shrink:0; margin-top:1px; font-variation-settings:'FILL' 0,'wght' 200,'opsz' 16;",
+      "resolution": "literal"
+    },
+    {
+      "glyph": "adjust",
+      "source": "web/topology-editor.html",
+      "line": 376,
+      "style": "font-size:14px; color:var(--c-cyan); font-variation-settings:'FILL' 0,'wght' 200,'opsz' 20;",
+      "resolution": "literal"
+    },
+    {
+      "glyph": "warning",
+      "source": "web/topology-editor.html",
+      "line": 475,
+      "style": "font-size:15px; color:rgba(255,70,70,.9); font-variation-settings:'FILL' 0,'wght' 200,'opsz' 20;",
+      "resolution": "literal"
+    }
+  ],
+  "dynamic_sites": [
+    {
+      "source": "web/devices.html",
+      "line": 179,
+      "expression": "${iconName}"
+    },
+    {
+      "source": "web/js/ambilight.js",
+      "line": 192,
+      "expression": "${iconName}"
+    },
+    {
+      "source": "web/js/common.js",
+      "line": 50,
+      "expression": "${icons[type] || 'info'}"
+    },
+    {
+      "source": "web/js/navigation.js",
+      "line": 131,
+      "expression": "${item.icon}"
+    }
+  ],
+  "dynamic_resolution": "NAV_ITEMS, iconName and notification selectors resolved above; template sites retained verbatim",
+  "inline_svg": [
+    {
+      "file": "ambilight-1.svg",
+      "source": "web/js/ambilight.js",
+      "line": 150,
+      "original_fragment_sha256": "9ba2a8bc9468fa9e7eb7b28ebec148a77d40169b740514f801bb100c96c4c395",
+      "exported_sha256": "b60bd98c489654d2a364401a4b4af233ddb3c33636482eff5fd2a3ec3849ae05",
+      "transformation": "Added XML namespace only where absent"
+    },
+    {
+      "file": "loading-1.svg",
+      "source": "web/loading.html",
+      "line": 291,
+      "original_fragment_sha256": "7e8f22e3cf24aa4d7ab13330a6d4d2ed3f8cc74d27b4cde23774acadebf10b08",
+      "exported_sha256": "d57c8f01fb7ba9b75019507478e8589daf8b8b916f413f9dd5b20658dd38f01d",
+      "transformation": "Added XML namespace only where absent"
+    }
+  ],
+  "license_note": "Release code MIT, Stefano Indraccolo. Do not assume the release MIT license replaces embedded font licenses; font license review remains required before new redistribution."
+}
