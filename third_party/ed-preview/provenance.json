@@ -1,0 +1,26 @@
+{
+  "upstream": "https://github.com/leandor70/EDAmbilight",
+  "release": "v1.2.0",
+  "input_sha256": {
+    "web/preview.html": "b8572af436124240e1c9475c5c9981c6065ad748d4e0fbcb70e0b926b1cb3fc0",
+    "web/js/common.js": "f20e6193b8fb2d98fe7642503505384826836c28a4c0d7ed84561a50f4646a96",
+    "web/css/fonts.css": "7aafea5f99fa29e6865fb7ce97721ae774d53a6d50c62a107fca52fefed97971",
+    "LICENSE": "2f2eb6551532e126bef65be93e838bc383f1029fe8ee8d707ab988f5269f6296",
+    "web/fonts/MaterialSymbolsOutlined.woff2": "841ce0fe3a3d05e8a63b0f5ed60cc1329d1e4f9b50975e4063699b16981b7705",
+    "web/fonts/Orbitron-400.woff2": "9320ca80be2f4275e7aaa009bc058b9ea46264d4f92b06f0b822c3405cf45841",
+    "web/fonts/Orbitron-500.woff2": "c13360768270c65d6c97701b100a88993885671dfdfd2a400aa58ea0195381ea",
+    "web/fonts/Orbitron-600.woff2": "585062e775d70397653192777533f65f3afb707320fcc2a4bc510470e03762e6",
+    "web/fonts/Orbitron-700.woff2": "ee6acc5ad5349018f9ca71fab8118144160e110838931874150a1ac3f97db38d",
+    "web/fonts/Orbitron-800.woff2": "e2591ec1ac280053b8dc647b0a7d074578a2769a96ff454fb28e4c63257436cc",
+    "web/fonts/Orbitron-900.woff2": "ce87e6a1b1955bbc7b1d2d1c30fb5b53af5e34edb5b93a33e28068054892ef74",
+    "web/fonts/Rajdhani-300.woff2": "828d4d537471ba0717fec6f6aa717aa6b96dd7aeb35f7e7b6d206775b438982c",
+    "web/fonts/Rajdhani-400.woff2": "759a9000e47b028799d7a4ca602634a7ac7adf415775df070a335d18d9b66f38",
+    "web/fonts/Rajdhani-500.woff2": "23afdb9b5b89b878fab04d80cc30bf41bb4f3f7e8be88e5f16a7cc7671cdb2dc",
+    "web/fonts/Rajdhani-600.woff2": "433a7007e4747a02a790167a6efa2625855f013970ba49b9b739a5d3db8b2601",
+    "web/fonts/Rajdhani-700.woff2": "5b7e4a6f97163c2636724d4de90304fc895653dcfe64c67a7a22f26331ca5c5f"
+  },
+  "changes": [
+    "Remove unused Eel script",
+    "Namespace preview localStorage; original procedural/audio/preset behavior retained"
+  ]
+}

@@ -460,6 +460,10 @@ struct OfficeAmbience::Impl {
     std::unique_ptr<OfficeControlServer> control;
     std::string identifyDevice;
     bool calibration=false;
+    bool sessionLocked=false,displayOff=false,standbyPreview=false;
+    Clock::time_point standbyBegan=Clock::now();
+    HPOWERNOTIFY displayNotification{};
+    static constexpr GUID sessionDisplayState{0x2b84c20e,0xad23,0x4ddf,{0x93,0xdb,0x05,0xff,0xbd,0x7e,0xfc,0xa5}};
     Clock::time_point identifyUntil{};
     HWND eventWindow{};
     bool initialized=false;
@@ -475,6 +479,19 @@ struct OfficeAmbience::Impl {
         if(message==WM_NCCREATE) {
             self=static_cast<Impl*>(reinterpret_cast<CREATESTRUCTW*>(l)->lpCreateParams);
             SetWindowLongPtrW(window,GWLP_USERDATA,reinterpret_cast<LONG_PTR>(self));
+        }
+        if(self && message==WM_WTSSESSION_CHANGE) {
+            if(w==WTS_SESSION_LOCK) {self->sessionLocked=true;self->standbyBegan=Clock::now();}
+            if(w==WTS_SESSION_UNLOCK) self->sessionLocked=false;
+        }
+        if(self && message==WM_POWERBROADCAST && w==PBT_POWERSETTINGCHANGE) {
+            auto* setting=reinterpret_cast<POWERBROADCAST_SETTING*>(l);
+            if(setting && setting->PowerSetting==sessionDisplayState && setting->DataLength==sizeof(DWORD)) {
+                DWORD state{};std::memcpy(&state,setting->Data,sizeof(state));
+                if(state==0 && !self->displayOff) self->standbyBegan=Clock::now();
+                self->displayOff=state==0;
+                if(!self->displayOff) {self->invalidate=true;self->dirty=true;}
+            }
         }
         if(self && (message==WM_DISPLAYCHANGE || (message==WM_POWERBROADCAST && w==PBT_APMRESUMEAUTOMATIC) ||
                     (message==WM_WTSSESSION_CHANGE && (w==WTS_SESSION_UNLOCK || w==WTS_CONSOLE_CONNECT || w==WTS_REMOTE_CONNECT)))) {self->invalidate=true;self->dirty=true;}
@@ -509,6 +526,7 @@ struct OfficeAmbience::Impl {
             if(value.at("groups").size()!=expected.at("groups").size()) throw std::runtime_error("Physical zone grouping changed");
             for(size_t g=0;g<value.at("groups").size();++g) {
                 const auto& group=value["groups"][g];const auto& baseline=expected["groups"][g];
+                if(group.contains("enabled") && !group.at("enabled").is_boolean()) throw std::runtime_error("Zone enabled state must be a boolean");
                 for(auto key:{"id","first","count"}) if(group.at(key)!=baseline.at(key)) throw std::runtime_error("Hardware LED identities cannot be renumbered by editing the map");
                 auto name=group.at("name").get<std::string>();if(name.empty() || name.size()>120) throw std::runtime_error("Zone names need 1-120 UTF-8 bytes");
             }
@@ -535,22 +553,24 @@ struct OfficeAmbience::Impl {
         Json settings={{"monitor",config.at("monitor")},{"enabled",config.at("enabled")},{"fps",config.at("fps")},{"smoothing_ms",config.at("smoothing_ms")}};
         const auto defaults=office::processingDefaults();for(auto& [key,value]:defaults.items()) settings[key]=config.at(key);
         return {{"revision",revision},{"online",online},{"settings",settings},
-                {"layout",layout},{"status",report()},{"colors",colours},{"effective_regions",effective},{"preview_png",image},{"preview_error",previewError},
-                {"test_mode",calibration?"calibration":identifyDevice.empty()?"none":"identify"}};
+                {"layout",layout},{"default_layout",factoryLayout},{"status",report()},{"colors",colours},{"effective_regions",effective},{"preview_png",image},{"preview_error",previewError},
+                {"test_mode",standbyPreview?"standby":calibration?"calibration":identifyDevice.empty()?"none":"identify"}};
     }
     Json command(const Json& request) {
         auto name=request.at("command").get<std::string>();
         if(name=="snapshot") return snapshot(request.value("preview",false));
         if(name=="recover") {invalidate=true;dirty=true;return {{"accepted",true}};}
-        if(name=="stop_test") {calibration=false;identifyDevice.clear();return {{"accepted",true}};}
+        if(name=="stop_test") {calibration=false;standbyPreview=false;identifyDevice.clear();return {{"accepted",true}};}
+        if(name=="preview_standby") {calibration=false;identifyDevice.clear();standbyPreview=true;standbyBegan=Clock::now();return {{"accepted",true}};}
+        if(name=="identify_all") {standbyPreview=false;calibration=false;identifyDevice="*";identifyUntil=Clock::now()+std::chrono::seconds(2);return {{"accepted",true}};}
         if(name=="identify") {
             auto key=request.at("device").get<std::string>();
             if(std::none_of(devices.begin(),devices.end(),[&](const auto& d){return d.key==key;})) throw std::runtime_error("Unknown physical device");
-            calibration=false;identifyDevice=key;
+            standbyPreview=false;calibration=false;identifyDevice=key;
             // User-visible identify duration; never a capture/recovery deadline.
             identifyUntil=Clock::now()+std::chrono::seconds(2);return {{"accepted",true}};
         }
-        if(name=="calibrate") {identifyDevice.clear();calibration=true;return {{"accepted",true}};}
+        if(name=="calibrate") {standbyPreview=false;identifyDevice.clear();calibration=true;return {{"accepted",true}};}
         if(name!="save") throw std::runtime_error("Unknown control command");
         if(request.at("revision").get<uint64_t>()!=revision) throw std::runtime_error("Settings changed in another panel. Reload before saving");
         auto next=config;
@@ -581,6 +601,7 @@ struct OfficeAmbience::Impl {
         return snapshot();
     }
     Json diskConfig;
+    Json factoryLayout;
 
     static void CALLBACK winEvent(HWINEVENTHOOK hook,DWORD,HWND,LONG object,LONG,DWORD,DWORD) {
         if(object!=OBJID_WINDOW) return;
@@ -634,6 +655,7 @@ struct OfficeAmbience::Impl {
         }
         if(devices.size()!=6 || samples.size()!=314) throw std::runtime_error("Office ambience requires the verified six-device 314-LED inventory");
         layout=defaultLayout();
+        factoryLayout=layout;
         if(config.contains("layout")) {samples=validatedLayout(config["layout"]);layout=config["layout"];}
         for(auto& device:devices) if(device.controller) device.controller->SetCustomMode();
         if(!activate) return;
@@ -648,6 +670,8 @@ struct OfficeAmbience::Impl {
         if(!RegisterClassW(&cls) && GetLastError()!=ERROR_CLASS_ALREADY_EXISTS) throw std::runtime_error("Cannot register capture lifecycle events");
         eventWindow=CreateWindowW(cls.lpszClassName,L"",0,0,0,0,0,nullptr,nullptr,cls.hInstance,this);
         if(!eventWindow || !WTSRegisterSessionNotification(eventWindow,NOTIFY_FOR_THIS_SESSION)) throw std::runtime_error("Cannot register session capture events");
+        displayNotification=RegisterPowerSettingNotification(eventWindow,&sessionDisplayState,DEVICE_NOTIFY_WINDOW_HANDLE);
+        if(!displayNotification) throw std::runtime_error("Cannot register session display power events");
         control=std::make_unique<OfficeControlServer>(QString::fromStdWString(path.parent_path().wstring()),[this](const Json& request){return command(request);});
         QObject::connect(&output,&QTimer::timeout,[this] { tick(); });
         output.setTimerType(Qt::PreciseTimer); output.start(std::max(1,static_cast<int>(std::round(1000.0/fps))));
@@ -655,6 +679,7 @@ struct OfficeAmbience::Impl {
         } catch(...) {control.reset();releaseEvents();throw;}
     }
     void releaseEvents() noexcept {
+        if(displayNotification) {UnregisterPowerSettingNotification(displayNotification);displayNotification=nullptr;}
         if(eventWindow) {WTSUnRegisterSessionNotification(eventWindow);DestroyWindow(eventWindow);eventWindow=nullptr;}
         UnregisterClassW(L"OpenRGBOfficeCaptureEvents",GetModuleHandleW(nullptr));
         for(auto hook:{systemHook,objectHook}) if(hook) { hooks.erase(hook); UnhookWinEvent(hook); }
@@ -707,7 +732,7 @@ struct OfficeAmbience::Impl {
         status();
     }
     void tick() {
-        if(dirty.exchange(false)) chooseSource();
+        if(!sessionLocked && !displayOff && dirty.exchange(false)) chooseSource();
         auto now=Clock::now();
         if(capture) {
             auto state=capture->state;
@@ -716,7 +741,8 @@ struct OfficeAmbience::Impl {
                 std::lock_guard lock(state->mutex);
                 closed=state->closed;
                 if(!closed && state->frames) {
-                    latest=state->colors; inputFrames=state->frames; processingMs=state->lastProcessingMs;
+                    if(!sessionLocked && !displayOff) latest=state->colors;
+                    inputFrames=state->frames; processingMs=state->lastProcessingMs;
                     received=state->received;
                     if(state->error.empty()) error.clear();
                     if(firstFrameDelayMs==0) firstFrameDelayMs=std::chrono::duration<double,std::milli>(state->firstReceived-switched).count();
@@ -726,7 +752,8 @@ struct OfficeAmbience::Impl {
             if(closed) { capture.reset(); source=nullptr; dirty=true; }
         }
         if(!identifyDevice.empty() && now>=identifyUntil) identifyDevice.clear();
-        if(!latest.empty() || calibration || !identifyDevice.empty()) {
+        bool standby=sessionLocked || displayOff || standbyPreview;
+        if(!latest.empty() || calibration || !identifyDevice.empty() || standby) {
             auto submitBegan=Clock::now();
             double elapsedMs=std::chrono::duration<double,std::milli>(now-lastOutput).count();
             size_t deviceIndex=0;
@@ -734,12 +761,17 @@ struct OfficeAmbience::Impl {
             for(auto& device:devices) {
                 for(size_t index=0;index<device.count;++index) {
                     bool enabled=config["enabled"].get<bool>() && layout[deviceIndex]["enabled"].get<bool>();
+                    for(const auto& group:layout[deviceIndex]["groups"]) if(index>=group.at("first").get<size_t>() && index<group.at("first").get<size_t>()+group.at("count").get<size_t>()) enabled=enabled && group.value("enabled",true);
                     auto target=latest.empty()?0:latest[device.start+index];
                     bool testing=calibration || !identifyDevice.empty();
+                    if(standby && !testing) {
+                        auto r=samples[device.start+index];auto c=office::standbyColor(config,{static_cast<unsigned char>(RGBGetRValue(target)),static_cast<unsigned char>(RGBGetGValue(target)),static_cast<unsigned char>(RGBGetBValue(target))},std::chrono::duration<double>(now-standbyBegan).count(),(r.left+r.right)/2,(r.top+r.bottom)/2);
+                        target=ToRGBColor(c[0],c[1],c[2]);
+                    }
                     if(calibration) {
                         const auto p=samples[device.start+index];float x=(p.left+p.right)/2,y=(p.top+p.bottom)/2;
                         target=ToRGBColor(static_cast<unsigned char>(x*255),static_cast<unsigned char>((1-y)*255),static_cast<unsigned char>(index%2?40:160));
-                    } else if(!identifyDevice.empty()) target=device.key==identifyDevice?ToRGBColor(255,255,255):0;
+                    } else if(!identifyDevice.empty()) target=device.key==identifyDevice || identifyDevice=="*"?ToRGBColor(255,255,255):0;
                     else if(!enabled) target=0;
                     auto previous=device.colors[index];
                     double delta=std::max({std::abs(int(RGBGetRValue(target))-int(RGBGetRValue(previous))),std::abs(int(RGBGetGValue(target))-int(RGBGetGValue(previous))),std::abs(int(RGBGetBValue(target))-int(RGBGetBValue(previous)))});
@@ -766,7 +798,7 @@ struct OfficeAmbience::Impl {
     }
     Json report() const {
         std::lock_guard lock(controllersMutex);
-        return {{"mode",mode},{"source_hwnd",reinterpret_cast<uintptr_t>(source)},
+        return {{"mode",mode},{"standby",sessionLocked || displayOff || standbyPreview},{"source_hwnd",reinterpret_cast<uintptr_t>(source)},
             {"source_generation",sourceGeneration},
             {"devices",devices.size()},{"leds",samples.size()},{"output_frames",outputFrames},
             {"input_frames",inputFrames},{"gpu_processing_ms",processingMs},

@@ -44,6 +44,21 @@ struct OfficeLifecycleTest {
         OfficeAmbience::Impl owner(&api,path,false);
         owner.latest.assign(314,ToRGBColor(255,0,0));owner.dirty=false;
         owner.tick();require(strip.writes==20 && mouse.writes==8,"Initial six-device output");
+        auto processing=owner.snapshot(false);auto modified=processing["settings"];
+        modified["standby"]="off";
+        owner.command({{"command","save"},{"revision",processing["revision"]},{"settings",modified},{"layout",processing["layout"]}});
+        owner.command({{"command","preview_standby"}});owner.tick();
+        require(std::all_of(owner.devices[0].colors.begin(),owner.devices[0].colors.end(),[](auto c){return c==0;}),"Standby off must reach actual native output");
+        owner.command({{"command","stop_test"}});
+        auto zoneMap=processing["layout"];zoneMap[0]["groups"][0]["enabled"]=false;
+        owner.command({{"command","save"},{"revision",owner.revision},{"settings",processing["settings"]},{"layout",zoneMap}});owner.tick();
+        require(owner.devices[0].colors[0]==0 && owner.devices[0].colors[3]!=0,"Zone enable must affect only its fixed hardware LED range");
+        owner.command({{"command","identify_all"}});owner.tick();
+        require(std::all_of(owner.devices[0].colors.begin(),owner.devices[0].colors.end(),[](auto c){return c==ToRGBColor(255,255,255);}),"Identify all must reach disabled zones too");owner.command({{"command","stop_test"}});
+        // Restore output counters used by the exact removal-barrier assertions.
+        for(auto* c:{&strip,&bars,&keys,&laptop,&desk,&mouse}) c->writes=0;
+        owner.command({{"command","save"},{"revision",owner.revision},{"settings",processing["settings"]},{"layout",processing["layout"]}});
+        owner.tick();
 
         // Unregister removes the pointer, signals synchronously, then deletes it.
         // In-flight output must complete before that synchronous callback returns.

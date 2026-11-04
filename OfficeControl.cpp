@@ -42,6 +42,13 @@
 #include <QDesktopServices>
 #include <QUrl>
 #include <QShortcut>
+#include <QProcess>
+#include <QProcessEnvironment>
+#include <QStandardPaths>
+#include <QSystemTrayIcon>
+#include <QMenu>
+#include <QStyle>
+#include <QFileDialog>
 #include <functional>
 #include <map>
 #include <array>
@@ -122,6 +129,7 @@ public:
         token=info.at("token").get<std::string>();pending.clear();socket.connectToServer(text(info.at("endpoint")));
     }
     bool ready() const {return socket.state()==QLocalSocket::ConnectedState;}
+    void reconnect(const QString& directory) {socket.abort();callbacks.clear();pending.clear();open(directory);}
     void send(Json request,std::function<void(const Json&)> callback) {
         if(!ready()) {if(error) error("OpenRGB is not connected. Reconnect before saving.");return;}
         request["id"]=++next;request["token"]=token;callbacks[next]=std::move(callback);
@@ -136,6 +144,7 @@ class MapCanvas : public QWidget {
     double zoom=1;
     unsigned handle=0;
     bool panning=false;
+    bool draggingCenter=false;
     std::vector<Region> dragRegions;
     std::vector<Json> undoHistory,redoHistory;
     void checkpoint() {undoHistory.push_back(*layout);redoHistory.clear();}
@@ -164,13 +173,17 @@ public:
     QImage preview;
     int device=0,group=0,led=-1;
     bool showAll=false,showGrid=true,snap=false;
+    bool showCenter=false;
+    QPointF effectCenter{.5,.5};
+    std::function<void(QPointF)> centerEdited;
     float grid=.01f,blur=0;
     std::function<void()> edited;
-    std::function<void(int)> picked;
+    std::function<void(int,int)> picked;
     MapCanvas() {setMinimumSize(280,210);setMouseTracking(true);setFocusPolicy(Qt::StrongFocus);setAccessibleName("Actual LG sampling map");}
     QRectF imageGeometry() const {return imageRect();}
     QRectF selectionGeometry() const {return screenBounds();}
     void resetHistory() {undoHistory.clear();redoHistory.clear();}
+    void replaceLayout(const Json& value) {checkpoint();*layout=value;update();if(edited) edited();}
     void undo() {if(undoHistory.empty()) return;redoHistory.push_back(*layout);*layout=undoHistory.back();undoHistory.pop_back();update();if(edited) edited();}
     void redo() {if(redoHistory.empty()) return;undoHistory.push_back(*layout);*layout=redoHistory.back();redoHistory.pop_back();update();if(edited) edited();}
     void fit() {zoom=1;pan={};update();}
@@ -218,6 +231,7 @@ public:
             }
         }
         p.restore();p.setPen(cyan);p.drawRect(image);
+        if(showCenter) {QPointF c(image.left()+effectCenter.x()*image.width(),image.top()+effectCenter.y()*image.height());p.setPen(QPen(QColor("#ffdc70"),2));p.drawLine(c-QPointF(12,0),c+QPointF(12,0));p.drawLine(c-QPointF(0,12),c+QPointF(0,12));p.setBrush(Qt::NoBrush);p.drawEllipse(c,5,5);}
         if(!selectedIds.empty()) {
             auto b=screenBounds();p.setPen(QPen(cyan,2));p.setBrush(Qt::NoBrush);p.drawRect(b);
             if(blur>0) {p.setPen(QPen(QColor(255,210,110,190),1,Qt::DashLine));p.drawRect(b.adjusted(-blur*image.height(),-blur*image.height(),blur*image.height(),blur*image.height()).intersected(image));}
@@ -236,16 +250,21 @@ public:
         if(e->button()==Qt::MiddleButton) {panning=true;panStart=e->position()-pan;setCursor(Qt::ClosedHandCursor);return;}
         if(e->button()!=Qt::LeftButton || !layout || layout->empty()) return;
         auto area=imageRect();auto point=e->position();handle=hitHandle(point);if(!handle && !area.contains(point)) return;
+        if(showCenter && QLineF(point,QPointF(area.left()+effectCenter.x()*area.width(),area.top()+effectCenter.y()*area.height())).length()<=10) {draggingCenter=true;setCursor(Qt::CrossCursor);return;}
         QPointF normalized((point.x()-area.left())/area.width(),(point.y()-area.top())/area.height());
         auto selectedValues=selected();auto box=office::bounds(selectedValues);
         if(!handle && !QRectF(QPointF(box.left,box.top),QPointF(box.right,box.bottom)).contains(normalized)) {
-            const auto& regions=(*layout)[device]["regions"];
-            for(size_t i=0;i<regions.size();++i) {auto r=regions[i];if(normalized.x()>=r[0].get<double>() && normalized.x()<=r[2].get<double>() && normalized.y()>=r[1].get<double>() && normalized.y()<=r[3].get<double>()) {if(picked) picked(static_cast<int>(i));break;}}
+            bool hit=false;
+            for(int d=static_cast<int>(layout->size())-1;d>=0 && !hit;--d) {
+                if(!showAll && d!=device) continue;const auto& regions=(*layout)[d]["regions"];
+                for(size_t i=0;i<regions.size();++i) {auto r=regions[i];if(normalized.x()>=r[0].get<double>() && normalized.x()<=r[2].get<double>() && normalized.y()>=r[1].get<double>() && normalized.y()<=r[3].get<double>()) {if(picked) picked(d,static_cast<int>(i));hit=true;break;}}
+            }if(!hit) return;
         }
         dragStart=normalized;dragRegions=selected();checkpoint();setFocus();
     }
     void mouseMoveEvent(QMouseEvent* e) override {
         if(panning) {pan=e->position()-panStart;update();return;}
+        if(draggingCenter) {auto area=imageRect();effectCenter={std::clamp((e->position().x()-area.left())/area.width(),0.,1.),std::clamp((e->position().y()-area.top())/area.height(),0.,1.)};if(centerEdited) centerEdited(effectCenter);update();return;}
         if(!(e->buttons()&Qt::LeftButton) || dragRegions.empty()) {if(layout && !layout->empty()) pointerCursor(e->position());return;}
         auto area=imageRect();double dx=(e->position().x()-area.left())/area.width()-dragStart.x(),dy=(e->position().y()-area.top())/area.height()-dragStart.y();
         auto b=office::bounds(dragRegions);
@@ -254,7 +273,7 @@ public:
         dx=std::clamp(dx,-double(b.left),1.-b.right);dy=std::clamp(dy,-double(b.top),1.-b.bottom);
         auto values=dragRegions;for(auto& r:values) {r.left+=static_cast<float>(dx);r.right+=static_cast<float>(dx);r.top+=static_cast<float>(dy);r.bottom+=static_cast<float>(dy);}setSelected(values);
     }
-    void mouseReleaseEvent(QMouseEvent* e) override {panning=false;dragRegions.clear();handle=0;if(layout && !layout->empty()) pointerCursor(e->position());}
+    void mouseReleaseEvent(QMouseEvent* e) override {panning=false;draggingCenter=false;dragRegions.clear();handle=0;if(layout && !layout->empty()) pointerCursor(e->position());}
     void wheelEvent(QWheelEvent* e) override {
         double next=std::clamp(zoom*std::pow(1.2,e->angleDelta().y()/120.0),1.,8.);
         auto anchor=e->position()-QPointF(rect().center());pan=anchor-(anchor-pan)*(next/zoom);zoom=next;update();e->accept();
@@ -273,6 +292,23 @@ public:
     }
 };
 
+class OutputPreview : public QWidget {
+public:
+    QImage image;Json layout,colours;bool overlay=true;
+    OutputPreview() {setMinimumSize(300,220);setAccessibleName("Live capture and actual LED colours");}
+    void paintEvent(QPaintEvent*) override {
+        QPainter p(this);p.setRenderHint(QPainter::Antialiasing);p.fillRect(rect(),QColor("#020a10"));
+        QRectF target(rect().adjusted(16,16,-16,-16));double h=target.width()*2160/5120;
+        if(h>target.height()) {double w=target.height()*5120/2160;target.setLeft(target.center().x()-w/2);target.setWidth(w);} else {target.setTop(target.center().y()-h/2);target.setHeight(h);}
+        if(!image.isNull()) p.drawImage(target,image);else {p.setPen(Qt::white);p.drawText(target,Qt::AlignCenter,"Waiting for the LG source");}
+        if(overlay) for(size_t d=0;d<layout.size() && d<colours.size();++d) for(size_t i=0;i<layout[d]["regions"].size() && i<colours[d].size();++i) {
+            auto r=layout[d]["regions"][i],c=colours[d][i];QColor color(c[0].get<int>(),c[1].get<int>(),c[2].get<int>(),185);
+            QRectF box(target.left()+r[0].get<double>()*target.width(),target.top()+r[1].get<double>()*target.height(),(r[2].get<double>()-r[0].get<double>())*target.width(),(r[3].get<double>()-r[1].get<double>())*target.height());
+            p.fillRect(box,color);p.setPen(QPen(color.lighter(160),.6));p.drawRect(box);
+        }
+    }
+};
+
 class Panel : public QMainWindow {
     Client client;
     QTimer refresh;
@@ -281,6 +317,7 @@ class Panel : public QMainWindow {
     uint64_t revision=0;
     bool dirty=false,updating=false,pending=false,exported=false;
     bool exerciseEditor=false;
+    bool allowUnavailable=false;
     int editorPhase=0;
     Json editorBaseline;
     uint64_t editorRevision=0;
@@ -299,17 +336,48 @@ class Panel : public QMainWindow {
     std::map<std::string,QComboBox*> choices;
     QCheckBox* blackBars=new QCheckBox("Detect black bars");
     QLabel* deviceSummary=new QLabel;
+    QLabel* inventorySummary=new QLabel;
+    OutputPreview* livePreview=new OutputPreview;
+    QSystemTrayIcon* tray=nullptr;
+    bool quitRequested=false;
+    Json panelOptions;
+    bool lifecycleBusy=false;
     QTreeWidget* tree=new QTreeWidget;
     MapCanvas* map=new MapCanvas;
     QLineEdit* zoneName=new QLineEdit;
     QComboBox* led=new QComboBox;
     std::array<QDoubleSpinBox*,4> geometry;
+    std::array<QDoubleSpinBox*,2> effectCenter;
     QPlainTextEdit* diagnostics=new QPlainTextEdit;
     QWidget* devicePage=new QWidget;
     QVBoxLayout* deviceList=new QVBoxLayout(devicePage);
     QPushButton* stopTest=new QPushButton("Stop test / return to ambience");
 
     void changed() {if(updating) return;dirty=true;dirtyLabel->setText("Unsaved changes");save->setEnabled(client.ready());}
+    void writePanelOption(const char* key,bool value) {
+        auto next=panelOptions;next[key]=value;QSaveFile file(state+"/office-panel.json");auto data=QByteArray::fromStdString(next.dump(2));
+        if(!file.open(QIODevice::WriteOnly) || file.write(data)!=data.size() || !file.commit()) {failure("Could not save panel preferences");return;}panelOptions=next;
+    }
+    void lifecycle(const QString& script) {
+        if(lifecycleBusy) return;
+        if(dirty) {failure("Save or reload your draft before restarting/stopping lighting.");return;}
+        auto runtime=QStandardPaths::findExecutable("pwsh.exe");if(runtime.isEmpty()) {failure("PowerShell 7 is required for the verified lighting launcher.");return;}
+        auto path=QCoreApplication::applicationDirPath()+"/office/"+script;
+        if(!QFile::exists(path)) {failure("The packaged lighting lifecycle script is missing.");return;}
+        auto process=new QProcess(this);process->setProgram(runtime);QStringList arguments{"-NoProfile","-NonInteractive","-File",path,"-StateRoot",state};
+        if(script=="Restart-Office.ps1") arguments<<"-InstallRoot"<<QCoreApplication::applicationDirPath();
+        process->setArguments(arguments);process->setWorkingDirectory(state);
+        auto environment=QProcessEnvironment::systemEnvironment();environment.insert("TEMP",state+"/runtime-temp");environment.insert("TMP",state+"/runtime-temp");process->setProcessEnvironment(environment);
+#ifdef Q_OS_WIN
+        process->setCreateProcessArgumentsModifier([](QProcess::CreateProcessArguments* args){args->flags|=0x08000000;}); // CREATE_NO_WINDOW
+#endif
+        lifecycleBusy=true;refresh.stop();connection->setText(script=="Restart-Office.ps1"?"Restarting lighting…":"Stopping lighting…");
+        connect(process,&QProcess::errorOccurred,this,[this,process](auto){lifecycleBusy=false;failure(process->errorString());refresh.start();process->deleteLater();});
+        connect(process,qOverload<int,QProcess::ExitStatus>(&QProcess::finished),this,[this,process,script](int code,auto state){
+            lifecycleBusy=false;if(code) failure("Lighting lifecycle failed: "+QString::fromUtf8(process->readAllStandardError()));
+            else if(script=="Restart-Office.ps1") client.reconnect(this->state);else connection->setText("Lighting stopped");
+            refresh.start();process->deleteLater();});process->start();
+    }
     QWidget* groupBox(const QString& title,QLayout* inside) {auto group=new QGroupBox(title);group->setLayout(inside);return group;}
     QWidget* number(const std::string& key,double minimum,double maximum,double step,const QString& suffix={}) {
         auto row=new QWidget;auto line=new QHBoxLayout(row);line->setContentsMargins(0,0,0,0);
@@ -359,12 +427,14 @@ class Panel : public QMainWindow {
             for(auto& [key,box]:numbers) box->setValue(settings.value(key,office::processingDefaults().at(key)).get<double>());
             for(auto& [key,combo]:choices) combo->setCurrentIndex(combo->findData(text(settings.value(key,office::processingDefaults().at(key)))));
             blackBars->setChecked(settings.value("black_bar_detect",false));
+            effectCenter[0]->setValue(settings.value("effect_center_x",.5)*100);effectCenter[1]->setValue(settings.value("effect_center_y",.5)*100);map->effectCenter={effectCenter[0]->value()/100,effectCenter[1]->value()/100};
             map->blur=settings.value("blur",0.f)/100;map->resetHistory();
             map->layout=&layout;map->device=map->group=0;map->led=-1;buildTree();buildDevices();
             dirty=false;dirtyLabel->setText("Saved");save->setEnabled(false);updating=false;select(selectedDevice,selectedGroup);
         }
         auto s=snapshot.at("status");
         deviceSummary->setText(QString("%1 / %2 devices online  ·  %3 mapped LEDs").arg(s.at("online_devices").get<int>()).arg(layout.size()).arg(s.at("leds").get<int>()));
+        inventorySummary->setText(deviceSummary->text());
         status->setText(QString("%1\n%2 FPS output · %3 captured frames\nGPU sampling %4 ms · new-frame submission %5 ms\n%6")
             .arg(text(s.at("mode")).toUpper()).arg(s.at("output_fps").get<double>(),0,'f',1)
             .arg(s.at("input_frames").get<uint64_t>()).arg(s.at("gpu_processing_ms").get<double>(),0,'f',2)
@@ -379,13 +449,14 @@ class Panel : public QMainWindow {
         }
         auto png=QByteArray::fromBase64(QByteArray::fromStdString(snapshot.value("preview_png",std::string())));
         if(!png.isEmpty()) map->preview.loadFromData(png,"PNG");map->update();
+        livePreview->image=map->preview;livePreview->layout=layout;livePreview->colours=map->colours;livePreview->update();
         trace(QString("preview %1 bytes decoded=%2").arg(png.size()).arg(!map->preview.isNull()));
         if(!snapshot.value("preview_error",std::string()).empty()) {
             failure(text(snapshot.at("preview_error")));
             if(!exportPath.isEmpty()) QCoreApplication::exit(1);
         }
         stopTest->setEnabled(snapshot.at("test_mode")!="none");
-        if(!exportPath.isEmpty() && !exported && !map->preview.isNull()) {
+        if(!exportPath.isEmpty() && !exported && (!map->preview.isNull() || (allowUnavailable && !s.value("error",std::string()).empty()))) {
             if(exerciseEditor && editorPhase<3) exerciseSave();else exportViews();
         }
     }
@@ -398,10 +469,12 @@ class Panel : public QMainWindow {
         tree->clear();
         for(size_t d=0;d<layout.size();++d) {
             auto* item=new QTreeWidgetItem(tree,{text(layout[d]["name"])});item->setData(0,Qt::UserRole,static_cast<int>(d));item->setData(0,Qt::UserRole+1,-1);
+            item->setCheckState(0,layout[d]["enabled"].get<bool>()?Qt::Checked:Qt::Unchecked);
             for(size_t g=0;g<layout[d]["groups"].size();++g) {
                 const auto& group=layout[d]["groups"][g];
                 auto* child=new QTreeWidgetItem(item,{QString("%1 · %2 LEDs").arg(text(group["name"])).arg(group["count"].get<unsigned>())});
                 child->setData(0,Qt::UserRole,static_cast<int>(d));child->setData(0,Qt::UserRole+1,static_cast<int>(g));
+                child->setCheckState(0,group.value("enabled",true)?Qt::Checked:Qt::Unchecked);
             }item->setExpanded(true);
         }
         tree->setColumnWidth(0,210);
@@ -417,7 +490,14 @@ class Panel : public QMainWindow {
             row->addWidget(check,1);row->addWidget(online);row->addWidget(new QLabel(QString("%1 LEDs").arg(layout[d]["regions"].size())));row->addWidget(identify);
             connect(check,&QCheckBox::toggled,this,[this,d](bool on){layout[d]["enabled"]=on;changed();});
             connect(identify,&QPushButton::clicked,this,[this,d]{action({{"command","identify"},{"device",layout[d]["id"]}});});
-            deviceList->addWidget(groupBox(text(layout[d]["id"]),row));
+            auto card=new QVBoxLayout;card->addLayout(row);
+            for(size_t g=0;g<layout[d]["groups"].size();++g) {
+                auto groupRow=new QHBoxLayout;auto on=new QCheckBox(text(layout[d]["groups"][g]["name"]));on->setChecked(layout[d]["groups"][g].value("enabled",true));
+                auto edit=new QPushButton("Edit topology");groupRow->addWidget(on,1);groupRow->addWidget(edit);card->addLayout(groupRow);
+                connect(on,&QCheckBox::toggled,this,[this,d,g](bool enabled){layout[d]["groups"][g]["enabled"]=enabled;changed();});
+                connect(edit,&QPushButton::clicked,this,[this,d,g]{select(d,g);tree->setCurrentItem(tree->topLevelItem(d)->child(g));pages->setCurrentIndex(1);});
+            }
+            deviceList->addWidget(groupBox(text(layout[d]["id"]),card));
         }deviceList->addStretch();
     }
     void select(int device,int group) {
@@ -456,6 +536,7 @@ class Panel : public QMainWindow {
         for(auto& [key,box]:numbers) settings[key]=box->value();
         for(auto& [key,combo]:choices) settings[key]=combo->currentData().toString().toStdString();
         settings["black_bar_detect"]=blackBars->isChecked();
+        settings["effect_center_x"]=effectCenter[0]->value()/100;settings["effect_center_y"]=effectCenter[1]->value()/100;
         pending=true;save->setEnabled(false);
         client.send({{"command","save"},{"revision",revision},{"settings",settings},{"layout",layout}},[this](const Json& r){
             response(r,[this](const Json& s){load(s,true);});if(dirty) save->setEnabled(true);
@@ -464,12 +545,13 @@ class Panel : public QMainWindow {
     void exportViews() {
         exported=true;QDir().mkpath(exportPath);
         Json result={{"native_revision",revision},{"devices",layout.size()},{"editor_save_roundtrip",exerciseEditor && editorPhase==3},
+            {"actual_preview",!map->preview.isNull()},{"source_error",lastSnapshot.at("status").value("error",std::string())},
             {"font_family",font().family().toStdString()},{"views",Json::array()}};
         for(auto size:{QSize(1000,700),QSize(1440,900),QSize(1920,1080)}) {
             resize(size);
             int device=size.width()==1000?0:size.width()==1440?2:1;
             select(device,0);tree->setCurrentItem(tree->topLevelItem(device)->child(0));
-            for(int page=0;page<4;++page) {
+            for(int page=0;page<pages->count();++page) {
                 pages->setCurrentIndex(page);QApplication::sendPostedEvents();centralWidget()->layout()->activate();
                 auto file=QString("%1/%2x%3-page%4.png").arg(exportPath).arg(size.width()).arg(size.height()).arg(page);
                 if(!grab().save(file)) throw std::runtime_error("Could not export the native panel image");
@@ -500,8 +582,9 @@ class Panel : public QMainWindow {
         }
     }
 public:
-    Panel(QString stateDirectory,QString exportDirectory,bool exercise=false):state(std::move(stateDirectory)),exportPath(std::move(exportDirectory)),exerciseEditor(exercise) {
+    Panel(QString stateDirectory,QString exportDirectory,bool exercise=false,bool unavailable=false):state(std::move(stateDirectory)),exportPath(std::move(exportDirectory)),exerciseEditor(exercise),allowUnavailable(unavailable) {
         clock.start();client.trace=[this](QString event){trace(event);};trace("panel-constructing");
+        QFile preferences(state+"/office-panel.json");if(preferences.open(QIODevice::ReadOnly)) {auto data=preferences.readAll();panelOptions=Json::parse(data.constData(),data.constData()+data.size(),nullptr,false);}if(!panelOptions.is_object()) panelOptions=Json::object();
         setWindowTitle("Office Ambilight · OpenRGB");resize(1440,900);setMinimumSize(1000,700);
         setStyleSheet("QWidget{background:#040c14;color:#cdd6e0;font-family:'Segoe UI';font-size:14px;} QMainWindow{background:#020a10;} QGroupBox{background:#091722;border:1px solid #23424c;border-radius:12px;margin-top:16px;padding:16px;} QGroupBox::title{color:#14f5ff;subcontrol-origin:margin;left:16px;} QPushButton{background:#102732;border:1px solid #31535e;border-radius:6px;padding:10px;} QPushButton:hover{border-color:#14f5ff;} QPushButton:focus{border:2px solid #14f5ff;} QPushButton:disabled{color:#677783;} QLineEdit,QSpinBox,QDoubleSpinBox,QComboBox{background:#10202c;border:1px solid #31535e;border-radius:5px;padding:7px;} QTreeWidget,QPlainTextEdit{background:#020a10;border:1px solid #23424c;border-radius:6px;} QTreeWidget::item{padding:7px;} QTreeWidget::item:selected{background:#153d49;color:#14f5ff;} QLabel#title{font-size:24px;font-weight:600;color:#eef7ff;} QSplitter::handle{background:#18313c;} QCheckBox{spacing:8px;} QCheckBox::indicator{width:20px;height:20px;}");
         setStyleSheet(styleSheet()+"QLabel,QCheckBox{background:transparent;} QGroupBox::title{font-weight:600;} QSlider{background:transparent;min-height:28px;} QSlider::groove:horizontal{height:4px;background:#29404b;border-radius:2px;} QSlider::sub-page:horizontal{background:#14f5ff;} QSlider::handle:horizontal{background:#14f5ff;border:2px solid #00303a;width:14px;margin:-6px 0;border-radius:8px;} QScrollArea{border:0;} QComboBox{min-height:26px;padding-right:26px;} QComboBox::drop-down{width:28px;border-left:1px solid #31535e;} QToolButton{padding:0;border:0;} QScrollBar:vertical{background:#07131e;width:10px;} QScrollBar::handle:vertical{background:#31535e;min-height:24px;} ");
@@ -509,7 +592,7 @@ public:
         auto navigation=new QWidget;navigation->setFixedWidth(88);auto rail=new QVBoxLayout(navigation);rail->setContentsMargins(5,16,5,8);
         auto logo=new QLabel("RGB");logo->setAlignment(Qt::AlignCenter);logo->setStyleSheet("color:#14f5ff;font-weight:600;font-size:18px;padding:16px 0");rail->addWidget(logo);
         auto navigationButtons=new QButtonGroup(this);navigationButtons->setExclusive(true);
-        int pageIndex=0;for(auto name:{"Control","Topology","Devices","Status"}) {
+        int pageIndex=0;for(auto name:{"Control","Topology","Devices","Settings","Preview","Status"}) {
             auto button=new QPushButton(name);button->setCheckable(true);
             button->setStyleSheet("QPushButton{padding:8px 2px;} QPushButton:checked{border:1px solid #14f5ff;color:#14f5ff;background:#153d49;}");
             button->setMinimumHeight(56);rail->addWidget(button);int page=pageIndex++;navigationButtons->addButton(button,page);
@@ -517,6 +600,7 @@ public:
         }
         connect(pages,&QStackedWidget::currentChanged,this,[navigationButtons](int page){if(auto button=navigationButtons->button(page)) button->setChecked(true);});
         connect(pages,&QStackedWidget::currentChanged,this,[this](int page){refresh.setInterval(page==1 || page==4?200:1000);poll();});
+        connect(pages,&QStackedWidget::currentChanged,this,[this](int page){if(page==2 && !layout.empty()) buildDevices();});
         navigationButtons->button(0)->setChecked(true);rail->addStretch();
         auto main=new QVBoxLayout;main->setContentsMargins(16,16,0,0);auto title=new QLabel("Office Ambilight");title->setObjectName("title");main->addWidget(title);main->addWidget(connection);main->addWidget(pages,1);
         auto footer=new QHBoxLayout;footer->addWidget(dirtyLabel);footer->addStretch();auto reload=new QPushButton("Reload saved map");footer->addWidget(reload);footer->addWidget(save);main->addLayout(footer);
@@ -539,7 +623,8 @@ public:
         controls->addLayout(presets);controls->addWidget(deviceSummary);
         auto advanced=new QCheckBox("Show advanced controls");advanced->setChecked(true);controls->addWidget(advanced);
         connect(advanced,&QCheckBox::toggled,this,[=](bool on){dashboard->itemAtPosition(1,1)->widget()->setVisible(on);dashboard->itemAtPosition(2,2)->widget()->setVisible(on);});
-        auto test=new QHBoxLayout;auto calibrate=new QPushButton("Spatial calibration");test->addWidget(calibrate);test->addWidget(stopTest);controls->addLayout(test);controls->addStretch();
+        auto test=new QHBoxLayout;auto calibrate=new QPushButton("Spatial calibration");auto standbyTest=new QPushButton("Test saved standby");test->addWidget(calibrate);test->addWidget(standbyTest);test->addWidget(stopTest);controls->addLayout(test);controls->addStretch();
+        connect(standbyTest,&QPushButton::clicked,this,[this]{action({{"command","preview_standby"}});});
         auto controlScroll=new QScrollArea;controlScroll->setWidgetResizable(true);controlScroll->setWidget(controlPage);pages->addWidget(controlScroll);
 
         auto topology=new QSplitter;tree->setHeaderLabel("Devices and zones");tree->setMinimumWidth(210);topology->addWidget(tree);
@@ -563,9 +648,37 @@ public:
             map->setSelected(result,true);edgeChoice->setCurrentIndex(0);});
         auto gridSize=new Stepper<QDoubleSpinBox>;gridSize->setRange(.5,20);gridSize->setValue(1);gridSize->setSuffix(" % grid");propLayout->addWidget(gridSize);connect(gridSize,&QDoubleSpinBox::valueChanged,map,[this](double n){map->grid=n/100;map->update();});
         auto identifyZone=new QPushButton("Identify device");propLayout->addWidget(identifyZone);connect(identifyZone,&QPushButton::clicked,this,[this]{if(!layout.empty()) action({{"command","identify"},{"device",layout[map->device]["id"]}});});
+        auto originFields=new QFormLayout;originFields->setRowWrapPolicy(QFormLayout::WrapAllRows);
+        for(size_t axis=0;axis<2;++axis) {auto spin=new Stepper<QDoubleSpinBox>;spin->setRange(0,100);spin->setDecimals(1);spin->setSuffix(" %");effectCenter[axis]=spin;originFields->addRow(axis==0?"Center X":"Center Y",spin);connect(spin,&QDoubleSpinBox::valueChanged,this,[this](double){map->effectCenter={effectCenter[0]->value()/100,effectCenter[1]->value()/100};map->update();changed();});}
+        auto showOrigin=new QCheckBox("Show draggable effect center");originFields->addRow(showOrigin);connect(showOrigin,&QCheckBox::toggled,map,[this](bool on){map->showCenter=on;map->update();});
+        auto originPresets=new QComboBox;originPresets->addItems({"Center preset…","Center","Top","Bottom","Left","Right"});originFields->addRow(originPresets);
+        connect(originPresets,&QComboBox::activated,this,[this,originPresets](int choice){if(!choice) return;effectCenter[0]->setValue(choice==4?0:choice==5?100:50);effectCenter[1]->setValue(choice==2?0:choice==3?100:50);originPresets->setCurrentIndex(0);});
+        auto originHelp=new QLabel("Origin for radial rotating standby colours.");originHelp->setWordWrap(true);originFields->addRow(originHelp);propLayout->addWidget(groupBox("Effect center",originFields));
+        map->centerEdited=[this](QPointF p){effectCenter[0]->setValue(p.x()*100);effectCenter[1]->setValue(p.y()*100);};
+        auto automatic=new QPushButton("Auto layout / reset map");propLayout->addWidget(automatic);connect(automatic,&QPushButton::clicked,this,[this]{if(lastSnapshot.contains("default_layout")) {map->replaceLayout(lastSnapshot["default_layout"]);updating=true;buildTree();updating=false;select(0,0);}else failure("The connected owner does not expose its initial map.");});
         propLayout->addStretch();auto propScroll=new QScrollArea;propScroll->setWidgetResizable(true);propScroll->setWidget(props);propScroll->setMinimumWidth(235);topology->addWidget(propScroll);topology->setStretchFactor(1,1);topology->setSizes({240,820,270});pages->addWidget(topology);
 
-        auto scroll=new QScrollArea;scroll->setWidgetResizable(true);scroll->setWidget(devicePage);pages->addWidget(scroll);
+        auto deviceView=new QWidget;auto deviceViewLayout=new QVBoxLayout(deviceView);
+        auto inventory=new QHBoxLayout;inventory->addWidget(inventorySummary,1);auto flashAll=new QPushButton("Identify all");inventory->addWidget(flashAll);deviceViewLayout->addLayout(inventory);
+        connect(flashAll,&QPushButton::clicked,this,[this]{action({{"command","identify_all"}});});
+        auto scroll=new QScrollArea;scroll->setWidgetResizable(true);scroll->setWidget(devicePage);deviceViewLayout->addWidget(scroll,1);pages->addWidget(deviceView);
+        auto settingsPage=new QWidget;auto settingsLayout=new QVBoxLayout(settingsPage);
+        auto connectionFields=new QFormLayout;auto directory=new QLineEdit(state);directory->setReadOnly(true);connectionFields->addRow("Owner state directory",directory);
+        auto transport=new QLabel("Same-user authenticated local pipe\nThe native OpenRGB process owns capture and devices.");transport->setWordWrap(true);connectionFields->addRow(transport);
+        auto connectActions=new QHBoxLayout;auto testConnection=new QPushButton("Test connection"),reconnect=new QPushButton("Reconnect");connectActions->addWidget(testConnection);connectActions->addWidget(reconnect);connectionFields->addRow(connectActions);
+        connect(testConnection,&QPushButton::clicked,this,[this]{action({{"command","snapshot"}});});connect(reconnect,&QPushButton::clicked,this,[this]{pending=false;client.reconnect(state);});
+        settingsLayout->addWidget(groupBox("OpenRGB connection",connectionFields));
+        auto appSettings=new QVBoxLayout;auto autoStart=new QCheckBox("Start lighting automatically when opening this panel");autoStart->setChecked(panelOptions.value("start_owner",true));appSettings->addWidget(autoStart);
+        auto keepTray=new QCheckBox("Keep panel in the tray when closing its window");keepTray->setChecked(panelOptions.value("close_to_tray",true));appSettings->addWidget(keepTray);
+        connect(autoStart,&QCheckBox::toggled,this,[this](bool on){writePanelOption("start_owner",on);});connect(keepTray,&QCheckBox::toggled,this,[this](bool on){writePanelOption("close_to_tray",on);});
+        auto appActions=new QHBoxLayout;auto restart=new QPushButton("Restart lighting"),stopOwner=new QPushButton("Stop lighting"),folder=new QPushButton("Open diagnostics folder");appActions->addWidget(restart);appActions->addWidget(stopOwner);appActions->addWidget(folder);appSettings->addLayout(appActions);
+        connect(restart,&QPushButton::clicked,this,[this]{lifecycle("Restart-Office.ps1");});connect(stopOwner,&QPushButton::clicked,this,[this]{lifecycle("Stop-Office.ps1");});connect(folder,&QPushButton::clicked,this,[this]{QDesktopServices::openUrl(QUrl::fromLocalFile(state));});
+        settingsLayout->addWidget(groupBox("Application",appSettings));auto about=new QLabel("Office Ambilight · native OpenRGB\nInterface and procedural preview inspired by EDAmbilight v1.2.0, Stefano Indraccolo (MIT).\nThe LG wallpaper/app policy uses WGC. Connection testing and reconnection operate on the native local owner; no web server is needed.");about->setWordWrap(true);auto aboutLayout=new QVBoxLayout;aboutLayout->addWidget(about);settingsLayout->addWidget(groupBox("About",aboutLayout));settingsLayout->addStretch();
+        auto settingsScroll=new QScrollArea;settingsScroll->setWidgetResizable(true);settingsScroll->setWidget(settingsPage);pages->addWidget(settingsScroll);
+        auto previewPage=new QWidget;auto previewLayout=new QVBoxLayout(previewPage);auto previewActions=new QHBoxLayout;auto overlay=new QCheckBox("Overlay actual LED output");overlay->setChecked(true);previewActions->addWidget(overlay);auto playground=new QPushButton("Animation / music playground");previewActions->addWidget(playground);previewLayout->addLayout(previewActions);previewLayout->addWidget(livePreview,1);
+        auto previewHelp=new QLabel("The image is the native LG capture. Overlaid colours are the values submitted to your devices. The separate playground offers EDAmbilight's procedural effects, particles, post FX, local audio and presets.");previewHelp->setWordWrap(true);previewLayout->addWidget(previewHelp);pages->addWidget(previewPage);
+        connect(overlay,&QCheckBox::toggled,this,[this](bool on){livePreview->overlay=on;livePreview->update();});
+        connect(playground,&QPushButton::clicked,this,[this]{auto path=QCoreApplication::applicationDirPath()+"/preview/index.html";if(!QFile::exists(path)) failure("The packaged animation preview is missing.");else QDesktopServices::openUrl(QUrl::fromLocalFile(path));});
         auto diagPage=new QWidget;auto diag=new QVBoxLayout(diagPage);diagnostics->setReadOnly(true);diag->addWidget(diagnostics,1);auto recover=new QPushButton("Recover capture");diag->addWidget(recover);pages->addWidget(diagPage);
         save->setEnabled(false);
         connect(save,&QPushButton::clicked,this,[this]{saveChanges();});
@@ -573,14 +686,20 @@ public:
         connect(enabled,&QCheckBox::toggled,this,[this]{changed();});connect(fps,&QSpinBox::valueChanged,this,[this]{changed();});connect(smooth,&QSpinBox::valueChanged,this,[this]{changed();});
         connect(blackBars,&QCheckBox::toggled,this,[this]{changed();});
         connect(tree,&QTreeWidget::currentItemChanged,this,[this](QTreeWidgetItem* item,QTreeWidgetItem*){if(updating || !item) return;int g=item->data(0,Qt::UserRole+1).toInt();select(item->data(0,Qt::UserRole).toInt(),std::max(0,g));});
+        connect(tree,&QTreeWidget::itemChanged,this,[this](QTreeWidgetItem* item,int){if(updating || layout.empty()) return;int d=item->data(0,Qt::UserRole).toInt(),g=item->data(0,Qt::UserRole+1).toInt();if(g<0) layout[d]["enabled"]=item->checkState(0)==Qt::Checked;else layout[d]["groups"][g]["enabled"]=item->checkState(0)==Qt::Checked;changed();buildDevices();});
         connect(led,&QComboBox::currentIndexChanged,this,[this]{if(updating) return;map->led=led->currentData().toInt();showGeometry();map->update();});
         connect(zoneName,&QLineEdit::editingFinished,this,[this]{if(updating || layout.empty()) return;layout[map->device]["groups"][map->group]["name"]=zoneName->text().toStdString();changed();});
         connect(all,&QCheckBox::toggled,this,[this](bool on){map->showAll=on;map->update();});
         connect(rotate,&QPushButton::clicked,this,[this]{applyGeometry(90);});connect(reverse,&QPushButton::clicked,this,[this]{applyGeometry(0,true);});
         connect(calibrate,&QPushButton::clicked,this,[this]{action({{"command","calibrate"}});});connect(stopTest,&QPushButton::clicked,this,[this]{action({{"command","stop_test"}});});
         connect(recover,&QPushButton::clicked,this,[this]{action({{"command","recover"}});});
-        map->edited=[this]{changed();showGeometry();};
-        map->picked=[this](int index){for(int i=1;i<led->count();++i) if(led->itemData(i).toInt()==index) {led->setCurrentIndex(i);break;}};
+        if(exportPath.isEmpty() && QSystemTrayIcon::isSystemTrayAvailable()) {
+            tray=new QSystemTrayIcon(style()->standardIcon(QStyle::SP_ComputerIcon),this);tray->setToolTip("Office Ambilight");auto menu=new QMenu(this);
+            menu->addAction("Open Office Ambilight",this,[this]{showNormal();raise();activateWindow();});menu->addAction("Return to ambience",this,[this]{action({{"command","stop_test"}});});
+            menu->addAction("Exit panel",this,[this]{quitRequested=true;close();});tray->setContextMenu(menu);connect(tray,&QSystemTrayIcon::activated,this,[this](auto reason){if(reason==QSystemTrayIcon::Trigger || reason==QSystemTrayIcon::DoubleClick){showNormal();raise();activateWindow();}});tray->show();
+        }
+        map->edited=[this]{changed();showGeometry();if(!layout.empty()) {bool prior=updating;updating=true;zoneName->setText(text(layout[map->device]["groups"][map->group]["name"]));updating=prior;}};
+        map->picked=[this](int d,int index){for(size_t g=0;g<layout[d]["groups"].size();++g) {const auto& group=layout[d]["groups"][g];if(index>=group["first"].get<int>() && index<group["first"].get<int>()+group["count"].get<int>()) {select(d,g);tree->setCurrentItem(tree->topLevelItem(d)->child(g));break;}}};
         client.error=[this](QString message){pending=false;save->setEnabled(false);failure(message);if(!this->exportPath.isEmpty()) QCoreApplication::exit(2);};client.connected=[this]{poll();};
         connect(&refresh,&QTimer::timeout,this,[this]{poll();});refresh.start(1000);
         // Opening after construction also lets a real connection failure exit
@@ -588,6 +707,8 @@ public:
         QMetaObject::invokeMethod(this,[this]{client.open(state);},Qt::QueuedConnection);
     }
     void closeEvent(QCloseEvent* event) override {
+        if(lifecycleBusy) {failure("Wait for the lighting lifecycle operation to finish.");event->ignore();return;}
+        if(tray && !quitRequested && panelOptions.value("close_to_tray",true)) {hide();event->ignore();return;}
         if(dirty && QMessageBox::question(this,"Unsaved map","Close without saving your changes?")!=QMessageBox::Yes) {event->ignore();return;}
         action({{"command","stop_test"}});event->accept();
     }
@@ -606,8 +727,9 @@ int main(int argc,char** argv) {
 #endif
     QCommandLineParser parser;parser.addHelpOption();parser.addOption({"state","Private OpenRGB state directory","directory","D:/Tools/OpenRGB/state-integration"});
     parser.addOption({"export-views","Export all real connected panel views, then exit","directory"});
+    parser.addOption({"allow-unavailable-source","Export the real waiting/error state if the LG source is unavailable; not live capture acceptance"});
     parser.addOption({"exercise-editor","Verify the real Save button and restore the original map before exporting"});parser.process(app);
     if(parser.isSet("exercise-editor") && !parser.isSet("export-views")) parser.showHelp(1);
-    Panel panel(parser.value("state"),parser.value("export-views"),parser.isSet("exercise-editor"));panel.show();return app.exec();
+    Panel panel(parser.value("state"),parser.value("export-views"),parser.isSet("exercise-editor"),parser.isSet("allow-unavailable-source"));panel.show();return app.exec();
 }
 #endif

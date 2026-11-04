@@ -31,6 +31,12 @@ int main() {
             auto r=resizeBounds({.2f,.3f,.6f,.7f},handle,100,-100);
             validateRegions(Json::array({encode(r)}),1);
         }
+        settings=processingDefaults();
+        for(auto mode:{"hold","fade","dim","pulse","rotate","aurora","ember","off"}) {
+            settings["standby"]=mode;validateProcessing(settings);auto c=standbyColor(settings,{120,60,30},4,.2f,.8f);
+            if(std::string(mode)=="hold" && c!=std::array<unsigned char,3>{120,60,30}) throw std::runtime_error("Hold standby changed the original colour");
+            if(std::string(mode)=="off" && c!=std::array<unsigned char,3>{0,0,0}) throw std::runtime_error("Off standby emitted light");
+        }
         std::cout<<"PASS: real mapping transform, identity, hardware order and bounds contracts\n";
         return 0;
     } catch(std::exception const& e) { std::cerr<<e.what()<<'\n'; return 1; }
