@@ -269,6 +269,10 @@ struct CaptureState {
     com_ptr<ID3D11VertexShader> vertex;
     com_ptr<ID3D11PixelShader> pixel;
     com_ptr<ID3D11PixelShader> previewPixel;
+    com_ptr<ID3D11PixelShader> contentPixel;
+    com_ptr<ID3D11Texture2D> contentTexture;
+    com_ptr<ID3D11RenderTargetView> contentTarget;
+    com_ptr<ID3D11ShaderResourceView> contentView;
     com_ptr<ID3D11Buffer> options;
     com_ptr<ID3D11Buffer> regions;
     com_ptr<ID3D11SamplerState> sampler;
@@ -320,6 +324,8 @@ struct CaptureState {
         ps=nullptr;errors=nullptr;
         compile("previewPs","ps_5_0",ps);
         check_hresult(device->CreatePixelShader(ps->GetBufferPointer(),ps->GetBufferSize(),nullptr,previewPixel.put()));
+        ps=nullptr;compile("detectContentPs","ps_5_0",ps);
+        check_hresult(device->CreatePixelShader(ps->GetBufferPointer(),ps->GetBufferSize(),nullptr,contentPixel.put()));
         configure(office::processingDefaults());
         regions=makeRegions(samples);
         D3D11_SAMPLER_DESC sd{}; sd.Filter=D3D11_FILTER_MIN_MAG_MIP_LINEAR;
@@ -338,6 +344,11 @@ struct CaptureState {
         check_hresult(device->CreateRenderTargetView(boundsOutput.get(),nullptr,boundsTarget.put()));
         desc.Usage=D3D11_USAGE_STAGING;desc.BindFlags=0;desc.CPUAccessFlags=D3D11_CPU_ACCESS_READ;
         check_hresult(device->CreateTexture2D(&desc,nullptr,boundsReadback.put()));effectiveRegions.resize(samples.size());
+        desc.Width=desc.Height=1;desc.Usage=D3D11_USAGE_DEFAULT;desc.CPUAccessFlags=0;
+        desc.BindFlags=D3D11_BIND_RENDER_TARGET|D3D11_BIND_SHADER_RESOURCE;
+        check_hresult(device->CreateTexture2D(&desc,nullptr,contentTexture.put()));
+        check_hresult(device->CreateRenderTargetView(contentTexture.get(),nullptr,contentTarget.put()));
+        check_hresult(device->CreateShaderResourceView(contentTexture.get(),nullptr,contentView.put()));
         previewWorker=std::thread([this]{runPreview();});
     }
     ~CaptureState() {
@@ -439,17 +450,25 @@ struct CaptureState {
     }
     void sampleRetained() {
         if(!input) return;
+        // Compute a single content rectangle on the GPU, shared by all LEDs.
+        // There is no full-frame CPU readback or repeated border scan per LED.
+        D3D11_VIEWPORT one{0,0,1,1,0,1};context->RSSetViewports(1,&one);
+        auto* contentRT=contentTarget.get();context->OMSetRenderTargets(1,&contentRT,nullptr);
+        context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+        context->VSSetShader(vertex.get(),nullptr,0);context->PSSetShader(contentPixel.get(),nullptr,0);
+        auto* settings=options.get();context->PSSetConstantBuffers(1,1,&settings);
+        auto* view=inputView.get();context->PSSetShaderResources(0,1,&view);
+        auto* filter=sampler.get();context->PSSetSamplers(0,1,&filter);context->Draw(3,0);
+        context->OMSetRenderTargets(0,nullptr,nullptr);
+        auto* content=contentView.get();context->PSSetShaderResources(1,1,&content);
         D3D11_VIEWPORT viewport{0,0,static_cast<float>(colors.size()),1,0,1};
         context->RSSetViewports(1,&viewport);
         ID3D11RenderTargetView* targets[]={target.get(),boundsTarget.get()};context->OMSetRenderTargets(2,targets,nullptr);
         context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
         context->VSSetShader(vertex.get(),nullptr,0); context->PSSetShader(pixel.get(),nullptr,0);
         auto* constants=regions.get(); context->PSSetConstantBuffers(0,1,&constants);
-        auto* settings=options.get();context->PSSetConstantBuffers(1,1,&settings);
-        auto* view=inputView.get(); context->PSSetShaderResources(0,1,&view);
-        auto* filter=sampler.get(); context->PSSetSamplers(0,1,&filter);
         context->Draw(3,0);
-        ID3D11ShaderResourceView* none=nullptr; context->PSSetShaderResources(0,1,&none);
+        ID3D11ShaderResourceView* none[2]={}; context->PSSetShaderResources(0,2,none);
         context->CopyResource(readback.get(),output.get());
         D3D11_MAPPED_SUBRESOURCE mapped{}; check_hresult(context->Map(readback.get(),0,D3D11_MAP_READ,0,&mapped));
         auto* bytes=static_cast<const unsigned char*>(mapped.pData);

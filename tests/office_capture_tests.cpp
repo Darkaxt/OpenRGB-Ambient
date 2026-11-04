@@ -4,8 +4,62 @@
 #include "../OfficeAmbience.cpp"
 #include <iostream>
 
+void mediaMattes() {
+    const unsigned width=512,height=216;
+    const std::vector<Sample> map={{0,.25f,.03f,.75f},{.25f,0,.75f,.03f},{.97f,.25f,1,.75f},{.25f,.97f,.75f,1}};
+    CaptureState state(map,{0,0,width,height},{0,0,width,height},D3D_DRIVER_TYPE_WARP);
+    auto options=office::processingDefaults();options["black_bar_detect"]=true;state.configure(options);
+    std::vector<uint32_t> pixels(width*height);com_ptr<ID3D11Texture2D> texture;
+    D3D11_TEXTURE2D_DESC desc{};desc.Width=width;desc.Height=height;desc.MipLevels=desc.ArraySize=desc.SampleDesc.Count=1;
+    desc.Format=DXGI_FORMAT_B8G8R8A8_UNORM;desc.Usage=D3D11_USAGE_DEFAULT;
+    check_hresult(state.device->CreateTexture2D(&desc,nullptr,texture.put()));
+    auto upload=[&] {state.context->UpdateSubresource(texture.get(),0,nullptr,pixels.data(),width*4,0);state.processTexture(texture.get());};
+    auto unchanged=[&] {
+        for(size_t i=0;i<map.size();++i) {
+            const float* a=reinterpret_cast<const float*>(&state.effectiveRegions[i]);const float* b=reinterpret_cast<const float*>(&map[i]);
+            for(int j=0;j<4;++j) if(std::abs(a[j]-b[j])>.0001f) throw std::runtime_error("Uncertain/dark imagery must retain the entire image mapping");
+        }
+    };
+    // The same retained GPU input changes between pillarbox, letterbox and full
+    // image. Saved normalized LED coordinates never change with media format.
+    for(double ratio:{4./3,16./9,16./10,1.85,2.,2.2,2.35,2.39,2.4,2.55,2.76}) {
+        bool vertical=ratio<double(width)/height;
+        int extent=std::lround(vertical?height*ratio:width/ratio);
+        int edge=(int(vertical?width:height)-extent)/2;
+        std::fill(pixels.begin(),pixels.end(),0xff000000);
+        for(unsigned y=0;y<height;++y) for(unsigned x=0;x<width;++x) {
+            int p=vertical?x:y;
+            if(p>=edge && p<edge+extent) pixels[y*width+x]=0xff28b4f0;
+        }
+        upload();
+        auto expected=vertical?Sample{float(edge)/width,0,float(edge+extent)/width,1}:Sample{0,float(edge)/height,1,float(edge+extent)/height};
+        const float tolerance=3.f/(vertical?width:height);
+        for(size_t i=0;i<map.size();++i) {
+            auto r=map[i];Sample target{expected.left+r.left*(expected.right-expected.left),expected.top+r.top*(expected.bottom-expected.top),
+                expected.left+r.right*(expected.right-expected.left),expected.top+r.bottom*(expected.bottom-expected.top)};
+            const float* a=reinterpret_cast<const float*>(&state.effectiveRegions[i]);const float* b=reinterpret_cast<const float*>(&target);
+            for(int j=0;j<4;++j) if(std::abs(a[j]-b[j])>tolerance) throw std::runtime_error("Media matte format was not mapped into its detected content rectangle: "+std::to_string(ratio));
+        }
+        if(std::all_of(state.colors.begin(),state.colors.end(),[](auto c){return !c;})) throw std::runtime_error("Detected media content did not reach actual LED output");
+    }
+    std::fill(pixels.begin(),pixels.end(),0xff28b4f0);upload();unchanged();
+    std::fill(pixels.begin(),pixels.end(),0xff020204);upload();unchanged();
+    std::fill(pixels.begin(),pixels.end(),0xff000000);upload();unchanged();
+    for(auto c:state.colors) if(c) throw std::runtime_error("Black media frame must produce black LEDs");
+    // An ordinary dark edge, even near a common ratio, lacks paired-matte proof.
+    std::fill(pixels.begin(),pixels.end(),0xff28b4f0);
+    for(unsigned y=0;y<height;++y)for(unsigned x=0;x<112;++x) pixels[y*width+x]=0xff000000;
+    upload();unchanged();
+    // Uniform black margins with no supported/content-confirmed ratio are not
+    // license to guess a crop. Disabling detection also restores exact mapping.
+    std::fill(pixels.begin(),pixels.end(),0xff000000);
+    for(unsigned y=0;y<height;++y)for(unsigned x=97;x<415;++x) pixels[y*width+x]=0xff28b4f0;
+    upload();unchanged();options["black_bar_detect"]=false;state.configure(options);state.sampleRetained();unchanged();
+}
+
 int main() {
     try {
+        mediaMattes();
         CaptureState state({around(.25f,.25f,.2f,.2f),around(.75f,.25f,.2f,.2f),
                             around(.25f,.75f,.2f,.2f),around(.75f,.75f,.2f,.2f)},
                            {0,0,128,64},{64,0,128,64},D3D_DRIVER_TYPE_WARP);

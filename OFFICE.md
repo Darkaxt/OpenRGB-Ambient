@@ -57,6 +57,13 @@ spatial blur, saturation/brightness/luminance floor, time/EMA smoothing, scene-c
 thresholds, presets and manual standby-effect previews. Lock/display sleep always
 rests the lights regardless of that preview selection. These settings execute in
 the native sampler/output; they are not preview-only filters.
+Black-bar detection accepts centered paired mattes only when their boundaries fit
+4:3, 16:10, 16:9 or common cinema ratios (1.85–2.76), the outer/middle/inner matte
+probes are consistently near black, and adjacent content is positively visible.
+Ratio alone, a dark scene, a one-sided dark edge or an entirely black frame cannot
+cause cropping. One GPU pass computes the rectangle shared by all LEDs; normalized
+regions scale into that content rectangle without changing saved topology. The
+full capture remains visible in the editor with effective sampling outlines.
 Topology shows the actual downscaled LG capture, per-LED sampling rectangles,
 hardware LED names/indices, and current output colours. Select a device/zone or
 one LED; drag, resize, quarter-turn or reverse its sampling order. Click a device
