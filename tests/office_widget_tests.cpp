@@ -75,6 +75,9 @@ void multiSelection(QApplication& app) {
     auto previewPage=panel.findChild<QWidget*>("previewPage");auto save=panel.findChild<QPushButton*>("saveChanges");
     auto pageStack=qobject_cast<QStackedWidget*>(previewPage->parentWidget());require(pageStack && save,"Preview apply action missing");
     pageStack->setCurrentWidget(previewPage);app.processEvents();require(save->isVisible() && save->text()=="Apply settings","Preview blur requires leaving the page to apply");
+    require(panel.fixtureWantsPreview(),"Visible Preview must request current images");
+    panel.hide();app.processEvents();require(!panel.fixtureWantsPreview(),"Hidden panel continues requesting images");
+    panel.show();pageStack->setCurrentIndex(0);app.processEvents();require(!panel.fixtureWantsPreview(),"Control page unnecessarily requests images");
     pageStack->setCurrentIndex(1);previewBlur->setValue(0);
     auto click=[&](QTreeWidgetItem* row,Qt::KeyboardModifiers modifiers=Qt::NoModifier) {
         tree->scrollToItem(row);app.processEvents();auto box=tree->visualItemRect(row);auto p=QPointF(box.left()+75,box.center().y());

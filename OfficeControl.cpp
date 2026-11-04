@@ -21,6 +21,10 @@
 #include <QLineEdit>
 #include <QPlainTextEdit>
 #include <QLocalSocket>
+#include <QLocalServer>
+#include <QCryptographicHash>
+#include <QLockFile>
+#include <QFileInfo>
 #include <QFile>
 #include <QDir>
 #include <QTimer>
@@ -406,6 +410,8 @@ public:
 };
 
 class Panel : public QMainWindow {
+    std::string decodedPreview;
+    bool wantsPreview() const {return !exportPath.isEmpty() || (isVisible() && !isMinimized() && (pages->currentIndex()==1 || pages->currentIndex()==4));}
     Client client;
     QTimer refresh;
     QString state,exportPath;
@@ -584,8 +590,12 @@ class Panel : public QMainWindow {
             onlineLabels[d]->setStyleSheet(online?"color:#22d3a5":"color:#ff9f1c");
             identifyButtons[d]->setEnabled(online);
         }
+        auto generation=snapshot.value("preview_generation",std::string());
         auto png=QByteArray::fromBase64(QByteArray::fromStdString(snapshot.value("preview_png",std::string())));
-        if(!png.isEmpty()) map->preview.loadFromData(png,"PNG");map->update();
+        if(!png.isEmpty() && (generation.empty() || generation!=decodedPreview)) {
+            QImage next;if(next.loadFromData(png,"PNG")) {map->preview=std::move(next);decodedPreview=generation;}
+        }
+        map->update();
         livePreview->image=map->preview;livePreview->layout=layout;livePreview->colours=map->colours;livePreview->update();
         trace(QString("preview %1 bytes decoded=%2").arg(png.size()).arg(!map->preview.isNull()));
         if(!snapshot.value("preview_error",std::string()).empty()) {
@@ -599,7 +609,8 @@ class Panel : public QMainWindow {
     }
     void poll() {
         if(pending || !client.ready()) return;
-        pending=true;client.send({{"command","snapshot"},{"preview",pages->currentIndex()==1 || pages->currentIndex()==4 || !exportPath.isEmpty()}},[this](const Json& r){response(r,[this](const Json& s){load(s);});});
+        if(exportPath.isEmpty() && revision && (!isVisible() || isMinimized())) return;
+        pending=true;client.send({{"command","snapshot"},{"preview",wantsPreview()},{"preview_generation",decodedPreview}},[this](const Json& r){response(r,[this](const Json& s){load(s);});});
     }
     void action(const Json& request) {client.send(request,[this](const Json& r){response(r);poll();});}
     void buildTree() {
@@ -806,6 +817,7 @@ class Panel : public QMainWindow {
     }
 public:
 #ifdef OFFICE_WIDGET_TEST
+    bool fixtureWantsPreview() const {return wantsPreview();}
     void fixtureLayout(const Json& value) {
         refresh.stop();client.error={};updating=true;layout=value;map->layout=&layout;map->zones.clear();buildTree();buildDevices();updating=false;select(0,0);shellPages->setCurrentIndex(0);pages->setCurrentIndex(1);
     }
@@ -854,6 +866,25 @@ int main(int argc,char** argv) {
     parser.addOption({"allow-unavailable-source","Export the real waiting/error state if the LG source is unavailable; not live capture acceptance"});
     parser.addOption({"exercise-editor","Verify the real Save button and restore the original map before exporting"});parser.process(app);
     if(parser.isSet("exercise-editor") && !parser.isSet("export-views")) parser.showHelp(1);
-    Panel panel(parser.value("state"),parser.value("export-views"),parser.isSet("exercise-editor"),parser.isSet("allow-unavailable-source"));panel.show();return app.exec();
+    // One interactive panel per private state. Diagnostic exports are isolated,
+    // short-lived consumers and do not compete for the user's interactive lock.
+    auto state=QDir(parser.value("state")).absolutePath();QDir().mkpath(state);
+    QLockFile lock(state+"/office-panel.lock");lock.setStaleLockTime(0);
+    QLocalServer activation;auto name="OfficeAmbilightPanel-"+QString(QCryptographicHash::hash((state.toLower()+qEnvironmentVariable("USERNAME")).toUtf8(),QCryptographicHash::Sha256).toHex());
+    if(!parser.isSet("export-views")) {
+        if(!lock.tryLock(0)) {
+            QLocalSocket existing;existing.connectToServer(name);
+            if(!existing.waitForConnected(-1)) {qWarning()<<"The Office panel is already starting or running; use its tray icon.";return 1;}
+            existing.waitForDisconnected(-1);return 0;
+        }
+        activation.setSocketOptions(QLocalServer::UserAccessOption);
+        if(!activation.listen(name)) {qWarning()<<activation.errorString();return 1;}
+    }
+    Panel panel(state,parser.value("export-views"),parser.isSet("exercise-editor"),parser.isSet("allow-unavailable-source"));
+    QObject::connect(&activation,&QLocalServer::newConnection,&panel,[&]{
+        while(auto socket=activation.nextPendingConnection()) {socket->disconnectFromServer();socket->deleteLater();}
+        panel.showNormal();panel.raise();panel.activateWindow();
+    });
+    panel.show();return app.exec();
 }
 #endif

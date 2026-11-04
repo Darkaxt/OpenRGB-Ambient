@@ -29,6 +29,8 @@
 #include <QDateTime>
 #include <QImage>
 #include <QBuffer>
+#include <QImageWriter>
+#include <QUuid>
 #include <QCoreApplication>
 #include <wtsapi32.h>
 #include <algorithm>
@@ -39,6 +41,9 @@
 #include <fstream>
 #include <map>
 #include <mutex>
+#include <condition_variable>
+#include <thread>
+#include <functional>
 #include <numeric>
 #include <set>
 #include <cstring>
@@ -232,9 +237,17 @@ struct CaptureState {
     com_ptr<ID3D11SamplerState> sampler;
     unsigned sourceW=0,sourceH=0;
     RECT host{},monitor{};
-    bool wantPreview=false;
-    QByteArray previewPng;
+    std::mutex previewMutex;
+    std::condition_variable previewCondition;
+    bool previewPending=false,previewStopping=false;
+    uint64_t previewRevision=0,previewAttempt=0,previewGeneration=0,previewEncodes=0;
+    std::string previewBase64;
     std::string previewError;
+    double previewEncodeMs=0;
+    std::thread previewWorker;
+#ifdef OFFICE_CAPTURE_TEST
+    std::function<void()> beforePreviewEncode;
+#endif
     com_ptr<ID3D11Texture2D> preview;
     com_ptr<ID3D11Texture2D> previewTarget;
     com_ptr<ID3D11RenderTargetView> previewView;
@@ -288,6 +301,42 @@ struct CaptureState {
         check_hresult(device->CreateRenderTargetView(boundsOutput.get(),nullptr,boundsTarget.put()));
         desc.Usage=D3D11_USAGE_STAGING;desc.BindFlags=0;desc.CPUAccessFlags=D3D11_CPU_ACCESS_READ;
         check_hresult(device->CreateTexture2D(&desc,nullptr,boundsReadback.put()));effectiveRegions.resize(samples.size());
+        previewWorker=std::thread([this]{runPreview();});
+    }
+    ~CaptureState() {
+        {std::lock_guard lock(previewMutex);previewStopping=true;}
+        previewCondition.notify_one();
+        if(previewWorker.joinable()) previewWorker.join();
+    }
+    void requestPreview() {
+        {std::lock_guard lock(previewMutex);previewPending=true;}
+        previewCondition.notify_one();
+    }
+    void runPreview() {
+        for(;;) {
+            {std::unique_lock lock(previewMutex);previewCondition.wait(lock,[&]{return previewStopping || previewPending;});
+             if(previewStopping) return;previewPending=false;}
+            try {
+                QImage image;uint64_t generation;
+                {std::lock_guard lock(mutex);
+                 if(!active || !input || previewAttempt==previewRevision) continue;
+                 generation=previewRevision;previewAttempt=generation;image=copyPreview();}
+                // The CPU owns this image. No capture mutex, mapped GPU resource,
+                // output event thread or unbounded frame queue survives this point.
+#ifdef OFFICE_CAPTURE_TEST
+                if(beforePreviewEncode) beforePreviewEncode();
+#endif
+                auto began=Clock::now();QByteArray encoded;QBuffer buffer(&encoded);buffer.open(QIODevice::WriteOnly);
+                QImageWriter writer(&buffer,"PNG");writer.setCompression(12); // Qt's 0..100 scale: fast lossless zlib level 1.
+                if(!writer.write(image)) throw std::runtime_error("Cannot encode the native preview");
+                auto base64=encoded.toBase64().toStdString();
+                auto elapsed=std::chrono::duration<double,std::milli>(Clock::now()-began).count();
+                {std::lock_guard lock(previewMutex);previewBase64=std::move(base64);previewGeneration=generation;
+                 ++previewEncodes;previewEncodeMs=elapsed;previewError.clear();}
+                previewCondition.notify_all();
+            } catch(hresult_error const& e) {std::lock_guard lock(previewMutex);previewError=to_string(e.message());previewCondition.notify_all();}
+              catch(std::exception const& e) {std::lock_guard lock(previewMutex);previewError=e.what();previewCondition.notify_all();}
+        }
     }
     void process(const Direct3D11CaptureFrame& frame) {
         auto access=frame.Surface().as<::Windows::Graphics::DirectX::Direct3D11::IDirect3DDxgiInterfaceAccess>();
@@ -295,9 +344,7 @@ struct CaptureState {
         check_hresult(access->GetInterface(__uuidof(ID3D11Texture2D),source.put_void()));
         processTexture(source.get());
     }
-    void capturePreview() {
-        if(!input) return; // Keep the request until the first real frame arrives.
-        try {
+    QImage copyPreview() {
             D3D11_TEXTURE2D_DESC previewDesc{};input->GetDesc(&previewDesc);
             previewDesc.Height=std::max(1u,static_cast<unsigned>(640.0*previewDesc.Height/previewDesc.Width));previewDesc.Width=640;
             previewDesc.MipLevels=1;previewDesc.MiscFlags=0;
@@ -320,13 +367,10 @@ struct CaptureState {
             D3D11_MAPPED_SUBRESOURCE mapped{};
             check_hresult(context->Map(preview.get(),0,D3D11_MAP_READ,0,&mapped));
             QImage image(static_cast<const uchar*>(mapped.pData),previewDesc.Width,previewDesc.Height,mapped.RowPitch,QImage::Format_ARGB32);
-            QByteArray encoded;QBuffer buffer(&encoded);buffer.open(QIODevice::WriteOnly);bool saved=image.save(&buffer,"PNG");
+            QImage owned=image.copy();
             context->Unmap(preview.get(),0);
-            if(!saved) throw std::runtime_error("Cannot encode the native preview");
-            previewPng=std::move(encoded);previewError.clear();
-        } catch(hresult_error const& e) {previewError=to_string(e.message());preview=nullptr;}
-          catch(std::exception const& e) {previewError=e.what();}
-        wantPreview=false;
+            if(owned.isNull()) throw std::runtime_error("Cannot copy the native preview");
+            return owned;
     }
     void processTexture(ID3D11Texture2D* source) {
         auto began=Clock::now();
@@ -351,7 +395,6 @@ struct CaptureState {
         context->CopySubresourceRegion(input.get(),0,0,0,0,source,0,&crop);
         context->GenerateMips(inputView.get());
         sampleRetained();
-        if(wantPreview) capturePreview();
         received=Clock::now(); ++frames;
         error.clear();
         if(frames==1) firstReceived=received;
@@ -378,6 +421,7 @@ struct CaptureState {
         context->CopyResource(boundsReadback.get(),boundsOutput.get());
         check_hresult(context->Map(boundsReadback.get(),0,D3D11_MAP_READ,0,&mapped));
         std::memcpy(effectiveRegions.data(),mapped.pData,effectiveRegions.size()*sizeof(Sample));context->Unmap(boundsReadback.get(),0);
+        ++previewRevision;
     }
 };
 
@@ -435,6 +479,7 @@ public:
 } // namespace
 
 struct OfficeAmbience::Impl {
+    const std::string previewEpoch=QUuid::createUuid().toString(QUuid::WithoutBraces).toStdString();
     QTimer output;
     OpenRGBPluginAPIInterface* api;
     std::filesystem::path configPath,statusPath;
@@ -547,23 +592,27 @@ struct OfficeAmbience::Impl {
         if(!std::isfinite(smooth) || smooth<0 || smooth>2000) throw std::runtime_error("Smoothing must be 0-2000 milliseconds");
         office::validateProcessing(candidate);
     }
-    Json snapshot(bool preview=false) {
-        if(preview && capture) {std::lock_guard lock(capture->state->mutex);capture->state->wantPreview=true;capture->state->capturePreview();}
+    Json snapshot(bool preview=false,const std::string& knownPreview={}) {
+        if(preview && capture) capture->state->requestPreview();
         auto colours=Json::array();
         for(auto& d:devices) {auto row=Json::array();for(auto c:d.colors) row.push_back(Json::array({RGBGetRValue(c),RGBGetGValue(c),RGBGetBValue(c)}));colours.push_back(row);}
-        std::string image,previewError;Json effective=Json::array();
-        if(capture) {std::lock_guard lock(capture->state->mutex);image=capture->state->previewPng.toBase64().toStdString();previewError=capture->state->previewError;
+        std::string image,previewError,previewKey;Json effective=Json::array();uint64_t encodes=0;double encodeMs=0;
+        if(capture) {std::lock_guard lock(capture->state->mutex);
             for(auto& d:devices) effective.push_back(office::encode(std::vector<Sample>(capture->state->effectiveRegions.begin()+d.start,capture->state->effectiveRegions.begin()+d.start+d.count)));}
+        if(capture) {std::lock_guard lock(capture->state->previewMutex);auto& state=*capture->state;
+            previewKey=previewEpoch+":"+std::to_string(sourceGeneration)+":"+std::to_string(state.previewGeneration);
+            if(preview && knownPreview!=previewKey) image=state.previewBase64;
+            previewError=state.previewError;encodes=state.previewEncodes;encodeMs=state.previewEncodeMs;}
         auto online=Json::array();{std::lock_guard lock(controllersMutex);for(auto& d:devices) online.push_back(d.controller!=nullptr);}
         Json settings={{"monitor",config.at("monitor")},{"enabled",config.at("enabled")},{"fps",config.at("fps")},{"smoothing_ms",config.at("smoothing_ms")}};
         const auto defaults=office::processingDefaults();for(auto& [key,value]:defaults.items()) settings[key]=config.at(key);
         return {{"revision",revision},{"online",online},{"settings",settings},
-                {"layout",layout},{"default_layout",factoryLayout},{"status",report()},{"colors",colours},{"effective_regions",effective},{"preview_png",image},{"preview_error",previewError},
+                {"layout",layout},{"default_layout",factoryLayout},{"status",report()},{"colors",colours},{"effective_regions",effective},{"preview_png",image},{"preview_generation",previewKey},{"preview_encodes",encodes},{"preview_encode_ms",encodeMs},{"preview_error",previewError},
                 {"test_mode",standbyPreview?"standby":calibration?"calibration":identifyDevice.empty()?"none":"identify"}};
     }
     Json command(const Json& request) {
         auto name=request.at("command").get<std::string>();
-        if(name=="snapshot") return snapshot(request.value("preview",false));
+        if(name=="snapshot") return snapshot(request.value("preview",false),request.value("preview_generation",std::string()));
         if(name=="recover") {invalidate=true;dirty=true;return {{"accepted",true}};}
         if(name=="stop_test") {calibration=false;standbyPreview=false;identifyDevice.clear();return {{"accepted",true}};}
         if(name=="preview_standby") {calibration=false;identifyDevice.clear();standbyPreview=true;standbyBegan=Clock::now();return {{"accepted",true}};}

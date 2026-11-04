@@ -1,5 +1,6 @@
 // Exercise the production shader and monitor crop using actual D3D11 WARP.
 // The hardware capture path is separately verified against the running LG.
+#define OFFICE_CAPTURE_TEST
 #include "../OfficeAmbience.cpp"
 #include <iostream>
 
@@ -27,16 +28,26 @@ int main() {
         if(state.colors!=expected) throw std::runtime_error("GPU region average or selected-monitor crop is incorrect");
         // A static wallpaper may produce no further WGC callbacks. Opening the
         // editor must still obtain a preview from the retained GPU texture.
-        state.wantPreview=true;state.capturePreview();
-        if(state.previewPng.isEmpty() || state.frames!=1 || state.wantPreview)
+        auto awaitPreview=[&] {
+            auto expectedGeneration=state.previewRevision;state.requestPreview();
+            std::unique_lock lock(state.previewMutex);
+            state.previewCondition.wait(lock,[&]{return state.previewGeneration>=expectedGeneration || !state.previewError.empty();});
+            if(!state.previewError.empty()) throw std::runtime_error(state.previewError);
+            return state.previewBase64;
+        };
+        auto firstPreview=awaitPreview();
+        if(firstPreview.empty() || state.frames!=1)
             throw std::runtime_error("Static retained frame preview requires another capture callback");
+        for(int i=0;i<100;++i) state.requestPreview();
+        if(awaitPreview()!=firstPreview || state.previewEncodes!=1) throw std::runtime_error("Unchanged static frames must share one encoded preview across clients");
         // The panel's save path must update the actual constant buffer, with
         // unchanged hardware indexes, rather than merely redrawing an editor.
         state.regions=state.makeRegions({around(.75f,.75f,.2f,.2f),around(.25f,.75f,.2f,.2f),
                                         around(.75f,.25f,.2f,.2f),around(.25f,.25f,.2f,.2f)});
-        state.wantPreview=true;state.processTexture(texture.get());
+        {std::lock_guard lock(state.mutex);state.processTexture(texture.get());}
+        awaitPreview();
         std::reverse(expected.begin(),expected.end());
-        if(state.colors!=expected || state.previewPng.isEmpty() || state.wantPreview)
+        if(state.colors!=expected || state.previewBase64.empty())
             throw std::runtime_error("Live GPU region replacement or requested capture preview failed");
         // Genuine dark imagery must become dark, not be treated as a bad frame.
         std::fill(pixels.begin(),pixels.end(),0xff000000);
@@ -67,6 +78,19 @@ int main() {
         options["black_bar_detect"]=false;options["strategy"]="fixed";options["depth"]=50;state.configure(options);state.sampleRetained();
         if(RGBGetRValue(state.colors[0])<=bar+20) throw std::runtime_error("Fixed sampling depth did not reach the image content");
         for(auto algorithm:{"adaptive","percentile","dominant"}) {options["strategy"]=algorithm;state.configure(options);state.sampleRetained();}
+        // Deliberately hold the real encoder at its boundary. Sampling must
+        // continue and the last valid preview must survive until publication.
+        std::mutex barrier;std::condition_variable ready;bool entered=false,released=false;
+        state.beforePreviewEncode=[&]{std::unique_lock lock(barrier);entered=true;ready.notify_all();ready.wait(lock,[&]{return released;});};
+        std::string retained;{std::lock_guard lock(state.previewMutex);retained=state.previewBase64;}
+        state.requestPreview();{std::unique_lock lock(barrier);ready.wait(lock,[&]{return entered;});}
+        bool available=state.mutex.try_lock();
+        if(available) {auto before=state.frames;state.processTexture(texture.get());available=state.frames==before+1;state.mutex.unlock();}
+        bool held;{std::lock_guard lock(state.previewMutex);held=state.previewBase64==retained;}
+        state.requestPreview();{std::lock_guard lock(barrier);released=true;ready.notify_all();}
+        awaitPreview();
+        if(!available || !held) throw std::runtime_error("Preview encoding blocks capture or clears the last valid image");
+        state.beforePreviewEncode={};
         std::cout<<"PASS: production D3D11 shader, monitor isolation, RGB ordering, valid black, frame accounting\n";
         return 0;
     } catch(hresult_error const& error) { std::cerr<<to_string(error.message())<<'\n'; }
