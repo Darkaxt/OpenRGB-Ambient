@@ -37,11 +37,19 @@ actual HWND capture and controller output still require the real office setup.
 
 Use the delivered `office/Open-Office-Control.ps1` launcher. Control offers
 enable, output FPS, smoothing, spatial calibration and return to ambience.
+Control now groups sampling algorithms, fixed/adaptive depth, black-bar exclusion,
+spatial blur, saturation/brightness/luminance floor, time/EMA smoothing, scene-cut
+thresholds, presets and lock/display standby effects. These settings execute in
+the native sampler/output; they are not preview-only filters.
 Topology shows the actual downscaled LG capture, per-LED sampling rectangles,
 hardware LED names/indices, and current output colours. Select a device/zone or
 one LED; drag, resize, quarter-turn or reverse its sampling order. Coordinates
 are percentages of the LG image, with Y increasing downwards. Devices includes
-per-controller enable and a two-second identify. Status exposes capture errors,
+device/zone enable and individual/all-device two-second identify. Eight constant
+pixel corner/edge handles resize regions; grid/snap, pan/zoom, undo/redo and edge
+presets retain hardware LED identity. Cyan shows the editable region; dashed amber
+shows the actual GPU sampling rectangle, including black-bar/depth adjustment.
+The blur footprint is shown separately. Status exposes capture errors,
 frame age separately from new-frame submission latency, and explicit recovery.
 
 Changes stay in the panel draft until Save. Save validates the complete map and
@@ -61,8 +69,17 @@ an unchanged unavailable source can be retried explicitly. No timed reset loop.
 The panel's dark cyan hierarchy and topology interactions were reconstructed
 from EDAmbilight v1.2.0 by Stefano Indraccolo. Its MIT credit is delivered as
 `LICENSE-EDAmbilight-MIT.txt`; see `EDAMBILIGHT-GUI-REVIEW.md` for shipped evidence.
-Unsupported EDA algorithms and synthetic previews are not presented as native
-capture features. All six office controllers, including keyboards, are editable.
+The Preview page shows actual capture and submitted LED colours. Its separate
+MIT-licensed animation/music playground retains the original six WebGL effects,
+particles, palettes, postprocessing, audio bindings, visualizers and saved presets.
+It is local browser content, not another RGB writer: maximize it on the LG to use
+the existing app-capture policy. Controls fade after four seconds; moving inside
+the page shows them again, and H toggles manual hiding.
+Settings tests/reconnects the same-user native pipe, opens diagnostics, and invokes
+the packaged verified stop/restart scripts. Its startup preference means starting
+lighting when opening this panel, not adding a Windows boot task. The panel can
+remain in the tray with unsaved draft edits. All six office controllers, including
+keyboards, are editable; disconnected devices retain their maps.
 
 This fork is under active integration. A successful build alone is not physical
 acceptance or final delivery. The core integration specification owns those gates.

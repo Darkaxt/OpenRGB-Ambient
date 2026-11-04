@@ -43,6 +43,7 @@
 #include <QUrl>
 #include <QShortcut>
 #include <QProcess>
+#include <QSignalBlocker>
 #include <QProcessEnvironment>
 #include <QStandardPaths>
 #include <QSystemTrayIcon>
@@ -456,7 +457,7 @@ class Panel : public QMainWindow {
             if(!exportPath.isEmpty()) QCoreApplication::exit(1);
         }
         stopTest->setEnabled(snapshot.at("test_mode")!="none");
-        if(!exportPath.isEmpty() && !exported && (!map->preview.isNull() || (allowUnavailable && !s.value("error",std::string()).empty()))) {
+        if(!exportPath.isEmpty() && !exported && (!map->preview.isNull() || allowUnavailable)) {
             if(exerciseEditor && editorPhase<3) exerciseSave();else exportViews();
         }
     }
@@ -488,17 +489,21 @@ class Panel : public QMainWindow {
             identifyButtons.push_back(identify);
             auto online=new QLabel;onlineLabels.push_back(online);
             row->addWidget(check,1);row->addWidget(online);row->addWidget(new QLabel(QString("%1 LEDs").arg(layout[d]["regions"].size())));row->addWidget(identify);
-            connect(check,&QCheckBox::toggled,this,[this,d](bool on){layout[d]["enabled"]=on;changed();});
+            connect(check,&QCheckBox::toggled,this,[this,d](bool on){layout[d]["enabled"]=on;changed();syncTree();});
             connect(identify,&QPushButton::clicked,this,[this,d]{action({{"command","identify"},{"device",layout[d]["id"]}});});
             auto card=new QVBoxLayout;card->addLayout(row);
             for(size_t g=0;g<layout[d]["groups"].size();++g) {
                 auto groupRow=new QHBoxLayout;auto on=new QCheckBox(text(layout[d]["groups"][g]["name"]));on->setChecked(layout[d]["groups"][g].value("enabled",true));
                 auto edit=new QPushButton("Edit topology");groupRow->addWidget(on,1);groupRow->addWidget(edit);card->addLayout(groupRow);
-                connect(on,&QCheckBox::toggled,this,[this,d,g](bool enabled){layout[d]["groups"][g]["enabled"]=enabled;changed();});
+                connect(on,&QCheckBox::toggled,this,[this,d,g](bool enabled){layout[d]["groups"][g]["enabled"]=enabled;changed();syncTree();});
                 connect(edit,&QPushButton::clicked,this,[this,d,g]{select(d,g);tree->setCurrentItem(tree->topLevelItem(d)->child(g));pages->setCurrentIndex(1);});
             }
             deviceList->addWidget(groupBox(text(layout[d]["id"]),card));
         }deviceList->addStretch();
+    }
+    void syncTree() {
+        QSignalBlocker blocker(tree);int d=map->device,g=map->group;buildTree();
+        if(d>=0 && d<tree->topLevelItemCount()) tree->setCurrentItem(tree->topLevelItem(d)->child(g));
     }
     void select(int device,int group) {
         if(layout.empty()) return;updating=true;map->device=device;map->group=group;map->led=-1;
@@ -688,7 +693,7 @@ public:
         connect(tree,&QTreeWidget::currentItemChanged,this,[this](QTreeWidgetItem* item,QTreeWidgetItem*){if(updating || !item) return;int g=item->data(0,Qt::UserRole+1).toInt();select(item->data(0,Qt::UserRole).toInt(),std::max(0,g));});
         connect(tree,&QTreeWidget::itemChanged,this,[this](QTreeWidgetItem* item,int){if(updating || layout.empty()) return;int d=item->data(0,Qt::UserRole).toInt(),g=item->data(0,Qt::UserRole+1).toInt();if(g<0) layout[d]["enabled"]=item->checkState(0)==Qt::Checked;else layout[d]["groups"][g]["enabled"]=item->checkState(0)==Qt::Checked;changed();buildDevices();});
         connect(led,&QComboBox::currentIndexChanged,this,[this]{if(updating) return;map->led=led->currentData().toInt();showGeometry();map->update();});
-        connect(zoneName,&QLineEdit::editingFinished,this,[this]{if(updating || layout.empty()) return;layout[map->device]["groups"][map->group]["name"]=zoneName->text().toStdString();changed();});
+        connect(zoneName,&QLineEdit::editingFinished,this,[this]{if(updating || layout.empty()) return;layout[map->device]["groups"][map->group]["name"]=zoneName->text().toStdString();changed();syncTree();buildDevices();});
         connect(all,&QCheckBox::toggled,this,[this](bool on){map->showAll=on;map->update();});
         connect(rotate,&QPushButton::clicked,this,[this]{applyGeometry(90);});connect(reverse,&QPushButton::clicked,this,[this]{applyGeometry(0,true);});
         connect(calibrate,&QPushButton::clicked,this,[this]{action({{"command","calibrate"}});});connect(stopTest,&QPushButton::clicked,this,[this]{action({{"command","stop_test"}});});
