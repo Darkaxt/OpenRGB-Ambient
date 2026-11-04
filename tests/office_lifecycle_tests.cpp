@@ -42,6 +42,9 @@ struct OfficeLifecycleTest {
             laptop("Lenovo Legion 7 Gen 8",109),desk("Secretlab",48,"NL72S2"),mouse("G502 X PLUS",8);
         Api api;api.controllers={&strip,&bars,&keys,&laptop,&desk,&mouse};
         OfficeAmbience::Impl owner(&api,path,false);
+        owner.standbyPreview=true;owner.tick();
+        require(!owner.report()["has_valid_frame"].get<bool>(),"Standby output must not claim a captured wallpaper frame");
+        owner.standbyPreview=false;for(auto* c:{&strip,&bars,&keys,&laptop,&desk,&mouse}) c->writes=0;
         owner.latest.assign(314,ToRGBColor(255,0,0));owner.dirty=false;
         owner.tick();require(strip.writes==20 && mouse.writes==8,"Initial six-device output");
         auto processing=owner.snapshot(false);auto modified=processing["settings"];

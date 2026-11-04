@@ -100,7 +100,7 @@ black-bar detection, fixed/adaptive depth, EMA alpha, scene-cut threshold,
 saturation boost, luminance floor and standby behavior. Balanced/Cinema/Gaming/
 Calm presets set combinations of those options.
 
-Our native backend currently implements GPU regional averaging, 1–30 output
+At the earlier 0.3.0 reconstruction boundary the native backend implemented GPU regional averaging, 1–30 output
 FPS, a 140ms time-based smoother and the required LG wallpaper/app policy.
 The original menu labels are not evidence that our backend implements the other
 algorithms. Reconstruction must expose functioning controls with truthful units;
@@ -170,7 +170,7 @@ The replay executes recovered geometry methods only, bypassing construction and
 all browser/Eel/device actions. Do not copy that discrepancy into the new map.
 This finding does not diagnose the user's current train wallpaper behavior.
 
-## Reconstruction boundary for this system
+## Earlier reconstruction boundary for this system
 
 The existing authorized GUI work remains incomplete. Its next integrated outcome
 must provide the recovered Control/Topology/Devices interaction around the one
@@ -192,3 +192,64 @@ No mapping was changed during this pass. The train observation is preserved
 separately and deliberately not pursued further after the user's redirection.
 No second original EDAmbilight/BSRGB process or RGB writer was launched. Monthly
 upstream maintenance and branch pruning remain in their existing later stage.
+
+## Screenshot feature reconciliation: 0.4.0 candidate
+
+The current revision inspected **all ten** PNGs in the repository's docs gallery,
+including the paired dashboard, topology, devices, loading and settings images,
+and `ss-preview.png`. They are retained under `design-reference`. The recovered
+v1.2.0 frontend supplies the behavior behind those images. This section supersedes
+the earlier implementation inventory above, without treating source inspection
+or a passed build as installed/live acceptance.
+
+| Reference feature | Native implementation / integration |
+| --- | --- |
+| Status, enabled state, device/mapped counts and output FPS | Control dashboard and Devices read the existing owner's authenticated snapshot. Missing capture and offline hardware remain distinct states. |
+| FPS 1–60 | Native output timer, validated and saved atomically. |
+| Capture engine selection | WGC is shown explicitly. DXGI/mss are deliberately not offered for wallpaper input: they include the floating windows this system must exclude. The selected LG wallpaper/maximized-app policy remains authoritative. |
+| Mean, percentile, dominant/median, adaptive strategies | Production GPU regional mean, 80th-percentile luminance sample, median-luminance color, fixed/adaptive depth. Temporal time/EMA mode is selected independently; the median label is explicit, not a claim of histogram clustering. |
+| Sampling depth and adaptive bounds | GPU constant buffer and per-region local luminance contrast; effective bounds are exported for the map. |
+| Black-bar detection | Bounded GPU edge probes adjust the content rectangle; genuine black remains valid imagery. |
+| Temporal smoothing and scene cut | Native time-based or frame-rate-independent EMA output; scene-cut threshold selects an immediate update. |
+| Saturation, brightness and luminance floor | Production GPU processing; retained static frames can be resampled after changes. |
+| Blur, requested additionally from SignalRGB | Spatial GPU filter reaches real LED samples and the small preview. It is not a CSS or preview-only blur. |
+| Balanced/Cinema/Gaming/Calm, reset and Advanced | Dashboard presets populate one draft; Save applies the integrated configuration. Advanced discloses the depth/standby cards. |
+| Standby modes | Hold, fade, dim, pulse, rotation, aurora, ember and off use actual session-lock/display-power notifications. No frame-silence timeout guesses that the screen is off. A reversible test action is available. |
+| Topology device/zone tree | All six office controllers, including both keyboards; per-zone and per-device enabled draft states. Offline devices retain their maps. |
+| Move, resize, direction and rotation | Eight fixed-pixel edge/corner handles, move, quarter-turn and reversal; hardware indices remain stable. |
+| Length/spacing | Explicit normalized X/Y/width/height define the sampled area, including linear strip length/spacing. Physical hardware LED counts are read-only. This is a capture-space editor, not EDA's centimetre-based world-space model. |
+| Grid/snap, pan/zoom, fit, keyboard adjustment | Native canvas; 0.5% arrows or 0.1% with Shift, wheel zoom and middle-button pan. Undo/redo and Esc restore exact pre-gesture JSON. |
+| Global effect center and placement presets | Draggable center, numeric values and positional presets feed the native radial standby origin. Ordinary captured-image samples continue to use their explicit regions. |
+| Auto Layout and Reset | Native default-map placement, undoable; reset reloads saved state. Opening the panel does not move any device. |
+| Identify device/all and calibration | Fixed commands to the existing RGB owner, with explicit stop/return and disconnect restoration. No second writer. |
+| LED/sample visualization | Cyan requested regions, dashed amber actual GPU regions, blur footprints, hardware indices, direction and actual submitted RGB. |
+| Explicit Save and unsaved edits | Complete revision-checked map/settings transaction; panel draft survives page changes and optional close-to-tray. Settings remain draft until Save. |
+| Device list enable and edit-topology links | Native cards, zone toggles, connection state, counts and working navigation to the selected zone. |
+| SDK host/port/path, web port | Same-user authenticated native pipe and packaged install path replace the reference's separate SDK/web server. No fake network endpoint controls. |
+| Test connection, reconnect/retry and diagnostics | Explicit native reconnect/snapshot, error clearing after successful response, diagnostic folder and Status page. |
+| Startup and lifecycle | Start lighting when opening the panel, close-to-tray, packaged exact-owner stop/restart scripts. This setting does not create a Windows boot task. |
+| Live preview | Added actual LG capture plus actual submitted LED overlay. EDA's original Preview page does not provide this capture view. |
+| Procedural Preview | The original MIT frontend is packaged locally: six WebGL animations, particle modes, palettes, post FX, quality, local audio bindings, visualizers, playback/fullscreen and saved presets. It writes no RGB itself; maximizing its browser on the LG uses the normal app-capture policy. |
+| Help/about | Native descriptions, status diagnostics, delivered AMBIENCE documentation, license and original-preview instructions. |
+
+### Verification and remaining acceptance
+
+Hosted Windows CI 41825234965 at b9bf58e passed the production GPU, lifecycle,
+geometry/settings, actual mouse-widget and named-pipe tests. It includes actual
+GPU blur/color/depth/black-bar processing and native standby/zone/identify paths.
+The subsequent draft-synchronization/export change receives its own build checks.
+
+The installed candidate's `preview/preview.html` was opened through the owned
+Helium/Playwright workflow. All six effect buttons switched the active renderer;
+all six particle modes selected; a generated one-second PCM WAV reached active
+playback with duration 1; a preset restored speed 70 after a change to 20; the
+test preset was deleted. WebGL reported error 0. The rendered 1440x900 view was
+inspected. Only the disposable tab was closed; the browser was preserved and the
+workflow released with native exit 0. The earlier click on a faded panel was
+cancelled, inspected (it had not switched effects), and not counted as success.
+
+Real LG capture/physical LED acceptance and final release remain governed by
+stages 7–9 in the core integration specification. The current Windows session
+has entered display standby, Wallpaper Engine's rendering process is absent,
+and one saved controller is offline. No live capture acceptance is inferred
+from standby color output or an unavailable-source UI export.

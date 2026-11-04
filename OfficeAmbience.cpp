@@ -806,7 +806,7 @@ struct OfficeAmbience::Impl {
             {"frame_age_ms",received==Clock::time_point{}?Json(nullptr):Json(std::chrono::duration<double,std::milli>(Clock::now()-received).count())},
             {"output_fps",measuredFps},
             {"online_devices",std::count_if(devices.begin(),devices.end(),[](const auto& d){return d.controller!=nullptr;})},{"controller_error",controllerError},
-            {"first_frame_after_switch_ms",firstFrameDelayMs},{"has_valid_frame",initialized},
+            {"first_frame_after_switch_ms",firstFrameDelayMs},{"has_valid_frame",!latest.empty()},
             {"error",error},{"updated_utc",QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs).toStdString()}};
     }
     void status() {

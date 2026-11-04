@@ -72,6 +72,15 @@ public:
         auto c=rect().center();QPolygonF arrow;arrow<<QPointF(c.x()-4,c.y()+(up?2:-2))<<QPointF(c.x(),c.y()+(up?-2:2))<<QPointF(c.x()+4,c.y()+(up?2:-2));p.drawPolyline(arrow);
     }
 };
+class ChoiceBox : public QComboBox {
+protected:
+    void paintEvent(QPaintEvent* event) override {
+        QComboBox::paintEvent(event);QPainter p(this);p.setRenderHint(QPainter::Antialiasing);
+        p.fillRect(width()-26,2,24,height()-4,QColor("#10202c"));
+        p.setPen(QPen(isEnabled()?cyan:QColor("#677783"),1.8,Qt::SolidLine,Qt::RoundCap,Qt::RoundJoin));
+        auto c=QPointF(width()-14,height()/2.);QPolygonF arrow;arrow<<c+QPointF(-5,-2)<<c+QPointF(0,3)<<c+QPointF(5,-2);p.drawPolyline(arrow);
+    }
+};
 template<class Base> class Stepper : public Base {
     ChevronButton *up=new ChevronButton(true,this),*down=new ChevronButton(false,this);
 public:
@@ -346,7 +355,7 @@ class Panel : public QMainWindow {
     QTreeWidget* tree=new QTreeWidget;
     MapCanvas* map=new MapCanvas;
     QLineEdit* zoneName=new QLineEdit;
-    QComboBox* led=new QComboBox;
+    QComboBox* led=new ChoiceBox;
     std::array<QDoubleSpinBox*,4> geometry;
     std::array<QDoubleSpinBox*,2> effectCenter;
     QPlainTextEdit* diagnostics=new QPlainTextEdit;
@@ -392,7 +401,7 @@ class Panel : public QMainWindow {
         numbers[key]=spin;line->addWidget(slider,1);line->addWidget(spin);return row;
     }
     QComboBox* choice(const std::string& key,std::initializer_list<std::pair<const char*,const char*>> entries) {
-        auto combo=new QComboBox;for(auto [label,value]:entries) combo->addItem(label,value);
+        auto combo=new ChoiceBox;for(auto [label,value]:entries) combo->addItem(label,value);
         combo->setAccessibleName(QString::fromStdString(key));choices[key]=combo;
         connect(combo,&QComboBox::currentIndexChanged,this,[this]{changed();});return combo;
     }
@@ -437,7 +446,7 @@ class Panel : public QMainWindow {
         deviceSummary->setText(QString("%1 / %2 devices online  ·  %3 mapped LEDs").arg(s.at("online_devices").get<int>()).arg(layout.size()).arg(s.at("leds").get<int>()));
         inventorySummary->setText(deviceSummary->text());
         status->setText(QString("%1\n%2 FPS output · %3 captured frames\nGPU sampling %4 ms · new-frame submission %5 ms\n%6")
-            .arg(text(s.at("mode")).toUpper()).arg(s.at("output_fps").get<double>(),0,'f',1)
+            .arg(s.value("standby",false)?"DISPLAY STANDBY":text(s.at("mode")).toUpper()).arg(s.at("output_fps").get<double>(),0,'f',1)
             .arg(s.at("input_frames").get<uint64_t>()).arg(s.at("gpu_processing_ms").get<double>(),0,'f',2)
             .arg(s.at("callback_to_native_submit_ms").get<double>(),0,'f',2).arg(text(s.at("error"))));
         diagnostics->setPlainText(QString::fromStdString(s.dump(2)));
@@ -487,7 +496,8 @@ class Panel : public QMainWindow {
             auto row=new QHBoxLayout;auto check=new QCheckBox(text(layout[d]["name"]));check->setChecked(layout[d]["enabled"]);
             auto identify=new QPushButton("Identify");identify->setAccessibleName("Identify "+text(layout[d]["name"]));
             identifyButtons.push_back(identify);
-            auto online=new QLabel;onlineLabels.push_back(online);
+            bool connected=lastSnapshot.contains("online") && lastSnapshot["online"].at(d).get<bool>();
+            auto online=new QLabel(connected?"Connected":"Offline · map retained");online->setStyleSheet(connected?"color:#22d3a5":"color:#ff9f1c");onlineLabels.push_back(online);identify->setEnabled(connected);
             row->addWidget(check,1);row->addWidget(online);row->addWidget(new QLabel(QString("%1 LEDs").arg(layout[d]["regions"].size())));row->addWidget(identify);
             connect(check,&QCheckBox::toggled,this,[this,d](bool on){layout[d]["enabled"]=on;changed();syncTree();});
             connect(identify,&QPushButton::clicked,this,[this,d]{action({{"command","identify"},{"device",layout[d]["id"]}});});
@@ -632,10 +642,10 @@ public:
         connect(standbyTest,&QPushButton::clicked,this,[this]{action({{"command","preview_standby"}});});
         auto controlScroll=new QScrollArea;controlScroll->setWidgetResizable(true);controlScroll->setWidget(controlPage);pages->addWidget(controlScroll);
 
-        auto topology=new QSplitter;tree->setHeaderLabel("Devices and zones");tree->setMinimumWidth(210);topology->addWidget(tree);
-        auto mapPage=new QWidget;auto mapLayout=new QVBoxLayout(mapPage);auto toolbar=new QHBoxLayout;auto all=new QCheckBox("All devices");toolbar->addWidget(all);
+        auto topology=new QSplitter;tree->setHeaderLabel("Devices and zones");tree->setMinimumWidth(220);topology->addWidget(tree);
+        auto mapPage=new QWidget;auto mapLayout=new QVBoxLayout(mapPage);auto toolbar=new QHBoxLayout;auto all=new QCheckBox("All");all->setToolTip("Show all device sampling regions");toolbar->addWidget(all);
         auto gridToggle=new QCheckBox("Grid");gridToggle->setChecked(true);toolbar->addWidget(gridToggle);auto snapToggle=new QCheckBox("Snap");toolbar->addWidget(snapToggle);
-        auto undo=new QPushButton("Undo"),redo=new QPushButton("Redo"),fit=new QPushButton("Fit view");toolbar->addWidget(undo);toolbar->addWidget(redo);toolbar->addWidget(fit);mapLayout->addLayout(toolbar);mapLayout->addWidget(map,1);
+        auto undo=new QPushButton("Undo"),redo=new QPushButton("Redo"),fit=new QPushButton("Fit");toolbar->addWidget(undo);toolbar->addWidget(redo);toolbar->addWidget(fit);mapLayout->addLayout(toolbar);mapLayout->addWidget(map,1);
         connect(gridToggle,&QCheckBox::toggled,map,[this](bool on){map->showGrid=on;map->update();});connect(snapToggle,&QCheckBox::toggled,map,[this](bool on){map->snap=on;});
         connect(undo,&QPushButton::clicked,map,[this]{map->undo();});connect(redo,&QPushButton::clicked,map,[this]{map->redo();});connect(fit,&QPushButton::clicked,map,[this]{map->fit();});
         auto note=new QLabel("Cyan: draft map · dashed amber: live sampling\nDrag to move · corners / edges resize · wheel zooms · middle drag pans · Esc cancels · Ctrl+Z undoes");note->setWordWrap(true);mapLayout->addWidget(note);topology->addWidget(mapPage);
@@ -646,7 +656,7 @@ public:
         fields->addRow("Zone name",zoneName);fields->addRow("Selection",led);
         size_t i=0;for(auto label:{"X (%)","Y (%)","Width (%)","Height (%)"}) {auto box=new Stepper<QDoubleSpinBox>;box->setDecimals(3);box->setRange(i<2?0:.001,100);box->setSingleStep(.5);geometry[i++]=box;fields->addRow(label,box);connect(box,&QDoubleSpinBox::editingFinished,this,[this]{applyGeometry();});}
         propLayout->addWidget(groupBox("Sampling area",fields));auto rotate=new QPushButton("Rotate 90°");auto reverse=new QPushButton("Reverse LED order");propLayout->addWidget(rotate);propLayout->addWidget(reverse);
-        auto edgeChoice=new QComboBox;edgeChoice->addItems({"Map to edge…","Top","Right","Bottom","Left","Fill image"});propLayout->addWidget(edgeChoice);
+        auto edgeChoice=new ChoiceBox;edgeChoice->addItems({"Map to edge…","Top","Right","Bottom","Left","Fill image"});propLayout->addWidget(edgeChoice);
         connect(edgeChoice,&QComboBox::activated,this,[this,edgeChoice](int edge){if(!edge || layout.empty()) return;auto values=map->selected();size_t count=values.size();float depth=numbers.at("depth")->value()/100;std::vector<Region> result;
             for(size_t i=0;i<count;++i) {float a=float(i)/count,b=float(i+1)/count;
                 result.push_back(edge==1?Region{a,0,b,depth}:edge==2?Region{1-depth,a,1,b}:edge==3?Region{1-b,1-depth,1-a,1}:edge==4?Region{0,1-b,depth,1-a}:Region{a,0,b,1});}
@@ -655,8 +665,8 @@ public:
         auto identifyZone=new QPushButton("Identify device");propLayout->addWidget(identifyZone);connect(identifyZone,&QPushButton::clicked,this,[this]{if(!layout.empty()) action({{"command","identify"},{"device",layout[map->device]["id"]}});});
         auto originFields=new QFormLayout;originFields->setRowWrapPolicy(QFormLayout::WrapAllRows);
         for(size_t axis=0;axis<2;++axis) {auto spin=new Stepper<QDoubleSpinBox>;spin->setRange(0,100);spin->setDecimals(1);spin->setSuffix(" %");effectCenter[axis]=spin;originFields->addRow(axis==0?"Center X":"Center Y",spin);connect(spin,&QDoubleSpinBox::valueChanged,this,[this](double){map->effectCenter={effectCenter[0]->value()/100,effectCenter[1]->value()/100};map->update();changed();});}
-        auto showOrigin=new QCheckBox("Show draggable effect center");originFields->addRow(showOrigin);connect(showOrigin,&QCheckBox::toggled,map,[this](bool on){map->showCenter=on;map->update();});
-        auto originPresets=new QComboBox;originPresets->addItems({"Center preset…","Center","Top","Bottom","Left","Right"});originFields->addRow(originPresets);
+        auto showOrigin=new QCheckBox("Effect center handle");originFields->addRow(showOrigin);connect(showOrigin,&QCheckBox::toggled,map,[this](bool on){map->showCenter=on;map->update();});
+        auto originPresets=new ChoiceBox;originPresets->addItems({"Center preset…","Center","Top","Bottom","Left","Right"});originFields->addRow(originPresets);
         connect(originPresets,&QComboBox::activated,this,[this,originPresets](int choice){if(!choice) return;effectCenter[0]->setValue(choice==4?0:choice==5?100:50);effectCenter[1]->setValue(choice==2?0:choice==3?100:50);originPresets->setCurrentIndex(0);});
         auto originHelp=new QLabel("Origin for radial rotating standby colours.");originHelp->setWordWrap(true);originFields->addRow(originHelp);propLayout->addWidget(groupBox("Effect center",originFields));
         map->centerEdited=[this](QPointF p){effectCenter[0]->setValue(p.x()*100);effectCenter[1]->setValue(p.y()*100);};
