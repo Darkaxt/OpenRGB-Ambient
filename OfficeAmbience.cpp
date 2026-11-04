@@ -138,7 +138,6 @@ struct Device {
     RGBControllerInterface* controller;
     size_t start,count;
     std::vector<RGBColor> colors;
-    std::vector<Sample> effectiveRegions;
     std::string key;
     std::string name;
     Json ledNames;
@@ -213,6 +212,7 @@ struct CaptureState {
     bool active=true,closed=false;
     std::string error;
     std::vector<RGBColor> colors;
+    std::vector<Sample> effectiveRegions;
     uint64_t frames=0;
     double lastProcessingMs=0;
     Clock::time_point received{};

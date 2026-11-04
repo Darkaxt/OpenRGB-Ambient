@@ -25,6 +25,12 @@ int main() {
         if(std::abs((1-a)*(1-a)-(1-b))>.0001) throw std::runtime_error("EMA changes with output FPS");
         settings["adaptive_min"]=30;rejected=false;try {validateProcessing(settings);}catch(std::exception const&){rejected=true;}
         if(!rejected) throw std::runtime_error("Inverted adaptive range accepted");
+        auto tiny=resizeBounds({0,0,.00001f,.00001f},5,-1,-1);
+        validateRegions(Json::array({encode(tiny)}),1);
+        for(unsigned handle:{1u,2u,4u,8u,5u,6u,9u,10u}) {
+            auto r=resizeBounds({.2f,.3f,.6f,.7f},handle,100,-100);
+            validateRegions(Json::array({encode(r)}),1);
+        }
         std::cout<<"PASS: real mapping transform, identity, hardware order and bounds contracts\n";
         return 0;
     } catch(std::exception const& e) { std::cerr<<e.what()<<'\n'; return 1; }

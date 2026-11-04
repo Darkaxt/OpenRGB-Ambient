@@ -34,10 +34,11 @@ inline Region bounds(const std::vector<Region>& values) {
 // never cross it or leave the selected monitor, even with a far-away pointer.
 inline Region resizeBounds(Region b,unsigned handle,float dx,float dy,float minimum=.002f,float snap=0) {
     auto quantize=[&](float v){return snap>0?std::round(v/snap)*snap:v;};
-    if(handle&1) b.left=std::clamp(quantize(b.left+dx),0.f,b.right-minimum);
-    if(handle&2) b.right=std::clamp(quantize(b.right+dx),b.left+minimum,1.f);
-    if(handle&4) b.top=std::clamp(quantize(b.top+dy),0.f,b.bottom-minimum);
-    if(handle&8) b.bottom=std::clamp(quantize(b.bottom+dy),b.top+minimum,1.f);
+    float minWidth=std::min(minimum,b.right-b.left),minHeight=std::min(minimum,b.bottom-b.top);
+    if(handle&1) b.left=std::clamp(quantize(b.left+dx),0.f,b.right-minWidth);
+    if(handle&2) b.right=std::clamp(quantize(b.right+dx),b.left+minWidth,1.f);
+    if(handle&4) b.top=std::clamp(quantize(b.top+dy),0.f,b.bottom-minHeight);
+    if(handle&8) b.bottom=std::clamp(quantize(b.bottom+dy),b.top+minHeight,1.f);
     return b;
 }
 // Transform rectangles, with screen Y down, using the same geometry for drawing,
