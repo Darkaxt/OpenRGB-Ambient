@@ -292,19 +292,22 @@ public:
         }
         if(!layout || layout->empty()) {p.restore();return;}
         auto selectedIds=targets();
-        for(size_t d=0;d<layout->size();++d) {
+        // Context first, selection last: an overlapping unselected device must
+        // not cover the selected device's cyan LED outlines.
+        for(bool selectionPass:{false,true}) for(size_t d=0;d<layout->size();++d) {
             const auto& regions=(*layout)[d]["regions"];
             for(size_t i=0;i<regions.size();++i) {
                 if(!visible(static_cast<int>(d),static_cast<unsigned>(i)))continue;
                 auto r=regions[i];QRectF box(image.left()+r[0].get<double>()*image.width(),image.top()+r[1].get<double>()*image.height(),
                     (r[2].get<double>()-r[0].get<double>())*image.width(),(r[3].get<double>()-r[1].get<double>())*image.height());
                 bool active=std::find(selectedIds.begin(),selectedIds.end(),std::pair<int,unsigned>{static_cast<int>(d),static_cast<unsigned>(i)})!=selectedIds.end();
+                if(active!=selectionPass)continue;
                 if(active && d<effective.size() && i<effective[d].size()) {
                     auto actual=effective[d][i];QRectF sample(image.left()+actual[0].get<double>()*image.width(),image.top()+actual[1].get<double>()*image.height(),(actual[2].get<double>()-actual[0].get<double>())*image.width(),(actual[3].get<double>()-actual[1].get<double>())*image.height());
                     p.setPen(QPen(QColor("#ffd26e"),1,Qt::DashLine));p.drawRect(sample);
                 }
-                QColor fill=cyan;fill.setAlpha(active?50:12);p.fillRect(box,fill);
-                p.setPen(QPen(active?cyan:QColor(200,210,225,70),active?1.7:0.5));p.drawRect(box);
+                QColor outline=active?cyan:QColor("#adb8c2"),fill=outline;fill.setAlpha(active?50:12);p.fillRect(box,fill);
+                p.setPen(QPen(outline,1.7));p.drawRect(box);
                 if(d<colours.size() && i<colours[d].size()) {auto c=colours[d][i];p.fillRect(QRectF(box.left()+1,box.top()+1,std::min(7.,box.width()),std::min(7.,box.height())),QColor(c[0].get<int>(),c[1].get<int>(),c[2].get<int>()));}
                 if(active && (led>=0 || selectedIds.size()<=10) && box.width()>18 && box.height()>16) {p.setPen(Qt::white);p.drawText(box,Qt::AlignCenter,QString::number(i));}
             }
@@ -756,6 +759,8 @@ class Panel : public QMainWindow {
             findChild<QComboBox*>("topologyVisibility")->setCurrentIndex(1);renderState("selected-zones");
             findChild<QComboBox*>("topologyVisibility")->setCurrentIndex(0);break;
         }
+        findChild<QComboBox*>("topologyVisibility")->setCurrentIndex(2);renderState("all-devices");
+        findChild<QComboBox*>("topologyVisibility")->setCurrentIndex(0);
         auto retainedLayout=layout,retainedSnapshot=lastSnapshot;
         lastSnapshot["online"]=std::vector<bool>(layout.size(),false);buildDevices();pages->setCurrentIndex(2);renderState("offline");
         layout=Json::array();buildDevices();renderState("empty");layout=retainedLayout;lastSnapshot=retainedSnapshot;buildDevices();

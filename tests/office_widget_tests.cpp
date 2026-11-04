@@ -68,6 +68,14 @@ void multiSelection(QApplication& app) {
     // MapCanvas has no Q_OBJECT: resolve the actual QWidget by its stable name.
     auto canvas=static_cast<MapCanvas*>(panel.findChild<QWidget*>("topologyCanvas"));
     require(tree && canvas && view,"Production topology controls missing");
+    auto previewBlur=panel.findChild<QDoubleSpinBox*>("previewBlur"),topologyBlur=panel.findChild<QDoubleSpinBox*>("topologyBlur");
+    require(previewBlur && topologyBlur,"Preview/Topology blur controls are missing");
+    previewBlur->setValue(2.5);require(topologyBlur->value()==2.5 && std::abs(canvas->blur-.025)<.00001,"Preview blur does not update the shared topology draft");
+    topologyBlur->setValue(1.5);require(previewBlur->value()==1.5,"Topology blur does not update Preview");
+    auto previewPage=panel.findChild<QWidget*>("previewPage");auto save=panel.findChild<QPushButton*>("saveChanges");
+    auto pageStack=qobject_cast<QStackedWidget*>(previewPage->parentWidget());require(pageStack && save,"Preview apply action missing");
+    pageStack->setCurrentWidget(previewPage);app.processEvents();require(save->isVisible() && save->text()=="Apply settings","Preview blur requires leaving the page to apply");
+    pageStack->setCurrentIndex(1);previewBlur->setValue(0);
     auto click=[&](QTreeWidgetItem* row,Qt::KeyboardModifiers modifiers=Qt::NoModifier) {
         tree->scrollToItem(row);app.processEvents();auto box=tree->visualItemRect(row);auto p=QPointF(box.left()+75,box.center().y());
         // QTreeView currentChanged also consults QGuiApplication's modifier
@@ -100,11 +108,27 @@ void multiSelection(QApplication& app) {
     click(laptop);click(laptop->child(0),Qt::ControlModifier);require(canvas->targets().size()==3,"Parent and child selected the same LED twice");
     panel.fixtureLayout(original); // Leave no unsaved fixture or active gesture.
 }
+void contextOutlines(QApplication& app) {
+    Json layout=Json::array({
+        {{"regions",office::encode(std::vector<Region>{{.2f,.3f,.3f,.7f},{.3f,.3f,.4f,.7f}})},{"groups",Json::array({{{"first",0},{"count",2}}})}},
+        {{"regions",office::encode(std::vector<Region>{{.6f,.3f,.8f,.7f},{.3f,.35f,.5f,.55f}})},{"groups",Json::array({{{"first",0},{"count",2}}})}}
+    });
+    auto original=layout;MapCanvas canvas;canvas.layout=&layout;canvas.view=MapCanvas::View::AllDevices;canvas.showGrid=false;canvas.resize(1048,600);
+    canvas.preview=QImage(512,216,QImage::Format_RGB32);canvas.show();app.processEvents();
+    for(auto background:{QColor(12,35,68),QColor(244,217,183)})for(double scale:{1.,1.5,2.}) {
+        canvas.preview.fill(background);QImage out(QSize(qRound(canvas.width()*scale),qRound(canvas.height()*scale)),QImage::Format_ARGB32_Premultiplied);out.setDevicePixelRatio(scale);canvas.render(&out);
+        auto image=canvas.imageGeometry();auto pixel=[&](double x,double y){return out.pixelColor(qRound((image.left()+image.width()*x)*scale),qRound((image.top()+image.height()*y)*scale));};
+        auto grey=pixel(.6,.45);require(grey.red()>150 && grey.green()>150 && grey.blue()>150 && std::abs(grey.red()-grey.blue())<25,"Unselected device outline is faint or tinted instead of visible neutral grey");
+        auto active=pixel(.3,.45);require(active.red()<90 && active.green()>180 && active.blue()>180,"Grey context painted over a selected cyan LED outline");
+    }
+    require(layout==original,"Context rendering changed the saved topology");
+}
 int main(int argc,char** argv) {
     QApplication app(argc,argv);
     try {
         officeui::loadFonts();
         invertedGrid(app);
+        contextOutlines(app);
         require(QFontInfo(officeui::body()).family()=="Office Body","Native body font fell back instead of using the recovered asset");
         require(QFontInfo(officeui::display()).family()=="Office Display","Native display font fell back");
         for(auto family:{"Office Symbols Outline","Office Symbols Active"}) {
