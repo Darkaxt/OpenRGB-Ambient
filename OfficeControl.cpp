@@ -31,6 +31,7 @@
 #include <QCommandLineParser>
 #include <QSaveFile>
 #include <QDebug>
+#include <QElapsedTimer>
 #include <functional>
 #include <map>
 #include <array>
@@ -50,24 +51,28 @@ class Client : public QObject {
 public:
     std::function<void()> connected;
     std::function<void(QString)> error;
+    std::function<void(QString)> trace;
     Client() {
-        connect(&socket,&QLocalSocket::connected,this,[this]{if(connected) connected();});
+        connect(&socket,&QLocalSocket::connected,this,[this]{if(trace) trace("pipe-connected");if(connected) connected();});
         connect(&socket,&QLocalSocket::disconnected,this,[this]{callbacks.clear();if(error) error("OpenRGB disconnected. Your unsaved map is retained.");});
         connect(&socket,&QLocalSocket::errorOccurred,this,[this](auto){if(error) error(socket.errorString());});
         connect(&socket,&QLocalSocket::readyRead,this,[this] {
             pending+=socket.readAll();
+            if(trace) trace(QString("reply-buffer %1 bytes").arg(pending.size()));
             if(pending.size()>2*1024*1024) {socket.abort();return;}
             while(pending.contains('\n')) {
                 auto at=pending.indexOf('\n');auto line=pending.left(at);pending.remove(0,at+1);
                 auto value=Json::parse(line.constData(),line.constData()+line.size(),nullptr,false);
                 if(!value.is_object() || !value.contains("id") || !value["id"].is_number_unsigned()) {socket.abort();return;}
                 auto found=callbacks.find(value["id"].get<uint64_t>());
+                if(trace) trace(QString("reply %1 matched=%2").arg(value["id"].get<uint64_t>()).arg(found!=callbacks.end()));
                 if(found==callbacks.end()) continue;
                 auto callback=std::move(found->second);callbacks.erase(found);callback(value);
             }
         });
     }
     void open(const QString& state) {
+        if(trace) trace("opening-endpoint-record");
         QFile file(state+"/office-control.json");
         if(!file.open(QIODevice::ReadOnly)) {if(error) error("Start the Office Ambience owner before opening the panel.");return;}
         auto bytes=file.readAll();auto info=Json::parse(bytes.constData(),bytes.constData()+bytes.size(),nullptr,false);
@@ -79,6 +84,7 @@ public:
     void send(Json request,std::function<void(const Json&)> callback) {
         if(!ready()) {if(error) error("OpenRGB is not connected. Reconnect before saving.");return;}
         request["id"]=++next;request["token"]=token;callbacks[next]=std::move(callback);
+        if(trace) trace(QString("request %1 %2").arg(next).arg(text(request.at("command"))));
         socket.write(QByteArray::fromStdString(request.dump())+'\n');
     }
 };
@@ -174,6 +180,7 @@ class Panel : public QMainWindow {
     Json settings,layout,lastSnapshot;
     uint64_t revision=0;
     bool dirty=false,updating=false,pending=false,exported=false;
+    QElapsedTimer clock;
     QStackedWidget* pages=new QStackedWidget;
     QLabel* connection=new QLabel("Connecting to OpenRGB…");
     QLabel* status=new QLabel;
@@ -194,7 +201,12 @@ class Panel : public QMainWindow {
 
     void changed() {if(updating) return;dirty=true;dirtyLabel->setText("Unsaved changes");save->setEnabled(client.ready());}
     QWidget* groupBox(const QString& title,QLayout* inside) {auto group=new QGroupBox(title);group->setLayout(inside);return group;}
-    void failure(const QString& message) {qWarning().noquote()<<message;connection->setText(message);connection->setStyleSheet("color:#ff9f1c");}
+    void trace(const QString& message) {
+        if(exportPath.isEmpty()) return;
+        QFile log(exportPath+".events.jsonl");
+        if(log.open(QIODevice::WriteOnly|QIODevice::Append)) log.write(QByteArray::fromStdString(Json{{"elapsed_ms",clock.elapsed()},{"event",message.toStdString()}}.dump())+'\n');
+    }
+    void failure(const QString& message) {trace("error: "+message);qWarning().noquote()<<message;connection->setText(message);connection->setStyleSheet("color:#ff9f1c");}
     void response(const Json& value,std::function<void(const Json&)> then={}) {
         pending=false;
         if(!value.value("ok",false)) {failure(text(value.at("error")));return;}
@@ -202,6 +214,7 @@ class Panel : public QMainWindow {
         if(then) then(value.at("result"));
     }
     void load(const Json& snapshot,bool force=false) {
+        trace("snapshot-accepted");
         lastSnapshot=snapshot;
         if(force || !revision || (!dirty && snapshot.at("revision").get<uint64_t>()!=revision)) {
             int selectedDevice=map->device,selectedGroup=map->group;
@@ -219,6 +232,7 @@ class Panel : public QMainWindow {
         map->colours=snapshot.at("colors");
         auto png=QByteArray::fromBase64(QByteArray::fromStdString(snapshot.value("preview_png",std::string())));
         if(!png.isEmpty()) map->preview.loadFromData(png,"PNG");map->update();
+        trace(QString("preview %1 bytes decoded=%2").arg(png.size()).arg(!map->preview.isNull()));
         if(!snapshot.value("preview_error",std::string()).empty()) {
             failure(text(snapshot.at("preview_error")));
             if(!exportPath.isEmpty()) QCoreApplication::exit(1);
@@ -311,6 +325,7 @@ class Panel : public QMainWindow {
     }
 public:
     Panel(QString stateDirectory,QString exportDirectory):state(std::move(stateDirectory)),exportPath(std::move(exportDirectory)) {
+        clock.start();client.trace=[this](QString event){trace(event);};trace("panel-constructing");
         setWindowTitle("Office Ambilight · OpenRGB");resize(1440,900);setMinimumSize(1000,700);
         setStyleSheet("QWidget{background:#040c14;color:#cdd6e0;font-family:'Segoe UI';font-size:14px;} QMainWindow{background:#020a10;} QGroupBox{background:#091722;border:1px solid #23424c;border-radius:12px;margin-top:16px;padding:16px;} QGroupBox::title{color:#14f5ff;subcontrol-origin:margin;left:16px;} QPushButton{background:#102732;border:1px solid #31535e;border-radius:6px;padding:10px;} QPushButton:hover{border-color:#14f5ff;} QPushButton:focus{border:2px solid #14f5ff;} QPushButton:disabled{color:#677783;} QLineEdit,QSpinBox,QDoubleSpinBox,QComboBox{background:#10202c;border:1px solid #31535e;border-radius:5px;padding:7px;} QTreeWidget,QPlainTextEdit{background:#020a10;border:1px solid #23424c;border-radius:6px;} QTreeWidget::item{padding:7px;} QTreeWidget::item:selected{background:#153d49;color:#14f5ff;} QLabel#title{font-size:24px;font-weight:600;color:#eef7ff;} QSplitter::handle{background:#18313c;} QCheckBox{spacing:8px;} QCheckBox::indicator{width:20px;height:20px;}");
         auto central=new QWidget;auto outer=new QHBoxLayout(central);outer->setContentsMargins(0,0,12,12);
