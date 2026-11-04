@@ -38,7 +38,8 @@ void mediaMattes() {
             auto r=map[i];Sample target{expected.left+r.left*(expected.right-expected.left),expected.top+r.top*(expected.bottom-expected.top),
                 expected.left+r.right*(expected.right-expected.left),expected.top+r.bottom*(expected.bottom-expected.top)};
             const float* a=reinterpret_cast<const float*>(&state.effectiveRegions[i]);const float* b=reinterpret_cast<const float*>(&target);
-            for(int j=0;j<4;++j) if(std::abs(a[j]-b[j])>tolerance) throw std::runtime_error("Media matte format was not mapped into its detected content rectangle: "+std::to_string(ratio));
+            for(int j=0;j<4;++j) if(std::abs(a[j]-b[j])>tolerance) throw std::runtime_error("Media matte format was not mapped into its detected content rectangle: "+std::to_string(ratio)+
+                " region "+std::to_string(i)+" coordinate "+std::to_string(j)+" actual "+std::to_string(a[j])+" expected "+std::to_string(b[j]));
         }
         if(std::all_of(state.colors.begin(),state.colors.end(),[](auto c){return !c;})) throw std::runtime_error("Detected media content did not reach actual LED output");
     }
