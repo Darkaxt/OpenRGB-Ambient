@@ -11,6 +11,9 @@ an optional native Qt panel; it neither captures nor submits RGB itself.
 ```
 
 Window-state events choose a maximized/fullscreen application on that monitor.
+An active screensaver takes priority, including a fullscreen LG window on the
+separate Windows `Screen-saver` input desktop. Desktop-switch events restore the
+normal policy when it exits; the owner never switches the user's desktop.
 Otherwise WGC captures the top-level shell host containing Wallpaper Engine's
 renderer and crops only that monitor on the GPU. The child renderer is not a
 capturable WGC target on the tested machine. There is no composed-desktop fallback
@@ -23,6 +26,15 @@ temporal smoothing and updates the six native controllers. While sources change
 or capture is unavailable, it retains the previous valid row. Black imagery is
 valid. The accepted approximate perimeter layout is 3/7/4/6, and bar order is left
 ten/right ten. Laptop lighting follows the LG in this release.
+
+Windows session lock, session display sleep, an inaccessible/secure input desktop,
+or LG disconnection forces all output black and releases capture. This takes
+priority over identify, calibration and the standby preview. Unlock/display wake
+recreates capture and waits for fresh imagery; saved mapping/brightness are not
+modified. A dimmed display is still awake. Session display notifications do not
+prove that an independently switched-off physical panel is asleep when Windows
+continues reporting it as connected and awake. Diagnostics expose `rest_reason`
+and `input_desktop` without capturing secure-desktop imagery.
 
 `office-ambience-status.json` is atomically updated in the private configuration
 directory. It contains source mode/HWND, input/output counters, processing time,
@@ -39,7 +51,8 @@ Use the delivered `office/Open-Office-Control.ps1` launcher. Control offers
 enable, output FPS, smoothing, spatial calibration and return to ambience.
 Control now groups sampling algorithms, fixed/adaptive depth, black-bar exclusion,
 spatial blur, saturation/brightness/luminance floor, time/EMA smoothing, scene-cut
-thresholds, presets and lock/display standby effects. These settings execute in
+thresholds, presets and manual standby-effect previews. Lock/display sleep always
+rests the lights regardless of that preview selection. These settings execute in
 the native sampler/output; they are not preview-only filters.
 Topology shows the actual downscaled LG capture, per-LED sampling rectangles,
 hardware LED names/indices, and current output colours. Select a device/zone or

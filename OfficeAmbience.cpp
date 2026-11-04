@@ -139,6 +139,36 @@ HWND maximizedApp(const Monitor& monitor) {
     return search.app;
 }
 
+// Enumerate the actual input desktop without switching the user's desktop or
+// moving the Qt event thread (which already owns windows) to another desktop.
+struct InputDesktop {
+    HDESK handle=OpenInputDesktop(0,FALSE,DESKTOP_READOBJECTS|DESKTOP_ENUMERATE);
+    std::wstring name;
+    InputDesktop() {
+        if(handle) {wchar_t value[256]{};DWORD needed{};
+            if(GetUserObjectInformationW(handle,UOI_NAME,value,sizeof(value),&needed)) name=value;}
+    }
+    ~InputDesktop() {if(handle) CloseDesktop(handle);}
+    bool secure() const {return !handle || (name!=L"Default" && name!=L"Screen-saver");}
+    bool screensaver() const {
+        BOOL running=FALSE;SystemParametersInfoW(SPI_GETSCREENSAVERRUNNING,0,&running,0);
+        return name==L"Screen-saver" || running;
+    }
+};
+HWND screensaverWindow(HDESK desktop,const Monitor& monitor) {
+    struct Search {const Monitor& monitor;HWND window{};} search{monitor};
+    EnumDesktopWindows(desktop,[](HWND window,LPARAM data)->BOOL {
+        auto& s=*reinterpret_cast<Search*>(data);RECT r{};
+        if(!IsWindowVisible(window) || IsIconic(window) || !GetWindowRect(window,&r)) return TRUE;
+        const auto& m=s.monitor.bounds;
+        if(r.left>m.left+2 || r.top>m.top+2 || r.right<m.right-2 || r.bottom<m.bottom-2) return TRUE;
+        auto cls=windowClass(window);
+        if(cls==L"Progman" || cls==L"WorkerW" || cls==L"Shell_TrayWnd" || cls==L"Shell_SecondaryTrayWnd") return TRUE;
+        s.window=window;return FALSE;
+    },reinterpret_cast<LPARAM>(&search));
+    return search.window;
+}
+
 struct Device {
     RGBControllerInterface* controller;
     size_t start,count;
@@ -506,6 +536,8 @@ struct OfficeAmbience::Impl {
     std::string identifyDevice;
     bool calibration=false;
     bool sessionLocked=false,displayOff=false,standbyPreview=false;
+    bool desktopUnavailable=false,monitorMissing=false;
+    std::string inputDesktop;
     Clock::time_point standbyBegan=Clock::now();
     HPOWERNOTIFY displayNotification{};
     static constexpr GUID sessionDisplayState{0x2b84c20e,0xad23,0x4ddf,{0x93,0xdb,0x05,0xff,0xbd,0x7e,0xfc,0xa5}};
@@ -514,7 +546,7 @@ struct OfficeAmbience::Impl {
     bool initialized=false;
     std::atomic_bool dirty{true};
     std::atomic_bool invalidate{false};
-    HWINEVENTHOOK systemHook{},objectHook{};
+    HWINEVENTHOOK systemHook{},objectHook{},desktopHook{};
     static inline std::map<HWINEVENTHOOK,Impl*> hooks;
     Apartment apartment;
     DpiContext dpi;
@@ -527,7 +559,7 @@ struct OfficeAmbience::Impl {
         }
         if(self && message==WM_WTSSESSION_CHANGE) {
             if(w==WTS_SESSION_LOCK) {self->sessionLocked=true;self->standbyBegan=Clock::now();}
-            if(w==WTS_SESSION_UNLOCK) self->sessionLocked=false;
+            if(w==WTS_SESSION_UNLOCK) {self->sessionLocked=false;self->desktopUnavailable=false;}
         }
         if(self && message==WM_POWERBROADCAST && w==PBT_POWERSETTINGCHANGE) {
             auto* setting=reinterpret_cast<POWERBROADCAST_SETTING*>(l);
@@ -657,9 +689,12 @@ struct OfficeAmbience::Impl {
     Json diskConfig;
     Json factoryLayout;
 
-    static void CALLBACK winEvent(HWINEVENTHOOK hook,DWORD,HWND,LONG object,LONG,DWORD,DWORD) {
-        if(object!=OBJID_WINDOW) return;
-        auto found=hooks.find(hook); if(found!=hooks.end()) found->second->dirty=true;
+    static void CALLBACK winEvent(HWINEVENTHOOK hook,DWORD event,HWND,LONG object,LONG,DWORD,DWORD) {
+        if(event!=EVENT_SYSTEM_DESKTOPSWITCH && object!=OBJID_WINDOW) return;
+        auto found=hooks.find(hook); if(found!=hooks.end()) {
+            found->second->dirty=true;
+            if(event==EVENT_SYSTEM_DESKTOPSWITCH) found->second->invalidate=true;
+        }
     }
     // Test construction skips only OS event/IPC activation, retaining the actual
     // inventory, map and output implementation used by the installed owner.
@@ -716,16 +751,26 @@ struct OfficeAmbience::Impl {
         try {
         systemHook=SetWinEventHook(EVENT_SYSTEM_FOREGROUND,EVENT_SYSTEM_MINIMIZEEND,nullptr,winEvent,0,0,WINEVENT_OUTOFCONTEXT);
         objectHook=SetWinEventHook(EVENT_OBJECT_CREATE,EVENT_OBJECT_LOCATIONCHANGE,nullptr,winEvent,0,0,WINEVENT_OUTOFCONTEXT);
-        if(!systemHook || !objectHook) {
+        desktopHook=SetWinEventHook(EVENT_SYSTEM_DESKTOPSWITCH,EVENT_SYSTEM_DESKTOPSWITCH,nullptr,winEvent,0,0,WINEVENT_OUTOFCONTEXT);
+        if(!systemHook || !objectHook || !desktopHook) {
             throw std::runtime_error("Window-state event registration failed");
         }
-        hooks[systemHook]=this; hooks[objectHook]=this;
+        hooks[systemHook]=this; hooks[objectHook]=this;hooks[desktopHook]=this;
         WNDCLASSW cls{};cls.lpfnWndProc=nativeEvent;cls.lpszClassName=L"OpenRGBOfficeCaptureEvents";cls.hInstance=GetModuleHandleW(nullptr);
         if(!RegisterClassW(&cls) && GetLastError()!=ERROR_CLASS_ALREADY_EXISTS) throw std::runtime_error("Cannot register capture lifecycle events");
         eventWindow=CreateWindowW(cls.lpszClassName,L"",0,0,0,0,0,nullptr,nullptr,cls.hInstance,this);
         if(!eventWindow || !WTSRegisterSessionNotification(eventWindow,NOTIFY_FOR_THIS_SESSION)) throw std::runtime_error("Cannot register session capture events");
         displayNotification=RegisterPowerSettingNotification(eventWindow,&sessionDisplayState,DEVICE_NOTIFY_WINDOW_HANDLE);
         if(!displayNotification) throw std::runtime_error("Cannot register session display power events");
+        // WTS notifications cover subsequent transitions; query the initial
+        // state too so launching while already locked never emits saved colours.
+        LPWSTR sessionInfo{};DWORD sessionBytes{};
+        if(WTSQuerySessionInformationW(WTS_CURRENT_SERVER_HANDLE,WTS_CURRENT_SESSION,WTSSessionInfoEx,&sessionInfo,&sessionBytes)) {
+            auto info=reinterpret_cast<WTSINFOEXW*>(sessionInfo);
+            if(sessionBytes>=sizeof(WTSINFOEXW) && info->Level==1)
+                sessionLocked=info->Data.WTSInfoExLevel1.SessionFlags==WTS_SESSIONSTATE_LOCK;
+            WTSFreeMemory(sessionInfo);
+        }
         control=std::make_unique<OfficeControlServer>(QString::fromStdWString(path.parent_path().wstring()),[this](const Json& request){return command(request);});
         QObject::connect(&output,&QTimer::timeout,[this] { tick(); });
         output.setTimerType(Qt::PreciseTimer); output.start(std::max(1,static_cast<int>(std::round(1000.0/fps))));
@@ -736,8 +781,8 @@ struct OfficeAmbience::Impl {
         if(displayNotification) {UnregisterPowerSettingNotification(displayNotification);displayNotification=nullptr;}
         if(eventWindow) {WTSUnRegisterSessionNotification(eventWindow);DestroyWindow(eventWindow);eventWindow=nullptr;}
         UnregisterClassW(L"OpenRGBOfficeCaptureEvents",GetModuleHandleW(nullptr));
-        for(auto hook:{systemHook,objectHook}) if(hook) { hooks.erase(hook); UnhookWinEvent(hook); }
-        systemHook=objectHook=nullptr;
+        for(auto hook:{systemHook,objectHook,desktopHook}) if(hook) { hooks.erase(hook); UnhookWinEvent(hook); }
+        systemHook=objectHook=desktopHook=nullptr;
     }
     ~Impl() {
         control.reset();
@@ -769,24 +814,36 @@ struct OfficeAmbience::Impl {
     }
     void chooseSource() {
         auto monitor=monitorByName(display);
-        HWND candidate=monitor.handle?maximizedApp(monitor):nullptr;
-        std::string selected=candidate?"app":"wallpaper";
-        if(!candidate && monitor.handle) candidate=wallpaperHost(monitor);
+        monitorMissing=!monitor.handle;
+        InputDesktop desktop;inputDesktop=to_string(desktop.name);desktopUnavailable=desktop.secure();
+        if(monitorMissing || desktopUnavailable) return;
+        bool saver=desktop.screensaver();
+        HWND candidate=saver?screensaverWindow(desktop.handle,monitor):maximizedApp(monitor);
+        std::string selected=saver?"screensaver":candidate?"app":"wallpaper";
+        if(!candidate && !saver) candidate=wallpaperHost(monitor);
         RECT bounds{}; if(candidate) GetWindowRect(candidate,&bounds);
         bool force=invalidate.exchange(false);
-        if(!force && candidate==source && capture && EqualRect(&bounds,&sourceBounds) && EqualRect(&monitor.bounds,&monitorBounds)) return;
+        if(!force && candidate==source && mode==selected && capture && EqualRect(&bounds,&sourceBounds) && EqualRect(&monitor.bounds,&monitorBounds)) return;
         capture.reset(); source=candidate; mode=candidate?selected:"waiting";
         ++sourceGeneration;
         sourceBounds=bounds; monitorBounds=monitor.bounds;
         switched=Clock::now();firstFrameDelayMs=0;inputFrames=deliveredFrames=0;
-        if(!candidate) error="No capturable wallpaper host or maximized LG application is available; holding the last valid colours";
+        if(!candidate) error=saver?"Waiting for the LG screensaver window; holding the last valid colours":"No capturable wallpaper host or maximized LG application is available; holding the last valid colours";
         if(candidate) try { capture=std::make_unique<Capture>(candidate,monitor.bounds,samples);std::lock_guard lock(capture->state->mutex);capture->state->configure(config); }
         catch(hresult_error const& failure) { error=to_string(failure.message()); }
         catch(std::exception const& failure) { error=failure.what(); }
         status();
     }
+    std::string restReason() const {
+        return sessionLocked?"session-locked":displayOff?"display-asleep":desktopUnavailable?"secure-desktop":monitorMissing?"monitor-disconnected":"";
+    }
     void tick() {
         if(!sessionLocked && !displayOff && dirty.exchange(false)) chooseSource();
+        const bool resting=!restReason().empty();
+        if(resting) {
+            capture.reset();source=nullptr;mode="resting";latest.clear();
+            inputFrames=deliveredFrames=0;received={};error.clear();
+        }
         auto now=Clock::now();
         if(capture) {
             auto state=capture->state;
@@ -806,7 +863,7 @@ struct OfficeAmbience::Impl {
             if(closed) { capture.reset(); source=nullptr; dirty=true; }
         }
         if(!identifyDevice.empty() && now>=identifyUntil) identifyDevice.clear();
-        bool standby=sessionLocked || displayOff || standbyPreview;
+        bool standby=resting || standbyPreview;
         if(!latest.empty() || calibration || !identifyDevice.empty() || standby) {
             auto submitBegan=Clock::now();
             double elapsedMs=std::chrono::duration<double,std::milli>(now-lastOutput).count();
@@ -827,11 +884,12 @@ struct OfficeAmbience::Impl {
                         target=ToRGBColor(static_cast<unsigned char>(x*255),static_cast<unsigned char>((1-y)*255),static_cast<unsigned char>(index%2?40:160));
                     } else if(!identifyDevice.empty()) target=device.key==identifyDevice || identifyDevice=="*"?ToRGBColor(255,255,255):0;
                     else if(!enabled) target=0;
+                    if(resting) target=0;
                     auto previous=device.colors[index];
                     double delta=std::max({std::abs(int(RGBGetRValue(target))-int(RGBGetRValue(previous))),std::abs(int(RGBGetGValue(target))-int(RGBGetGValue(previous))),std::abs(int(RGBGetBValue(target))-int(RGBGetBValue(previous)))});
                     SmoothingColorPostProcessor smooth{office::smoothingWeight(config,elapsedMs,delta)};
                     auto color=initialized?smooth.process(RGBGetRValue(target),RGBGetGValue(target),RGBGetBValue(target),previous):target;
-                    if(testing || !enabled) color=target;
+                    if(testing || !enabled || resting) color=target;
                     device.colors[index]=color;
                     if(device.controller) device.controller->SetColor(static_cast<unsigned>(index),color);
                 }
@@ -852,7 +910,7 @@ struct OfficeAmbience::Impl {
     }
     Json report() const {
         std::lock_guard lock(controllersMutex);
-        return {{"mode",mode},{"standby",sessionLocked || displayOff || standbyPreview},{"source_hwnd",reinterpret_cast<uintptr_t>(source)},
+        return {{"mode",mode},{"standby",!restReason().empty() || standbyPreview},{"rest_reason",restReason()},{"input_desktop",inputDesktop},{"source_hwnd",reinterpret_cast<uintptr_t>(source)},
             {"source_generation",sourceGeneration},
             {"devices",devices.size()},{"leds",samples.size()},{"output_frames",outputFrames},
             {"input_frames",inputFrames},{"gpu_processing_ms",processingMs},
