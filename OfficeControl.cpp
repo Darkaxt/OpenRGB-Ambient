@@ -33,6 +33,7 @@
 #include <QDebug>
 #include <QElapsedTimer>
 #include <QFontDatabase>
+#include <QButtonGroup>
 #include <functional>
 #include <map>
 #include <array>
@@ -192,6 +193,7 @@ class Panel : public QMainWindow {
     Json editorBaseline;
     uint64_t editorRevision=0;
     std::vector<QLabel*> onlineLabels;
+    std::vector<QPushButton*> identifyButtons;
     QElapsedTimer clock;
     QStackedWidget* pages=new QStackedWidget;
     QLabel* connection=new QLabel("Connecting to OpenRGB…");
@@ -245,6 +247,7 @@ class Panel : public QMainWindow {
         if(snapshot.contains("online")) for(size_t d=0;d<onlineLabels.size();++d) {
             bool online=snapshot.at("online").at(d);onlineLabels[d]->setText(online?"Connected":"Offline · map retained");
             onlineLabels[d]->setStyleSheet(online?"color:#22d3a5":"color:#ff9f1c");
+            identifyButtons[d]->setEnabled(online);
         }
         auto png=QByteArray::fromBase64(QByteArray::fromStdString(snapshot.value("preview_png",std::string())));
         if(!png.isEmpty()) map->preview.loadFromData(png,"PNG");map->update();
@@ -276,11 +279,12 @@ class Panel : public QMainWindow {
         tree->setColumnWidth(0,210);
     }
     void buildDevices() {
-        onlineLabels.clear();
-        while(auto* item=deviceList->takeAt(0)) {if(item->widget()) item->widget()->deleteLater();delete item;}
+        onlineLabels.clear();identifyButtons.clear();
+        while(auto* item=deviceList->takeAt(0)) {if(item->widget()) {item->widget()->hide();item->widget()->deleteLater();}delete item;}
         for(size_t d=0;d<layout.size();++d) {
             auto row=new QHBoxLayout;auto check=new QCheckBox(text(layout[d]["name"]));check->setChecked(layout[d]["enabled"]);
             auto identify=new QPushButton("Identify");identify->setAccessibleName("Identify "+text(layout[d]["name"]));
+            identifyButtons.push_back(identify);
             auto online=new QLabel;onlineLabels.push_back(online);
             row->addWidget(check,1);row->addWidget(online);row->addWidget(new QLabel(QString("%1 LEDs").arg(layout[d]["regions"].size())));row->addWidget(identify);
             connect(check,&QCheckBox::toggled,this,[this,d](bool on){layout[d]["enabled"]=on;changed();});
@@ -372,7 +376,15 @@ public:
         auto central=new QWidget;auto outer=new QHBoxLayout(central);outer->setContentsMargins(0,0,12,12);
         auto navigation=new QWidget;navigation->setFixedWidth(80);auto rail=new QVBoxLayout(navigation);rail->setContentsMargins(5,16,5,8);
         auto logo=new QLabel("RGB");logo->setAlignment(Qt::AlignCenter);logo->setStyleSheet("color:#14f5ff;font-weight:600;font-size:18px;padding:16px 0");rail->addWidget(logo);
-        int pageIndex=0;for(auto name:{"Control","Topology","Devices","Status"}) {auto button=new QPushButton(name);button->setStyleSheet("padding:8px 2px");button->setMinimumHeight(56);rail->addWidget(button);int page=pageIndex++;connect(button,&QPushButton::clicked,this,[this,page]{pages->setCurrentIndex(page);});}rail->addStretch();
+        auto navigationButtons=new QButtonGroup(this);navigationButtons->setExclusive(true);
+        int pageIndex=0;for(auto name:{"Control","Topology","Devices","Status"}) {
+            auto button=new QPushButton(name);button->setCheckable(true);
+            button->setStyleSheet("padding:8px 2px; QPushButton:checked{border:1px solid #14f5ff;color:#14f5ff;background:#153d49;}");
+            button->setMinimumHeight(56);rail->addWidget(button);int page=pageIndex++;navigationButtons->addButton(button,page);
+            connect(button,&QPushButton::clicked,this,[this,page]{pages->setCurrentIndex(page);});
+        }
+        connect(pages,&QStackedWidget::currentChanged,this,[navigationButtons](int page){if(auto button=navigationButtons->button(page)) button->setChecked(true);});
+        navigationButtons->button(0)->setChecked(true);rail->addStretch();
         auto main=new QVBoxLayout;main->setContentsMargins(16,16,0,0);auto title=new QLabel("Office Ambilight");title->setObjectName("title");main->addWidget(title);main->addWidget(connection);main->addWidget(pages,1);
         auto footer=new QHBoxLayout;footer->addWidget(dirtyLabel);footer->addStretch();auto reload=new QPushButton("Reload saved map");footer->addWidget(reload);footer->addWidget(save);main->addLayout(footer);
         outer->addWidget(navigation);outer->addLayout(main,1);setCentralWidget(central);
