@@ -5,14 +5,14 @@ Texture2D nextImage : register(t2);
 RWByteAddressBuffer difference : register(u0);
 groupshared uint tileChanged;
 [numthreads(16,16,1)]
-void compareCs(uint3 point:SV_DispatchThreadID,uint local:SV_GroupIndex) {
-    if(local==0) tileChanged=0;
+void compareCs(uint3 pixelId:SV_DispatchThreadID,uint groupIndex:SV_GroupIndex) {
+    if(groupIndex==0) tileChanged=0;
     GroupMemoryBarrierWithGroupSync();
     uint w,h;image.GetDimensions(w,h);
-    if(point.x<w && point.y<h && any(image.Load(int3(point.xy,0)).rgb!=nextImage.Load(int3(point.xy,0)).rgb))
+    if(pixelId.x<w && pixelId.y<h && any(image.Load(int3(pixelId.xy,0)).rgb!=nextImage.Load(int3(pixelId.xy,0)).rgb))
         InterlockedOr(tileChanged,1);
     GroupMemoryBarrierWithGroupSync();
-    if(local==0 && tileChanged) {uint previous;difference.InterlockedOr(0,1,previous);}
+    if(groupIndex==0 && tileChanged) {uint previous;difference.InterlockedOr(0,1,previous);}
 }
 SamplerState linearSampler : register(s0);
 cbuffer Regions : register(b0) { float4 region[384]; };
