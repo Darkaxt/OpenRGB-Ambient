@@ -523,6 +523,11 @@ struct OfficeAmbience::Impl {
             if(value.at("id")!=devices[i].key || !value.at("enabled").is_boolean()) throw std::runtime_error("Device identity changed");
             if(value.at("name")!=expected.at("name") || value.at("led_names")!=expected.at("led_names")) throw std::runtime_error("Physical LED metadata cannot be renamed by editing zone names");
             auto points=office::validateRegions(value.at("regions"),devices[i].count);
+            if(value.contains("rotation_quarters")) {
+                const auto& turns=value.at("rotation_quarters");
+                if(!turns.is_array() || turns.size()!=devices[i].count)throw std::runtime_error("Orientation must retain every physical LED");
+                for(const auto& turn:turns)if(!turn.is_number_integer() || turn<0 || turn>3)throw std::runtime_error("Orientation must be a quarter turn from 0 to 3");
+            }
             if(value.at("groups").size()!=expected.at("groups").size()) throw std::runtime_error("Physical zone grouping changed");
             for(size_t g=0;g<value.at("groups").size();++g) {
                 const auto& group=value["groups"][g];const auto& baseline=expected["groups"][g];

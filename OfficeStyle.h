@@ -14,12 +14,19 @@
 #include <QVBoxLayout>
 #include <QMouseEvent>
 #include <QPainterPath>
+#include <QVariantAnimation>
+#include <QShowEvent>
 #include <stdexcept>
 
 namespace officeui {
 inline const QColor accent("#14f5ff"), ink("#cdd6e0"), muted("#93a4b5");
 inline QFont body(int pixels=14,QFont::Weight weight=QFont::Medium) {QFont f("Office Body");f.setPixelSize(pixels);f.setWeight(weight);return f;}
 inline QFont display(int pixels=16) {QFont f("Office Display");f.setPixelSize(pixels);f.setWeight(QFont::Bold);f.setLetterSpacing(QFont::AbsoluteSpacing,2);return f;}
+class DotLabel : public QLabel {
+public:
+    DotLabel(const QString& text={},QWidget* parent=nullptr):QLabel(text,parent) {setContentsMargins(14,0,0,0);}
+    void paintEvent(QPaintEvent* e) override {QLabel::paintEvent(e);QPainter p(this);p.setRenderHint(QPainter::Antialiasing);p.setPen(Qt::NoPen);p.setBrush(palette().color(QPalette::WindowText));p.drawEllipse(QPointF(4,height()/2.),3,3);}
+};
 inline void loadFonts() {
     for(auto file:{"Orbitron-400.ttf","Orbitron-700.ttf","Rajdhani-400.ttf","Rajdhani-500.ttf","Rajdhani-600.ttf","Rajdhani-700.ttf","Symbols-Outline.ttf","Symbols-Active.ttf"})
         if(QFontDatabase::addApplicationFont(QString(":/office/")+file)<0) throw std::runtime_error("Could not load an embedded reference font");
@@ -49,7 +56,7 @@ public:
     QVBoxLayout* content;
     Card(const QString& title={},const QString& glyph={},QWidget* parent=nullptr):QFrame(parent) {
         setObjectName("referenceCard");setAttribute(Qt::WA_StyledBackground,false);
-        content=new QVBoxLayout(this);content->setContentsMargins(20,18,20,18);content->setSpacing(12);
+        content=new QVBoxLayout(this);content->setSizeConstraint(QLayout::SetMinimumSize);content->setContentsMargins(20,18,20,18);content->setSpacing(12);
         if(!title.isEmpty()) {
             auto row=new QHBoxLayout;row->setSpacing(10);
             if(!glyph.isEmpty()) {auto badge=new QLabel;badge->setPixmap(icon(glyph).pixmap(18,18));badge->setObjectName("sectionBadge");badge->setFixedSize(32,32);badge->setAlignment(Qt::AlignCenter);row->addWidget(badge);}
@@ -118,13 +125,28 @@ public:
     }
 };
 class Logo : public QWidget {
+    QVariantAnimation sonar;
+    bool emblem=false;
 public:
-    Logo(QWidget* p=nullptr):QWidget(p) {setFixedHeight(84);setAccessibleName("Office Ambilight");}
+    Logo(QWidget* p=nullptr,bool startup=false):QWidget(p),emblem(startup) {
+        setFixedHeight(startup?140:84);setAccessibleName("Office Ambilight");
+        sonar.setStartValue(0.);sonar.setEndValue(1.);sonar.setDuration(3000);sonar.setLoopCount(-1);
+        connect(&sonar,&QVariantAnimation::valueChanged,this,[this]{update();});
+    }
+    void showEvent(QShowEvent* e) override {QWidget::showEvent(e);if(!qApp->property("officeReducedMotion").toBool())sonar.start();}
+    void hideEvent(QHideEvent* e) override {sonar.stop();QWidget::hideEvent(e);}
+    void motionChanged() {sonar.stop();if(isVisible() && !qApp->property("officeReducedMotion").toBool())sonar.start();update();}
     void paintEvent(QPaintEvent*) override {
-        QPainter p(this);p.setRenderHint(QPainter::Antialiasing);QPointF c(width()/2.,41);
+        QPainter p(this);p.setRenderHint(QPainter::Antialiasing);QPointF c(width()/2.,emblem?height()/2.:41);
         QRadialGradient glow(c,42);glow.setColorAt(0,QColor(20,245,255,25));glow.setColorAt(1,Qt::transparent);p.setPen(Qt::NoPen);p.setBrush(glow);p.drawEllipse(c,43,43);
         p.setBrush(Qt::NoBrush);p.setPen(QPen(QColor(20,245,255,30),1));p.drawEllipse(c,39,39);p.setPen(QPen(QColor(20,245,255,80),1));p.drawEllipse(c,21,21);p.setPen(QPen(accent,1));p.drawEllipse(c,18,18);
-        symbol(p,QRectF(c.x()-10,c.y()-10,20,20),"settings_brightness",accent,false,18);
+        if(sonar.state()==QAbstractAnimation::Running){double phase=sonar.currentValue().toDouble();p.setPen(QPen(QColor(20,245,255,qRound(70*(1-phase))),1));p.drawEllipse(c,22+phase*18,22+phase*18);}
+        if(emblem) {
+            // Exact geometry from the recovered loading SVG, in its 56-unit viewBox.
+            p.save();p.translate(c-QPointF(28,28));p.setPen(Qt::NoPen);
+            for(int i=0;i<3;++i){p.setBrush(QColor(20,245,255,i==0?255:i==1?158:77));p.drawRoundedRect(QRectF(9,20+i*7,38,3.5),1.75,1.75);}
+            p.setBrush(Qt::NoBrush);p.setPen(QPen(QColor(20,245,255,217),1.5));p.drawEllipse(QPointF(28,13),5.5,5.5);p.setPen(Qt::NoPen);p.setBrush(QColor(20,245,255,140));p.drawEllipse(QPointF(28,13),2,2);p.restore();
+        } else symbol(p,QRectF(c.x()-10,c.y()-10,20,20),"settings_brightness",accent,false,18);
         p.setPen(QColor(255,255,255,13));p.drawLine(0,height()-1,width(),height()-1);
     }
 };

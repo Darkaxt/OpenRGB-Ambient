@@ -22,9 +22,24 @@ int main(int argc,char** argv) {
         mouse(toggle,QEvent::MouseButtonPress,{22,16},Qt::LeftButton,Qt::LeftButton);mouse(toggle,QEvent::MouseButtonRelease,{22,16},Qt::LeftButton,Qt::NoButton);require(toggle.isChecked(),"Reference switch lost its real checkbox behavior");
         officeui::Slider slider;slider.setRange(0,100);slider.resize(220,28);slider.show();app.processEvents();
         mouse(slider,QEvent::MouseButtonPress,{110,14},Qt::LeftButton,Qt::LeftButton);mouse(slider,QEvent::MouseButtonRelease,{110,14},Qt::LeftButton,Qt::NoButton);require(slider.value()==50,"Reference slider pointer does not match its painted track");
+        officeui::Card multiZone("Four-zone device");
+        for(int i=0;i<5;++i)multiZone.content->addWidget(new officeui::Switch("Zone"));
+        multiZone.resize(400,80);multiZone.show();app.processEvents();
+        require(multiZone.height()>=multiZone.minimumSizeHint().height(),"Multi-zone card shrank below its controls");
+        for(auto widget:multiZone.findChildren<QCheckBox*>())require(widget->height()>=widget->minimumSizeHint().height(),"Multi-zone controls overlap at the available height");
         Json baseline=Json::array({{{"regions",office::encode(std::vector<Region>{{.2f,.3f,.4f,.7f},{.4f,.3f,.6f,.7f}})},
             {"groups",Json::array({{{"first",0},{"count",2}}})}}});
         Json layout=baseline;MapCanvas canvas;canvas.layout=&layout;canvas.resize(900,500);canvas.show();app.processEvents();
+        auto originalBox=canvas.selectionGeometry();auto firstHandle=canvas.rotationHandle();
+        mouse(canvas,QEvent::MouseButtonPress,firstHandle,Qt::LeftButton,Qt::LeftButton);
+        mouse(canvas,QEvent::MouseButtonRelease,firstHandle,Qt::LeftButton,Qt::NoButton);
+        require(canvas.orientation()==1 && canvas.topNormal()==QPointF(1,0),"Floating rotate action did not follow the shape's own top");
+        require(canvas.rotationHandle().x()>canvas.selectionGeometry().center().x(),"Rotated shape handle stayed above the screen instead of its own top");
+        auto turned=layout;canvas.undo();require(layout==baseline,"Rotation undo did not restore exact geometry and metadata");canvas.redo();require(layout==turned,"Rotation redo lost orientation");
+        for(int i=0;i<3;++i)canvas.rotateSelection();require(canvas.orientation()==0,"Four turns did not restore top orientation");
+        for(size_t i=0;i<2;++i)for(size_t c=0;c<4;++c)require(std::abs(layout[0]["regions"][i][c].get<float>()-baseline[0]["regions"][i][c].get<float>())<.00001,"Four turns changed region identity or geometry");
+        layout=Json::parse(turned.dump());require(canvas.orientation()==1,"Saved orientation metadata did not survive reload");
+        layout=baseline;canvas.resetHistory();
         unsigned edits=0;canvas.edited=[&]{++edits;};
         for(unsigned handle:{1u,2u,4u,8u,5u,6u,9u,10u}) {
             layout=baseline;canvas.resetHistory();auto b=canvas.selectionGeometry();

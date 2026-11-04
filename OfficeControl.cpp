@@ -170,6 +170,7 @@ class MapCanvas : public QWidget {
         if(std::abs(point.y()-b.top())<=8) h|=4;else if(std::abs(point.y()-b.bottom())<=8) h|=8;return h;
     }
     void pointerCursor(QPointF p) {
+        if(QLineF(p,rotationHandle()).length()<=16){setCursor(Qt::PointingHandCursor);setToolTip("Rotate 90° clockwise · attached to the shape's Top edge");return;}setToolTip({});
         auto h=hitHandle(p);setCursor(h==5 || h==10?Qt::SizeFDiagCursor:h==6 || h==9?Qt::SizeBDiagCursor:h&3?Qt::SizeHorCursor:h&12?Qt::SizeVerCursor:screenBounds().contains(p)?Qt::SizeAllCursor:Qt::ArrowCursor);
     }
     QRectF imageRect() const {
@@ -190,9 +191,26 @@ public:
     float grid=.01f,blur=0;
     std::function<void()> edited;
     std::function<void(int,int)> picked;
+    std::function<void(QString)> error;
     MapCanvas() {setMinimumSize(280,210);setMouseTracking(true);setFocusPolicy(Qt::StrongFocus);setAccessibleName("Actual LG sampling map");}
     QRectF imageGeometry() const {return imageRect();}
     QRectF selectionGeometry() const {return screenBounds();}
+    int orientation() const {auto ids=indices();if(ids.empty())return 0;const auto& d=layout->at(device);if(!d.contains("rotation_quarters"))return 0;return d["rotation_quarters"].at(ids.front()).get<int>();}
+    QPointF topNormal() const {switch(orientation()){case 1:return {1,0};case 2:return {0,1};case 3:return {-1,0};default:return {0,-1};}}
+    QPointF topAnchor() const {auto b=screenBounds();auto n=topNormal();return b.center()+QPointF(n.x()*b.width()/2,n.y()*b.height()/2);}
+    QPointF rotationHandle() const {auto p=topAnchor()+topNormal()*38;return {std::clamp(p.x(),17.,width()-17.),std::clamp(p.y(),17.,height()-17.)};}
+    void rotateSelection() {
+        auto values=selected();if(values.empty())return;auto from=office::bounds(values);
+        float w=(from.bottom-from.top)*2160.f/5120.f,h=(from.right-from.left)*5120.f/2160.f;
+        if(w>1 || h>1)throw std::runtime_error("Resize this zone before rotating it inside the LG image.");
+        float cx=(from.left+from.right)/2,cy=(from.top+from.bottom)/2;
+        float x=std::clamp(cx-w/2,0.f,1-w),y=std::clamp(cy-h/2,0.f,1-h);
+        auto next=office::transform(values,from,{x,y,x+w,y+h},90,false);
+        checkpoint();auto& turns=(*layout)[device]["rotation_quarters"];
+        if(turns.is_null())turns=std::vector<int>((*layout)[device]["regions"].size(),0);
+        for(auto id:indices())turns[id]=(turns[id].get<int>()+1)%4;
+        setSelected(next);
+    }
     void resetHistory() {undoHistory.clear();redoHistory.clear();}
     void replaceLayout(const Json& value) {checkpoint();*layout=value;update();if(edited) edited();}
     void undo() {if(undoHistory.empty()) return;redoHistory.push_back(*layout);*layout=undoHistory.back();undoHistory.pop_back();update();if(edited) edited();}
@@ -249,7 +267,14 @@ public:
             if(blur>0) {p.setPen(QPen(QColor(255,210,110,190),1,Qt::DashLine));p.drawRect(b.adjusted(-blur*image.height(),-blur*image.height(),blur*image.height(),blur*image.height()).intersected(image));}
             p.setPen(QPen(QColor("#00141c"),1));p.setBrush(cyan);
             for(auto x:{b.left(),b.center().x(),b.right()}) for(auto y:{b.top(),b.center().y(),b.bottom()})
-                if(x!=b.center().x() || y!=b.center().y()) p.drawRect(QRectF(x-4,y-4,8,8));
+                if(x!=b.center().x() || y!=b.center().y()) p.drawEllipse(QPointF(x,y),4,4);
+            auto anchor=topAnchor(),normal=topNormal(),rotate=rotationHandle();
+            QPointF tangent(-normal.y(),normal.x());
+            p.setPen(QPen(cyan,3));p.drawLine(anchor-tangent*std::min(18.,b.width()/3),anchor+tangent*std::min(18.,b.width()/3));
+            p.setPen(QPen(cyan,1));p.drawLine(anchor+normal*5,rotate-normal*15);
+            p.setBrush(QColor("#061b27"));p.setPen(QPen(cyan,1.5));p.drawEllipse(rotate,15,15);
+            p.save();p.translate(rotate);p.rotate(orientation()*90);officeui::symbol(p,{-11,-11,22,22},"restart_alt",cyan,false,21);p.restore();
+            p.setPen(Qt::white);p.setBrush(QColor("#061b27"));auto topText=QRectF(anchor+normal*14-QPointF(16,8),QSizeF(32,16));p.drawRoundedRect(topText,3,3);p.drawText(topText,Qt::AlignCenter,"TOP");
             auto values=selected();if(values.size()>1) {
                 auto point=[&](Region r){return QPointF(image.left()+(r.left+r.right)*.5*image.width(),image.top()+(r.top+r.bottom)*.5*image.height());};
                 auto a=point(values.front()),z=point(values.back());QLineF line(a,z);
@@ -257,12 +282,14 @@ public:
                 auto key=(*layout)[device].value("id",std::string());bool linear=key!="Keychron" && !(key=="Legion" && group==0);
                 if(linear && line.length()>16) {double angle=std::atan2(z.y()-a.y(),z.x()-a.x());QPointF u(std::cos(angle),std::sin(angle)),v(-u.y(),u.x());z=a+u*std::min(36.,line.length());p.setPen(QPen(Qt::white,1.5));p.drawLine(a,z);p.drawLine(z,z-u*7+v*4);p.drawLine(z,z-u*7-v*4);}
                 p.setPen(Qt::white);p.drawText(QRectF(a.x()+5,a.y()-20,80,18),Qt::AlignLeft,QString("LED %1").arg(selectedIds.front()));
+                auto end=point(values.back());p.setBrush(QColor("#ffd26e"));p.setPen(QPen(QColor("#061b27"),1));p.drawEllipse(a,4,4);p.drawEllipse(end,4,4);p.setPen(Qt::white);p.drawText(QRectF(end.x()+5,end.y()+3,90,18),Qt::AlignLeft,QString("LAST %1").arg(selectedIds.back()));
             }
         }
     }
     void mousePressEvent(QMouseEvent* e) override {
         if(e->button()==Qt::MiddleButton) {panning=true;panStart=e->position()-pan;setCursor(Qt::ClosedHandCursor);return;}
         if(e->button()!=Qt::LeftButton || !layout || layout->empty()) return;
+        if(QLineF(e->position(),rotationHandle()).length()<=16){setFocus();try{rotateSelection();}catch(const std::exception& ex){if(error)error(ex.what());}e->accept();return;}
         auto area=imageRect();auto point=e->position();handle=hitHandle(point);if(!handle && !area.contains(point)) return;
         if(showCenter && QLineF(point,QPointF(area.left()+effectCenter.x()*area.width(),area.top()+effectCenter.y()*area.height())).length()<=10) {draggingCenter=true;setCursor(Qt::CrossCursor);return;}
         QPointF normalized((point.x()-area.left())/area.width(),(point.y()-area.top())/area.height());
@@ -339,8 +366,8 @@ class Panel : public QMainWindow {
     std::vector<QPushButton*> identifyButtons;
     QElapsedTimer clock;
     QStackedWidget* pages=new QStackedWidget;
-    QLabel* connection=new QLabel("Connecting to OpenRGB…");
-    QLabel* status=new QLabel;
+    QLabel* connection=new officeui::DotLabel("Connecting to OpenRGB…");
+    QLabel* status=new officeui::DotLabel;
     QLabel* dirtyLabel=new QLabel;
     QPushButton* save=new QPushButton("Save changes");
     QCheckBox* enabled=new officeui::Switch("Enable");
@@ -358,7 +385,7 @@ class Panel : public QMainWindow {
     QLabel* mappedDevices=new QLabel;
     QLabel* mapStatus=new QLabel;
     QLabel* testState=new QLabel;
-    QLabel* connectionDetail=new QLabel;
+    QLabel* connectionDetail=new officeui::DotLabel;
     QLabel* zoneSummary=new QLabel;
     QLabel* loadingMessage=new QLabel("Connecting to the local lighting owner…");
     QWidget* footer=nullptr;
@@ -466,7 +493,7 @@ class Panel : public QMainWindow {
     void response(const Json& value,std::function<void(const Json&)> then={}) {
         pending=false;
         if(!value.value("ok",false)) {failure(text(value.at("error")));return;}
-        connection->setText("● Connected");connection->setStyleSheet("color:#22d3a5");connectionDetail->setText("● Connected");connection->setToolTip("Native OpenRGB owner");shellPages->setCurrentIndex(0);
+        connection->setText("Connected");connection->setStyleSheet("color:#22d3a5");connectionDetail->setText("Connected");connection->setToolTip("Native OpenRGB owner");shellPages->setCurrentIndex(0);
         if(then) then(value.at("result"));
     }
     void load(const Json& snapshot,bool force=false) {
@@ -488,7 +515,7 @@ class Panel : public QMainWindow {
         deviceSummary->setText(QString("%1 / %2 devices online  ·  %3 mapped LEDs").arg(s.at("online_devices").get<int>()).arg(layout.size()).arg(s.at("leds").get<int>()));
         inventorySummary->setText(deviceSummary->text());
         totalDevices->setText(QString::number(layout.size()));mappedDevices->setText(QString::number(layout.size()));
-        status->setText(s.value("standby",false)?"● STANDBY":settings.value("enabled",true)?"● ACTIVE":"● INACTIVE");
+        status->setText(s.value("standby",false)?"STANDBY":settings.value("enabled",true)?"ACTIVE":"INACTIVE");
         status->setToolTip(text(s.at("mode"))+" · "+text(s.at("error")));liveRate->setText(QString("%1 fps output").arg(s.at("output_fps").get<double>(),0,'f',1));
         testState->setText(snapshot.at("test_mode")=="none"?"Ambience running":"Temporary test active");
         diagnostics->setPlainText(QString::fromStdString(s.dump(2)));
@@ -539,7 +566,7 @@ class Panel : public QMainWindow {
         for(size_t d=0;d<layout.size();++d) {
             auto key=layout[d].value("id",std::string());bool matrix=key=="Keychron" || key=="Legion";
             QString glyph=matrix?"keyboard":key=="Logitech"?"fiber_manual_record":"linear_scale";
-            auto card=new officeui::Card;auto row=new QHBoxLayout;row->setSpacing(12);
+            auto card=new officeui::Card;card->setSizePolicy(QSizePolicy::Preferred,QSizePolicy::Minimum);auto row=new QHBoxLayout;row->setSpacing(12);
             auto mark=new QLabel;mark->setPixmap(officeui::icon(glyph,matrix?QColor("#a78bfa"):officeui::accent).pixmap(26,26));mark->setFixedSize(38,38);row->addWidget(mark);
             auto detail=new QVBoxLayout;auto name=officeui::label(text(layout[d]["name"]));name->setFont(officeui::body(16,QFont::Bold));detail->addWidget(name);
             auto metadata=officeui::label(QString("%1  ·  %2 LEDs  ·  %3 zones").arg(matrix?"MATRIX":"LINEAR").arg(layout[d]["regions"].size()).arg(layout[d]["groups"].size()),"hint");detail->addWidget(metadata);row->addLayout(detail,1);
@@ -589,18 +616,10 @@ class Panel : public QMainWindow {
     }
     void applyGeometry(int rotation=0,bool reverse=false) {
         if(updating || layout.empty()) return;
+        if(rotation){try{map->rotateSelection();}catch(const std::exception& e){failure(e.what());}return;}
         auto values=map->selected();auto from=office::bounds(values);
         Region to{static_cast<float>(geometry[0]->value()/100),static_cast<float>(geometry[1]->value()/100),0,0};
         to.right=to.left+static_cast<float>(geometry[2]->value()/100);to.bottom=to.top+static_cast<float>(geometry[3]->value()/100);
-        if(rotation%180) {
-            // Quarter-turn about the centre, preserving dimensions in monitor
-            // pixels rather than stretching a horizontal strip inside its old box.
-            float cx=(from.left+from.right)/2,cy=(from.top+from.bottom)/2;
-            float width=(from.bottom-from.top)*2160.f/5120.f,height=(from.right-from.left)*5120.f/2160.f;
-            if(width>1 || height>1) {failure("Resize this zone before rotating it inside the LG image.");return;}
-            float left=std::clamp(cx-width/2,0.f,1-width),top=std::clamp(cy-height/2,0.f,1-height);
-            to={left,top,left+width,top+height};
-        }
         try {map->setSelected(office::transform(values,from,to,rotation,reverse),true);}
         catch(std::exception const& e) {failure(e.what());showGeometry();}
     }
@@ -635,6 +654,15 @@ class Panel : public QMainWindow {
                     {"settings_column_width",settingsColumn->width()},{"map_save_visible",footer->isVisible()}});
             }
         }
+        // Supplemental presentations are local UI fixtures, never saved to the
+        // hardware owner. They expose states absent from the live gallery.
+        resize(1440,900);result["states"]=Json::array();
+        auto renderState=[this,&result](const char* name){QApplication::sendPostedEvents();centralWidget()->layout()->activate();auto file=exportPath+"/state-"+name+".png";if(!grab().save(file))throw std::runtime_error("Could not export UI state");result["states"].push_back({{"name",name},{"path",file.toStdString()},{"fixture",true}});};
+        pages->setCurrentIndex(0);auto disclosure=findChild<QPushButton*>("advancedOptions");disclosure->setChecked(true);renderState("advanced");disclosure->setChecked(false);
+        auto retainedLayout=layout,retainedSnapshot=lastSnapshot;
+        lastSnapshot["online"]=std::vector<bool>(layout.size(),false);buildDevices();pages->setCurrentIndex(2);renderState("offline");
+        layout=Json::array();buildDevices();renderState("empty");layout=retainedLayout;lastSnapshot=retainedSnapshot;buildDevices();
+        shellPages->setCurrentIndex(1);loadingMessage->setText("The local lighting owner is unavailable. Reconnect, or continue to Settings to inspect its connection.");renderState("connection-unavailable");shellPages->setCurrentIndex(0);
         QFile output(exportPath+"/panel-export.json");output.open(QIODevice::WriteOnly);output.write(QByteArray::fromStdString(result.dump(2)));
         QCoreApplication::quit();
     }
@@ -663,8 +691,9 @@ public:
         clock.start();client.trace=[this](QString event){trace(event);};trace("panel-constructing");
         QFile preferences(state+"/office-panel.json");if(preferences.open(QIODevice::ReadOnly)) {auto data=preferences.readAll();panelOptions=Json::parse(data.constData(),data.constData()+data.size(),nullptr,false);}if(!panelOptions.is_object()) panelOptions=Json::object();
         setWindowTitle("Office Ambilight · OpenRGB");resize(1440,900);setMinimumSize(1000,700);
-        buildViews();
+        qApp->setProperty("officeReducedMotion",panelOptions.value("reduced_motion",false));buildViews();
         map->edited=[this]{changed();showGeometry();if(!layout.empty()) {bool prior=updating;updating=true;zoneName->setText(text(layout[map->device]["groups"][map->group]["name"]));updating=prior;}};
+        map->error=[this](QString message){failure(message);};
         map->picked=[this](int d,int index){for(size_t g=0;g<layout[d]["groups"].size();++g) {const auto& group=layout[d]["groups"][g];if(index>=group["first"].get<int>() && index<group["first"].get<int>()+group["count"].get<int>()) {select(d,g);tree->setCurrentItem(tree->topLevelItem(d)->child(g));break;}}};
         client.error=[this](QString message){pending=false;save->setEnabled(false);failure(message);if(!this->exportPath.isEmpty()) QCoreApplication::exit(2);};client.connected=[this]{poll();};
         connect(&refresh,&QTimer::timeout,this,[this]{poll();});refresh.start(1000);
