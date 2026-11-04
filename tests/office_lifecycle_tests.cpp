@@ -46,7 +46,7 @@ struct OfficeLifecycleTest {
         HDESK desktop=CreateDesktopW(name.c_str(),nullptr,nullptr,0,GENERIC_ALL,nullptr);
         require(desktop!=nullptr,"Create isolated screensaver test desktop");
         std::mutex mutex;std::condition_variable condition;bool ready=false,finish=false;
-        HWND saver{},floating{};DWORD failure{};
+        HWND saver{},floating{},manualSaver{};DWORD failure{};bool manualRecognized=false,ordinaryRejected=false;
         std::thread thread([&] {
             auto previous=GetThreadDesktop(GetCurrentThreadId());
             if(!SetThreadDesktop(desktop)) failure=GetLastError();
@@ -54,6 +54,12 @@ struct OfficeLifecycleTest {
                 auto r=monitor.bounds;
                 saver=CreateWindowW(L"STATIC",L"Test screensaver",WS_POPUP|WS_VISIBLE,r.left,r.top,r.right-r.left,r.bottom-r.top,nullptr,nullptr,GetModuleHandleW(nullptr),nullptr);
                 floating=CreateWindowW(L"STATIC",L"Floating",WS_POPUP|WS_VISIBLE,r.left,r.top,50,50,nullptr,nullptr,GetModuleHandleW(nullptr),nullptr);
+                ordinaryRejected=screensaverWindow(desktop,monitor,false)==nullptr;
+                WNDCLASSW cls{};cls.lpfnWndProc=DefWindowProcW;cls.lpszClassName=L"WindowsScreenSaverClass";cls.hInstance=GetModuleHandleW(nullptr);
+                RegisterClassW(&cls);
+                manualSaver=CreateWindowExW(WS_EX_TOOLWINDOW,cls.lpszClassName,L"Manual saver",WS_POPUP|WS_VISIBLE,r.left,r.top,r.right-r.left,r.bottom-r.top,nullptr,nullptr,cls.hInstance,nullptr);
+                manualRecognized=manualSaver && screensaverWindow(desktop,monitor,false)==manualSaver;
+                if(manualSaver) {DestroyWindow(manualSaver);manualSaver=nullptr;}UnregisterClassW(cls.lpszClassName,cls.hInstance);
             }
             {std::unique_lock lock(mutex);ready=true;condition.notify_all();condition.wait(lock,[&]{return finish;});}
             if(floating) DestroyWindow(floating);if(saver) DestroyWindow(saver);
@@ -64,6 +70,7 @@ struct OfficeLifecycleTest {
         {std::lock_guard lock(mutex);finish=true;condition.notify_all();}
         thread.join();CloseDesktop(desktop);
         require(passed,"Screensaver enumeration selects full LG window from another desktop, excluding floating windows");
+        require(ordinaryRejected && manualRecognized,"Recognize manually launched screensaver tool window without SPI flag; reject an ordinary fullscreen app");
     }
     static void run() {
         screensaverSelection();

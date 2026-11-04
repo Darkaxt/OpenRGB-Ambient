@@ -14,6 +14,9 @@ Window-state events choose a maximized/fullscreen application on that monitor.
 An active screensaver takes priority, including a fullscreen LG window on the
 separate Windows `Screen-saver` input desktop. Desktop-switch events restore the
 normal policy when it exits; the owner never switches the user's desktop.
+Manually started fullscreen `.scr`/`WindowsScreenSaverClass` windows are recognized
+on the ordinary desktop too, including the Ctrl+Alt+L Wallpaper Engine saver
+whose manual launch leaves Windows' screensaver-running flag unset.
 Otherwise WGC captures the top-level shell host containing Wallpaper Engine's
 renderer and crops only that monitor on the GPU. The child renderer is not a
 capturable WGC target on the tested machine. There is no composed-desktop fallback

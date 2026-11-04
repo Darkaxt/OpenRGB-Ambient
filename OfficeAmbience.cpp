@@ -155,8 +155,8 @@ struct InputDesktop {
         return name==L"Screen-saver" || running;
     }
 };
-HWND screensaverWindow(HDESK desktop,const Monitor& monitor) {
-    struct Search {const Monitor& monitor;HWND window{};} search{monitor};
+HWND screensaverWindow(HDESK desktop,const Monitor& monitor,bool saverDesktop=true) {
+    struct Search {const Monitor& monitor;bool saverDesktop;HWND window{};} search{monitor,saverDesktop};
     EnumDesktopWindows(desktop,[](HWND window,LPARAM data)->BOOL {
         auto& s=*reinterpret_cast<Search*>(data);RECT r{};
         if(!IsWindowVisible(window) || IsIconic(window) || !GetWindowRect(window,&r)) return TRUE;
@@ -164,6 +164,13 @@ HWND screensaverWindow(HDESK desktop,const Monitor& monitor) {
         if(r.left>m.left+2 || r.top>m.top+2 || r.right<m.right-2 || r.bottom<m.bottom-2) return TRUE;
         auto cls=windowClass(window);
         if(cls==L"Progman" || cls==L"WorkerW" || cls==L"Shell_TrayWnd" || cls==L"Shell_SecondaryTrayWnd") return TRUE;
+        // Manually launching a .scr does not set SPI_GETSCREENSAVERRUNNING or
+        // switch desktops. The installed Wallpaper Engine saver also uses a
+        // tool window spanning both screens, which ordinary app selection skips.
+        if(!s.saverDesktop && cls!=L"WindowsScreenSaverClass") {
+            auto name=ownerName(window);std::transform(name.begin(),name.end(),name.begin(),towlower);
+            if(!name.ends_with(L".scr")) return TRUE;
+        }
         s.window=window;return FALSE;
     },reinterpret_cast<LPARAM>(&search));
     return search.window;
@@ -818,7 +825,9 @@ struct OfficeAmbience::Impl {
         InputDesktop desktop;inputDesktop=to_string(desktop.name);desktopUnavailable=desktop.secure();
         if(monitorMissing || desktopUnavailable) return;
         bool saver=desktop.screensaver();
-        HWND candidate=saver?screensaverWindow(desktop.handle,monitor):maximizedApp(monitor);
+        HWND candidate=screensaverWindow(desktop.handle,monitor,saver);
+        saver=saver || candidate!=nullptr;
+        if(!saver) candidate=maximizedApp(monitor);
         std::string selected=saver?"screensaver":candidate?"app":"wallpaper";
         if(!candidate && !saver) candidate=wallpaperHost(monitor);
         RECT bounds{}; if(candidate) GetWindowRect(candidate,&bounds);
