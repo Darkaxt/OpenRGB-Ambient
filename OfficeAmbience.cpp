@@ -20,6 +20,7 @@
 #include "ColorPostProcessor.h"
 #include "OfficeControlServer.h"
 #include <OpenRGBPluginInterface.h>
+#include <ResourceManagerCallback.h>
 #include <QTimer>
 #include <QSaveFile>
 #include <QFile>
@@ -136,7 +137,20 @@ struct Device {
     size_t start,count;
     std::vector<RGBColor> colors;
     std::string key;
+    std::string name;
+    Json ledNames;
 };
+std::string deviceKey(RGBControllerInterface* controller) {
+    auto name=controller->GetName();
+    return name.find("H6609")!=std::string::npos?"H6609":name.find("H8048")!=std::string::npos?"H8048":
+        name.find("Q6 HE ISO")!=std::string::npos?"Keychron":name.find("Lenovo Legion")!=std::string::npos?"Legion":
+        controller->GetDescription().find("NL72S2")!=std::string::npos?"Secretlab":
+        (name.find("G502 X PLUS")!=std::string::npos || name.find("G502 X Plus")!=std::string::npos)?"Logitech":"";
+}
+unsigned expectedCount(const std::string& key) {
+    static const std::map<std::string,unsigned> counts={{"H6609",20},{"H8048",20},{"Keychron",109},{"Legion",109},{"Secretlab",48},{"Logitech",8}};
+    auto found=counts.find(key);if(found==counts.end()) throw std::runtime_error("Unknown office controller identity");return found->second;
+}
 Sample around(float x,float y,float width,float height) {
     return {std::clamp(x-width/2,0.f,1.f),std::clamp(y-height/2,0.f,1.f),
             std::clamp(x+width/2,0.f,1.f),std::clamp(y+height/2,0.f,1.f)};
@@ -397,6 +411,8 @@ struct OfficeAmbience::Impl {
     std::filesystem::path configPath,statusPath;
     std::wstring display;
     std::vector<Device> devices;
+    mutable std::mutex controllersMutex;
+    std::string controllerError;
     std::vector<Sample> samples;
     std::vector<RGBColor> latest;
     std::unique_ptr<Capture> capture;
@@ -447,10 +463,9 @@ struct OfficeAmbience::Impl {
             if(d.key=="H6609") {group("left","Monitor - Left",0,3);group("top","Monitor - Top",3,7);group("right","Monitor - Right",10,4);group("bottom","Monitor - Bottom",14,6);}
             else if(d.key=="H8048") {group("left","Tower - Left",0,10);group("right","Tower - Right",10,10);}
             else if(d.key=="Legion") {group("keys","Laptop keyboard",0,102);group("front","Laptop front",102,6);group("aux","Laptop auxiliary",108,1);}
-            else group("all",d.controller->GetName().c_str(),0,static_cast<unsigned>(d.count));
-            auto names=Json::array();for(unsigned i=0;i<d.count;++i) names.push_back(d.controller->GetLEDName(i));
-            result.push_back({{"id",d.key},{"name",d.controller->GetName()},{"regions",office::encode(regions)},
-                              {"led_names",names},{"groups",groups},{"enabled",true}});
+            else group("all",d.name.c_str(),0,static_cast<unsigned>(d.count));
+            result.push_back({{"id",d.key},{"name",d.name},{"regions",office::encode(regions)},
+                              {"led_names",d.ledNames},{"groups",groups},{"enabled",true}});
         }
         return result;
     }
@@ -485,7 +500,8 @@ struct OfficeAmbience::Impl {
         for(auto& d:devices) {auto row=Json::array();for(auto c:d.colors) row.push_back(Json::array({RGBGetRValue(c),RGBGetGValue(c),RGBGetBValue(c)}));colours.push_back(row);}
         std::string image,previewError;
         if(capture) {std::lock_guard lock(capture->state->mutex);image=capture->state->previewPng.toBase64().toStdString();previewError=capture->state->previewError;}
-        return {{"revision",revision},{"settings",{{"monitor",config.at("monitor")},{"enabled",config.at("enabled")},
+        auto online=Json::array();{std::lock_guard lock(controllersMutex);for(auto& d:devices) online.push_back(d.controller!=nullptr);}
+        return {{"revision",revision},{"online",online},{"settings",{{"monitor",config.at("monitor")},{"enabled",config.at("enabled")},
                 {"fps",config.at("fps")},{"smoothing_ms",config.at("smoothing_ms")}}},
                 {"layout",layout},{"status",report()},{"colors",colours},{"preview_png",image},{"preview_error",previewError},
                 {"test_mode",calibration?"calibration":identifyDevice.empty()?"none":"identify"}};
@@ -536,7 +552,9 @@ struct OfficeAmbience::Impl {
         if(object!=OBJID_WINDOW) return;
         auto found=hooks.find(hook); if(found!=hooks.end()) found->second->dirty=true;
     }
-    Impl(OpenRGBPluginAPIInterface* api,const std::filesystem::path& path):api(api),configPath(path) {
+    // Test construction skips only OS event/IPC activation, retaining the actual
+    // inventory, map and output implementation used by the installed owner.
+    Impl(OpenRGBPluginAPIInterface* api,const std::filesystem::path& path,bool activate=true):api(api),configPath(path) {
         std::ifstream file(path);file>>config;diskConfig=config;
         if(!config.contains("monitor")) config["monitor"]="\\\\.\\DISPLAY2";
         if(!config.contains("fps")) config["fps"]=15;
@@ -549,21 +567,36 @@ struct OfficeAmbience::Impl {
         if(fps<1 || fps>30) throw std::runtime_error("Office FPS must be in 1..30");
         smoothingMs=config.value("smoothing_ms",140.0);
         statusPath=path.parent_path()/"office-ambience-status.json";
-        std::set<std::string> names;
+        std::map<std::string,RGBControllerInterface*> live;
+        std::vector<std::string> order;
         for(auto* controller:api->GetRGBControllers()) {
-            auto points=deviceSamples(controller);
-            if(!names.insert(controller->GetName()).second) throw std::runtime_error("Duplicate office controller");
-            auto name=controller->GetName();
-            std::string key=name.find("H6609")!=std::string::npos?"H6609":name.find("H8048")!=std::string::npos?"H8048":
-                name.find("Q6 HE ISO")!=std::string::npos?"Keychron":name.find("Lenovo Legion")!=std::string::npos?"Legion":
-                controller->GetDescription().find("NL72S2")!=std::string::npos?"Secretlab":"Logitech";
-            devices.push_back({controller,samples.size(),points.size(),std::vector<RGBColor>(points.size()),key});
+            auto key=deviceKey(controller);
+            if(key.empty() || !live.emplace(key,controller).second || controller->GetLEDCount()!=expectedCount(key)) throw std::runtime_error("Unexpected or duplicate office controller");
+            order.push_back(key);
+        }
+        if(config.contains("layout")) {
+            order.clear();for(auto& d:config["layout"]) order.push_back(d.at("id").get<std::string>());
+        }
+        std::set<std::string> identities;
+        for(size_t i=0;i<order.size();++i) {
+            const auto& key=order[i];auto count=expectedCount(key);
+            if(!identities.insert(key).second) throw std::runtime_error("Duplicate persisted controller identity");
+            auto* controller=live.contains(key)?live.at(key):nullptr;
+            std::vector<Sample> points;Json names=Json::array();std::string name;
+            if(controller) {points=deviceSamples(controller);name=controller->GetName();for(unsigned led=0;led<count;++led) names.push_back(controller->GetLEDName(led));}
+            else {
+                const auto& saved=config.at("layout").at(i);
+                points=office::validateRegions(saved.at("regions"),count);name=saved.at("name").get<std::string>();names=saved.at("led_names");
+                if(!names.is_array() || names.size()!=count || !std::all_of(names.begin(),names.end(),[](const auto& n){return n.is_string();})) throw std::runtime_error("Persisted LED metadata is invalid");
+            }
+            devices.push_back({controller,samples.size(),points.size(),std::vector<RGBColor>(points.size()),key,name,names});
             samples.insert(samples.end(),points.begin(),points.end());
         }
         if(devices.size()!=6 || samples.size()!=314) throw std::runtime_error("Office ambience requires the verified six-device 314-LED inventory");
         layout=defaultLayout();
         if(config.contains("layout")) {samples=validatedLayout(config["layout"]);layout=config["layout"];}
-        for(auto& device:devices) device.controller->SetCustomMode();
+        for(auto& device:devices) if(device.controller) device.controller->SetCustomMode();
+        if(!activate) return;
         try {
         systemHook=SetWinEventHook(EVENT_SYSTEM_FOREGROUND,EVENT_SYSTEM_MINIMIZEEND,nullptr,winEvent,0,0,WINEVENT_OUTOFCONTEXT);
         objectHook=SetWinEventHook(EVENT_OBJECT_CREATE,EVENT_OBJECT_LOCATIONCHANGE,nullptr,winEvent,0,0,WINEVENT_OUTOFCONTEXT);
@@ -593,6 +626,27 @@ struct OfficeAmbience::Impl {
         releaseEvents();
         capture.reset();
         mode="stopped"; status();
+    }
+    void resourcesUpdated(unsigned reason) {
+        // OpenRGB emits these synchronously while removed controllers are still
+        // alive. This barrier must not be queued onto the Qt output thread:
+        // removal may free a controller immediately after this callback returns.
+        std::lock_guard lock(controllersMutex);
+        if(reason==RESOURCEMANAGER_UPDATE_REASON_DETECTION_STARTED) {
+            for(auto& d:devices) d.controller=nullptr;
+            return;
+        }
+        if(reason!=RESOURCEMANAGER_UPDATE_REASON_DEVICE_LIST_UPDATED && reason!=RESOURCEMANAGER_UPDATE_REASON_DETECTION_COMPLETE) return;
+        auto current=api->GetRGBControllers();controllerError.clear();
+        for(auto& d:devices) {
+            RGBControllerInterface* found=nullptr;
+            for(auto* c:current) if(deviceKey(c)==d.key) {
+                if(found || c->GetLEDCount()!=d.count) {controllerError="Reconnected controller identity/count differs: "+d.key;found=nullptr;break;}
+                found=c;
+            }
+            if(found && found!=d.controller) found->SetCustomMode();
+            d.controller=found;
+        }
     }
     void chooseSource() {
         auto monitor=monitorByName(display);
@@ -637,6 +691,7 @@ struct OfficeAmbience::Impl {
             float weight=smoothingMs<=0?1.f:static_cast<float>(1-std::exp(-std::chrono::duration<double,std::milli>(now-lastOutput).count()/smoothingMs));
             SmoothingColorPostProcessor smooth{weight};
             size_t deviceIndex=0;
+            {std::lock_guard lock(controllersMutex);
             for(auto& device:devices) {
                 for(size_t index=0;index<device.count;++index) {
                     bool enabled=config["enabled"].get<bool>() && layout[deviceIndex]["enabled"].get<bool>();
@@ -650,11 +705,11 @@ struct OfficeAmbience::Impl {
                     auto color=initialized?smooth.process(RGBGetRValue(target),RGBGetGValue(target),RGBGetBValue(target),device.colors[index]):target;
                     if(testing || !enabled) color=target;
                     device.colors[index]=color;
-                    device.controller->SetColor(static_cast<unsigned>(index),color);
+                    if(device.controller) device.controller->SetColor(static_cast<unsigned>(index),color);
                 }
-                device.controller->UpdateLEDs();
+                if(device.controller) device.controller->UpdateLEDs();
                 ++deviceIndex;
-            }
+            }}
             initialized=true; ++outputFrames;
             auto submitted=Clock::now();
             submitMs=std::chrono::duration<double,std::milli>(submitted-submitBegan).count();
@@ -668,6 +723,7 @@ struct OfficeAmbience::Impl {
         if(now-lastStatus>=std::chrono::seconds(1)) status();
     }
     Json report() const {
+        std::lock_guard lock(controllersMutex);
         return {{"mode",mode},{"source_hwnd",reinterpret_cast<uintptr_t>(source)},
             {"source_generation",sourceGeneration},
             {"devices",devices.size()},{"leds",samples.size()},{"output_frames",outputFrames},
@@ -675,6 +731,7 @@ struct OfficeAmbience::Impl {
             {"callback_to_native_submit_ms",callbackToSubmitMs},{"native_submit_ms",submitMs},
             {"frame_age_ms",received==Clock::time_point{}?Json(nullptr):Json(std::chrono::duration<double,std::milli>(Clock::now()-received).count())},
             {"output_fps",measuredFps},
+            {"online_devices",std::count_if(devices.begin(),devices.end(),[](const auto& d){return d.controller!=nullptr;})},{"controller_error",controllerError},
             {"first_frame_after_switch_ms",firstFrameDelayMs},{"has_valid_frame",initialized},
             {"error",error},{"updated_utc",QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs).toStdString()}};
     }
@@ -692,3 +749,4 @@ struct OfficeAmbience::Impl {
 OfficeAmbience::OfficeAmbience(OpenRGBPluginAPIInterface* api,const std::filesystem::path& config):impl(std::make_unique<Impl>(api,config)) {}
 OfficeAmbience::~OfficeAmbience()=default;
 void OfficeAmbience::stop() { impl.reset(); }
+void OfficeAmbience::resourcesUpdated(unsigned reason) {if(impl) impl->resourcesUpdated(reason);}

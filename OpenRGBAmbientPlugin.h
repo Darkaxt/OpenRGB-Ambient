@@ -5,6 +5,7 @@
 #include <thread>
 #include <vector>
 #include <array>
+#include <mutex>
 
 #include <d3d11.h>
 
@@ -78,6 +79,7 @@ private:
     OpenRGBPluginAPIInterface *pluginApiPtr = nullptr;
     Settings *settings = nullptr;
     std::unique_ptr<OfficeAmbience> office;
+    std::mutex officeMutex;
 
     HWND endSessionWindow = nullptr;
 

@@ -180,6 +180,11 @@ class Panel : public QMainWindow {
     Json settings,layout,lastSnapshot;
     uint64_t revision=0;
     bool dirty=false,updating=false,pending=false,exported=false;
+    bool exerciseEditor=false;
+    int editorPhase=0;
+    Json editorBaseline;
+    uint64_t editorRevision=0;
+    std::vector<QLabel*> onlineLabels;
     QElapsedTimer clock;
     QStackedWidget* pages=new QStackedWidget;
     QLabel* connection=new QLabel("Connecting to OpenRGB…");
@@ -230,6 +235,10 @@ class Panel : public QMainWindow {
             .arg(s.at("callback_to_native_submit_ms").get<double>(),0,'f',2).arg(text(s.at("error"))));
         diagnostics->setPlainText(QString::fromStdString(s.dump(2)));
         map->colours=snapshot.at("colors");
+        if(snapshot.contains("online")) for(size_t d=0;d<onlineLabels.size();++d) {
+            bool online=snapshot.at("online").at(d);onlineLabels[d]->setText(online?"Connected":"Offline · map retained");
+            onlineLabels[d]->setStyleSheet(online?"color:#22d3a5":"color:#ff9f1c");
+        }
         auto png=QByteArray::fromBase64(QByteArray::fromStdString(snapshot.value("preview_png",std::string())));
         if(!png.isEmpty()) map->preview.loadFromData(png,"PNG");map->update();
         trace(QString("preview %1 bytes decoded=%2").arg(png.size()).arg(!map->preview.isNull()));
@@ -238,7 +247,9 @@ class Panel : public QMainWindow {
             if(!exportPath.isEmpty()) QCoreApplication::exit(1);
         }
         stopTest->setEnabled(snapshot.at("test_mode")!="none");
-        if(!exportPath.isEmpty() && !exported && !map->preview.isNull()) exportViews();
+        if(!exportPath.isEmpty() && !exported && !map->preview.isNull()) {
+            if(exerciseEditor && editorPhase<3) exerciseSave();else exportViews();
+        }
     }
     void poll() {
         if(pending || !client.ready()) return;
@@ -258,11 +269,13 @@ class Panel : public QMainWindow {
         tree->setColumnWidth(0,210);
     }
     void buildDevices() {
+        onlineLabels.clear();
         while(auto* item=deviceList->takeAt(0)) {if(item->widget()) item->widget()->deleteLater();delete item;}
         for(size_t d=0;d<layout.size();++d) {
             auto row=new QHBoxLayout;auto check=new QCheckBox(text(layout[d]["name"]));check->setChecked(layout[d]["enabled"]);
             auto identify=new QPushButton("Identify");identify->setAccessibleName("Identify "+text(layout[d]["name"]));
-            row->addWidget(check,1);row->addWidget(new QLabel(QString("%1 LEDs").arg(layout[d]["regions"].size())));row->addWidget(identify);
+            auto online=new QLabel;onlineLabels.push_back(online);
+            row->addWidget(check,1);row->addWidget(online);row->addWidget(new QLabel(QString("%1 LEDs").arg(layout[d]["regions"].size())));row->addWidget(identify);
             connect(check,&QCheckBox::toggled,this,[this,d](bool on){layout[d]["enabled"]=on;changed();});
             connect(identify,&QPushButton::clicked,this,[this,d]{action({{"command","identify"},{"device",layout[d]["id"]}});});
             deviceList->addWidget(groupBox(text(layout[d]["id"]),row));
@@ -308,7 +321,7 @@ class Panel : public QMainWindow {
     }
     void exportViews() {
         exported=true;QDir().mkpath(exportPath);
-        Json result={{"native_revision",revision},{"devices",layout.size()},{"views",Json::array()}};
+        Json result={{"native_revision",revision},{"devices",layout.size()},{"editor_save_roundtrip",exerciseEditor && editorPhase==3},{"views",Json::array()}};
         for(auto size:{QSize(1000,700),QSize(1440,900),QSize(1920,1080)}) {
             resize(size);
             int device=size.width()==1000?0:size.width()==1440?2:1;
@@ -323,8 +336,28 @@ class Panel : public QMainWindow {
         QFile output(exportPath+"/panel-export.json");output.open(QIODevice::WriteOnly);output.write(QByteArray::fromStdString(result.dump(2)));
         QCoreApplication::quit();
     }
+    void exerciseSave() {
+        // Explicit diagnostic mode drives the same widgets/signals as the user.
+        // It restores the complete map before any rendered acceptance evidence.
+        if(editorPhase==0) {
+            editorBaseline=layout;editorRevision=revision;select(0,0);
+            zoneName->setText(text(editorBaseline[0]["groups"][0]["name"])+" [UI save check]");
+            QMetaObject::invokeMethod(zoneName,"editingFinished",Qt::DirectConnection);
+            if(!dirty || !save->isEnabled()) throw std::runtime_error("Editor widget did not produce a saveable draft");
+            editorPhase=1;save->click();
+        } else if(editorPhase==1) {
+            if(revision!=editorRevision+1 || layout[0]["groups"][0]["name"]==editorBaseline[0]["groups"][0]["name"])
+                throw std::runtime_error("Real Save button did not persist the edited name");
+            select(0,0);zoneName->setText(text(editorBaseline[0]["groups"][0]["name"]));
+            QMetaObject::invokeMethod(zoneName,"editingFinished",Qt::DirectConnection);
+            editorPhase=2;save->click();
+        } else {
+            if(layout!=editorBaseline || revision!=editorRevision+2) throw std::runtime_error("Editor failed to restore the original map");
+            editorPhase=3;trace("editor-save-roundtrip-restored");exportViews();
+        }
+    }
 public:
-    Panel(QString stateDirectory,QString exportDirectory):state(std::move(stateDirectory)),exportPath(std::move(exportDirectory)) {
+    Panel(QString stateDirectory,QString exportDirectory,bool exercise=false):state(std::move(stateDirectory)),exportPath(std::move(exportDirectory)),exerciseEditor(exercise) {
         clock.start();client.trace=[this](QString event){trace(event);};trace("panel-constructing");
         setWindowTitle("Office Ambilight · OpenRGB");resize(1440,900);setMinimumSize(1000,700);
         setStyleSheet("QWidget{background:#040c14;color:#cdd6e0;font-family:'Segoe UI';font-size:14px;} QMainWindow{background:#020a10;} QGroupBox{background:#091722;border:1px solid #23424c;border-radius:12px;margin-top:16px;padding:16px;} QGroupBox::title{color:#14f5ff;subcontrol-origin:margin;left:16px;} QPushButton{background:#102732;border:1px solid #31535e;border-radius:6px;padding:10px;} QPushButton:hover{border-color:#14f5ff;} QPushButton:focus{border:2px solid #14f5ff;} QPushButton:disabled{color:#677783;} QLineEdit,QSpinBox,QDoubleSpinBox,QComboBox{background:#10202c;border:1px solid #31535e;border-radius:5px;padding:7px;} QTreeWidget,QPlainTextEdit{background:#020a10;border:1px solid #23424c;border-radius:6px;} QTreeWidget::item{padding:7px;} QTreeWidget::item:selected{background:#153d49;color:#14f5ff;} QLabel#title{font-size:24px;font-weight:600;color:#eef7ff;} QSplitter::handle{background:#18313c;} QCheckBox{spacing:8px;} QCheckBox::indicator{width:20px;height:20px;}");
@@ -382,6 +415,8 @@ public:
 int main(int argc,char** argv) {
     QApplication app(argc,argv);app.setApplicationName("Office Ambilight");
     QCommandLineParser parser;parser.addHelpOption();parser.addOption({"state","Private OpenRGB state directory","directory","D:/Tools/OpenRGB/state-integration"});
-    parser.addOption({"export-views","Export all real connected panel views, then exit","directory"});parser.process(app);
-    Panel panel(parser.value("state"),parser.value("export-views"));panel.show();return app.exec();
+    parser.addOption({"export-views","Export all real connected panel views, then exit","directory"});
+    parser.addOption({"exercise-editor","Verify the real Save button and restore the original map before exporting"});parser.process(app);
+    if(parser.isSet("exercise-editor") && !parser.isSet("export-views")) parser.showHelp(1);
+    Panel panel(parser.value("state"),parser.value("export-views"),parser.isSet("exercise-editor"));panel.show();return app.exec();
 }

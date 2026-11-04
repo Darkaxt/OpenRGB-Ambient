@@ -44,7 +44,7 @@ namespace
 
 OpenRGBAmbientPlugin::~OpenRGBAmbientPlugin()
 {
-    office.reset();
+    {std::lock_guard lock(officeMutex);office.reset();}
     destroyEndSessionWindow();
     stopCapture();
 }
@@ -83,6 +83,7 @@ unsigned int OpenRGBAmbientPlugin::GetPluginAPIVersion()
 
 void OpenRGBAmbientPlugin::Load(OpenRGBPluginAPIInterface* plugin_api_ptr)
 {
+    std::lock_guard lock(officeMutex);
     pluginApiPtr = plugin_api_ptr;
     auto officeConfig=pluginApiPtr->GetConfigurationDirectory()/"office-ambience.json";
     if(std::filesystem::exists(officeConfig)) {
@@ -141,7 +142,7 @@ QMenu *OpenRGBAmbientPlugin::GetTrayMenu()
 
 void OpenRGBAmbientPlugin::Unload()
 {
-    if(office) { office.reset(); return; }
+    {std::lock_guard lock(officeMutex);if(office) { office.reset(); return; }}
     for (const auto controller : pluginApiPtr->GetRGBControllers())
         controller->UnregisterUpdateCallback(settings);
 
@@ -151,7 +152,8 @@ void OpenRGBAmbientPlugin::Unload()
 
 void OpenRGBAmbientPlugin::ResourceManagerUpdated(unsigned update_reason)
 {
-    if(office || !settings) return;
+    {std::lock_guard lock(officeMutex);if(office) {office->resourcesUpdated(update_reason);return;}}
+    if(!settings) return;
     if (update_reason == RESOURCEMANAGER_UPDATE_REASON_DEVICE_LIST_UPDATED || update_reason ==
         RESOURCEMANAGER_UPDATE_REASON_DETECTION_COMPLETE)
     {

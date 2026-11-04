@@ -11,7 +11,9 @@ public:
     OfficeAmbience(OpenRGBPluginAPIInterface* api, const std::filesystem::path& config);
     ~OfficeAmbience() override;
     void stop();
+    void resourcesUpdated(unsigned reason);
 private:
+    friend struct OfficeLifecycleTest;
     struct Impl;
     std::unique_ptr<Impl> impl;
 };
