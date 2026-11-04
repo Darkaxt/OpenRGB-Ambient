@@ -38,8 +38,25 @@ void mediaMattes() {
             auto r=map[i];Sample target{expected.left+r.left*(expected.right-expected.left),expected.top+r.top*(expected.bottom-expected.top),
                 expected.left+r.right*(expected.right-expected.left),expected.top+r.bottom*(expected.bottom-expected.top)};
             const float* a=reinterpret_cast<const float*>(&state.effectiveRegions[i]);const float* b=reinterpret_cast<const float*>(&target);
-            for(int j=0;j<4;++j) if(std::abs(a[j]-b[j])>tolerance) throw std::runtime_error("Media matte format was not mapped into its detected content rectangle: "+std::to_string(ratio)+
-                " region "+std::to_string(i)+" coordinate "+std::to_string(j)+" actual "+std::to_string(a[j])+" expected "+std::to_string(b[j]));
+            for(int j=0;j<4;++j) if(std::abs(a[j]-b[j])>tolerance) {
+                // Diagnose the production GPU boundary, not a CPU reimplementation.
+                std::string diagnostic=std::string(shader)+R"(
+float4 diagnose(Vertex input):SV_TARGET {
+ uint w,h;image.GetDimensions(w,h);float edge=(1-(4./3)/((float)w/h))*.5;
+ return float4((float)w/h,borders.x,mediaEdge(edge,1./w,true,false),mediaEdge(1-edge,1./w,true,true));
+})";
+                com_ptr<ID3DBlob> code,errors;
+                check_hresult(D3DCompile(diagnostic.data(),diagnostic.size(),nullptr,nullptr,nullptr,"diagnose","ps_5_0",D3DCOMPILE_OPTIMIZATION_LEVEL3,0,code.put(),errors.put()));
+                state.contentPixel=nullptr;check_hresult(state.device->CreatePixelShader(code->GetBufferPointer(),code->GetBufferSize(),nullptr,state.contentPixel.put()));
+                state.sampleRetained();D3D11_TEXTURE2D_DESC d{};state.contentTexture->GetDesc(&d);
+                d.Usage=D3D11_USAGE_STAGING;d.BindFlags=0;d.CPUAccessFlags=D3D11_CPU_ACCESS_READ;
+                com_ptr<ID3D11Texture2D> read;check_hresult(state.device->CreateTexture2D(&d,nullptr,read.put()));
+                state.context->CopyResource(read.get(),state.contentTexture.get());D3D11_MAPPED_SUBRESOURCE m{};
+                check_hresult(state.context->Map(read.get(),0,D3D11_MAP_READ,0,&m));auto v=static_cast<float*>(m.pData);
+                std::string detail=" aspect="+std::to_string(v[0])+" enabled="+std::to_string(v[1])+" left="+std::to_string(v[2])+" right="+std::to_string(v[3]);
+                state.context->Unmap(read.get(),0);
+                throw std::runtime_error("Media matte format was not mapped: "+std::to_string(ratio)+" coordinate "+std::to_string(j)+detail);
+            }
         }
         if(std::all_of(state.colors.begin(),state.colors.end(),[](auto c){return !c;})) throw std::runtime_error("Detected media content did not reach actual LED output");
     }
