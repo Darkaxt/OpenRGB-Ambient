@@ -16,6 +16,7 @@
 
 #include "ImageProcessor.h"
 #include "Settings.h"
+#include "OfficeAmbience.h"
 
 class LedUpdateEvent;
 
@@ -76,6 +77,7 @@ private:
 
     OpenRGBPluginAPIInterface *pluginApiPtr = nullptr;
     Settings *settings = nullptr;
+    std::unique_ptr<OfficeAmbience> office;
 
     HWND endSessionWindow = nullptr;
 

@@ -1,0 +1,32 @@
+name: Office ambience Windows
+on:
+  push:
+    branches: [codex/office-ambience]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: Darkaxt/OpenRGB
+          ref: 82f150a276a800c01b6a5aed1de71520b9d138b4
+          path: native-openrgb
+      - uses: jurplel/install-qt-action@b344308e4483fc892e0d27b3cd1b173ebdd95f06
+        id: qt
+        with:
+          version: '6.8.3'
+          arch: win64_msvc2022_64
+          modules: qt5compat
+          cache: true
+      - name: Compile plugin and test production GPU sampler
+        shell: pwsh
+        run: ./scripts/Build-Office.ps1 -QtRoot '${{ steps.qt.outputs.qt-root-dir }}' -OpenRGBSource '${{ github.workspace }}/native-openrgb' -BuildRoot D:/office-ambient-build
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: office-ambient-candidate
+          path: D:/office-ambient-build/Release
+          if-no-files-found: error

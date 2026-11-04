@@ -44,6 +44,7 @@ namespace
 
 OpenRGBAmbientPlugin::~OpenRGBAmbientPlugin()
 {
+    office.reset();
     destroyEndSessionWindow();
     stopCapture();
 }
@@ -83,6 +84,11 @@ unsigned int OpenRGBAmbientPlugin::GetPluginAPIVersion()
 void OpenRGBAmbientPlugin::Load(OpenRGBPluginAPIInterface* plugin_api_ptr)
 {
     pluginApiPtr = plugin_api_ptr;
+    auto officeConfig=pluginApiPtr->GetConfigurationDirectory()/"office-ambience.json";
+    if(std::filesystem::exists(officeConfig)) {
+        office=std::make_unique<OfficeAmbience>(pluginApiPtr,officeConfig);
+        return;
+    }
 
     settings = new Settings{QString::fromStdString((pluginApiPtr->GetConfigurationDirectory() / "OpenRGBAmbientPlugin.ini").string()), this};
     debounceTimer = new QTimer{this};
@@ -111,6 +117,7 @@ void OpenRGBAmbientPlugin::Load(OpenRGBPluginAPIInterface* plugin_api_ptr)
 
 QWidget *OpenRGBAmbientPlugin::GetWidget()
 {
+    if(office) return nullptr;
     const auto ui = new SettingsTab{pluginApiPtr, *settings};
     connect(this, &OpenRGBAmbientPlugin::previewUpdated, ui, &SettingsTab::updatePreview);
     connect(this, &OpenRGBAmbientPlugin::ledColorsUpdated, ui, &SettingsTab::updateLedColors);
@@ -134,6 +141,7 @@ QMenu *OpenRGBAmbientPlugin::GetTrayMenu()
 
 void OpenRGBAmbientPlugin::Unload()
 {
+    if(office) { office.reset(); return; }
     for (const auto controller : pluginApiPtr->GetRGBControllers())
         controller->UnregisterUpdateCallback(settings);
 
@@ -143,6 +151,7 @@ void OpenRGBAmbientPlugin::Unload()
 
 void OpenRGBAmbientPlugin::ResourceManagerUpdated(unsigned update_reason)
 {
+    if(office || !settings) return;
     if (update_reason == RESOURCEMANAGER_UPDATE_REASON_DEVICE_LIST_UPDATED || update_reason ==
         RESOURCEMANAGER_UPDATE_REASON_DETECTION_COMPLETE)
     {

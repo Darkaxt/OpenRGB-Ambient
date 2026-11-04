@@ -1,5 +1,6 @@
 cmake_minimum_required(VERSION 3.19)
 project(openrgb_ambient VERSION 4.0.3)
+set(OPENRGB_SOURCE_DIR "${CMAKE_SOURCE_DIR}/OpenRGB" CACHE PATH "Matching OpenRGB source headers")
 
 set(CMAKE_INCLUDE_CURRENT_DIR ON)
 set(CMAKE_CXX_STANDARD 20)
@@ -26,7 +27,7 @@ set(PLUGIN_VERSION ${PROJECT_VERSION})
 
 # OpenRGB skips any plugin whose JSON API version differs from the headers it was built against, so take
 # the value straight from those headers instead of duplicating it.
-file(STRINGS OpenRGB/OpenRGBPluginInterface.h PLUGIN_API_VERSION_DEFINE
+file(STRINGS "${OPENRGB_SOURCE_DIR}/OpenRGBPluginInterface.h" PLUGIN_API_VERSION_DEFINE
         REGEX "^#define[ \t]+OPENRGB_PLUGIN_API_VERSION[ \t]+[0-9]+")
 if (NOT PLUGIN_API_VERSION_DEFINE)
     message(FATAL_ERROR "Could not read OPENRGB_PLUGIN_API_VERSION from OpenRGB/OpenRGBPluginInterface.h")
@@ -38,10 +39,11 @@ configure_file(OpenRGBAmbientPlugin.json.in OpenRGBAmbientPlugin.json @ONLY)
 configure_file(PluginMetadata.h.in PluginMetadata.h @ONLY)
 
 add_library(${PROJECT_NAME} SHARED OpenRGBAmbientPlugin.h OpenRGBAmbientPlugin.cpp DeviceList.cpp DeviceList.h Settings.cpp Settings.h ScreenCapture.cpp ScreenCapture.h Limiter.cpp Limiter.h ReleaseWrapper.h SettingsTab.cpp SettingsTab.h RegionsWidget.cpp RegionsWidget.h RegionWidget.cpp RegionWidget.h LedUpdateEvent.h LedUpdateEvent.cpp ImageProcessor.h LedRange.h ZoneMapping.h SdrHorizontalRegionProcessor.h SdrVerticalRegionProcessor.h ColorConversion.h HdrVerticalRegionProcessor.h HdrHorizontalRegionProcessor.h ColorPostProcessor.h LedPreviewWidget.h LedPreviewWidget.cpp)
+target_sources(${PROJECT_NAME} PRIVATE OfficeAmbience.cpp OfficeAmbience.h)
 
 if (WIN32)
     add_definitions(-D_MBCS -DWIN32 -D_CRT_SECURE_NO_WARNINGS -D_WINSOCKAPI_ -D_WINSOCK_DEPRECATED_NO_WARNINGS -DWIN32_LEAN_AND_MEAN -DNOMINMAX)
-    target_include_directories(${PROJECT_NAME} PUBLIC OpenRGB/dependencies/hidapi-win/include)
+    target_include_directories(${PROJECT_NAME} PUBLIC "${OPENRGB_SOURCE_DIR}/dependencies/hidapi-win/include")
 endif()
 
 if (NOT CMAKE_PREFIX_PATH)
@@ -56,10 +58,21 @@ endif()
 find_package(Qt${QT_VERSION} COMPONENTS ${REQUIRED_LIBS} REQUIRED)
 find_package(DirectX11)
 target_link_libraries(${PROJECT_NAME} ${REQUIRED_LIBS_QUALIFIED})
-target_include_directories(${PROJECT_NAME} PRIVATE OpenRGB OpenRGB/i2c_smbus OpenRGB/net_port OpenRGB/RGBController OpenRGB/dependencies/json OpenRGB/qt OpenRGB/hidapi_wrapper OpenRGB/SPDAccessor OpenRGB/serial_port)
+foreach(directory "" i2c_smbus net_port RGBController dependencies/json qt hidapi_wrapper SPDAccessor serial_port)
+    target_include_directories(${PROJECT_NAME} PRIVATE "${OPENRGB_SOURCE_DIR}/${directory}")
+endforeach()
+
+include(CTest)
+if(BUILD_TESTING AND WIN32)
+    add_executable(office_capture_tests tests/office_capture_tests.cpp)
+    target_include_directories(office_capture_tests PRIVATE $<TARGET_PROPERTY:${PROJECT_NAME},INCLUDE_DIRECTORIES>)
+    target_compile_definitions(office_capture_tests PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX _WINSOCKAPI_)
+    target_link_libraries(office_capture_tests PRIVATE ${REQUIRED_LIBS_QUALIFIED} d3d11 dxgi windowsapp d3dcompiler dwmapi)
+    add_test(NAME office_capture COMMAND office_capture_tests)
+endif()
 
 if (WIN32)
-    target_link_libraries(${PROJECT_NAME} ${DirectX11_LIBRARY})
+    target_link_libraries(${PROJECT_NAME} ${DirectX11_LIBRARY} windowsapp d3dcompiler dwmapi)
 
     set(DEBUG_SUFFIX)
     if (CMAKE_BUILD_TYPE MATCHES "Debug")
