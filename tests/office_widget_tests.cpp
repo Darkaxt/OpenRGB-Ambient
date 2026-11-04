@@ -5,8 +5,54 @@
 #include <QFontInfo>
 #include <QRawFont>
 void require(bool condition,const char* message) {if(!condition) throw std::runtime_error(message);}
-void mouse(QWidget& widget,QEvent::Type type,QPointF point,Qt::MouseButton button,Qt::MouseButtons buttons) {
-    QMouseEvent event(type,point,point,button,buttons,Qt::NoModifier);QApplication::sendEvent(&widget,&event);
+void mouse(QWidget& widget,QEvent::Type type,QPointF point,Qt::MouseButton button,Qt::MouseButtons buttons,Qt::KeyboardModifiers modifiers=Qt::NoModifier) {
+    QMouseEvent event(type,point,point,button,buttons,modifiers);QApplication::sendEvent(&widget,&event);
+}
+void multiSelection(QApplication& app) {
+    Json original=Json::array();
+    for(int d=0;d<2;++d) {
+        Json regions=Json::array(),groups=Json::array(),names=Json::array();
+        for(int g=0;g<3;++g) {
+            float x=.12f+d*.4f,y=.15f+g*.19f;
+            regions.push_back(office::encode(Region{x,y,x+.14f,y+.09f}));
+            groups.push_back({{"first",g},{"count",1},{"name","Zone "+std::to_string(g)},{"enabled",true}});names.push_back("LED "+std::to_string(g));
+        }
+        original.push_back({{"id",d==0?"Legion":"Secretlab"},{"name",d==0?"Laptop":"Desk"},{"enabled",true},{"regions",regions},{"groups",groups},{"led_names",names}});
+    }
+    Panel panel("E:/Temp/openrgb-multiselect-widget-unavailable",{});panel.fixtureLayout(original);panel.show();app.processEvents();
+    auto tree=panel.findChild<QTreeWidget*>("topologyTree");auto view=panel.findChild<QComboBox*>("topologyVisibility");
+    // MapCanvas has no Q_OBJECT: resolve the actual QWidget by its stable name.
+    auto canvas=static_cast<MapCanvas*>(panel.findChild<QWidget*>("topologyCanvas"));
+    require(tree && canvas && view,"Production topology controls missing");
+    auto click=[&](QTreeWidgetItem* row,Qt::KeyboardModifiers modifiers=Qt::NoModifier) {
+        tree->scrollToItem(row);app.processEvents();auto box=tree->visualItemRect(row);auto p=QPointF(box.left()+75,box.center().y());
+        mouse(*tree->viewport(),QEvent::MouseButtonPress,p,Qt::LeftButton,Qt::LeftButton,modifiers);
+        mouse(*tree->viewport(),QEvent::MouseButtonRelease,p,Qt::LeftButton,Qt::NoButton,modifiers);
+    };
+    auto laptop=tree->topLevelItem(0),desk=tree->topLevelItem(1);
+    click(laptop);require(canvas->targets().size()==3,"Device row did not include all laptop zones");
+    require(canvas->visible(0,2) && !canvas->visible(1,0),"Selected-device view includes another device");
+    click(laptop->child(0));click(laptop->child(2),Qt::ControlModifier);
+    require(canvas->targets().size()==2,"Ctrl-click did not retain both zones");
+    view->setCurrentIndex(1);require(canvas->visible(0,0) && !canvas->visible(0,1) && canvas->visible(0,2),"Selected-zone view ignored the selection");
+    view->setCurrentIndex(2);require(canvas->visible(1,0),"All-device view missing");view->setCurrentIndex(0);
+    click(laptop->child(0));click(laptop->child(2),Qt::ShiftModifier);require(canvas->targets().size()==3,"Shift range did not select all laptop zones");
+    click(desk->child(0),Qt::ControlModifier);require(canvas->targets().size()==4,"Cross-device selection lost a zone");
+    auto before=*canvas->layout;auto box=canvas->selectionGeometry();auto p=box.center();auto image=canvas->imageGeometry();
+    mouse(*canvas,QEvent::MouseButtonPress,p,Qt::LeftButton,Qt::LeftButton);
+    mouse(*canvas,QEvent::MouseMove,p+QPointF(image.width()*.07,image.height()*.04),Qt::NoButton,Qt::LeftButton);
+    mouse(*canvas,QEvent::MouseButtonRelease,p+QPointF(image.width()*.07,image.height()*.04),Qt::LeftButton,Qt::NoButton);
+    auto moved=*canvas->layout;
+    for(auto [d,i]:canvas->targets())for(int c=0;c<4;++c)require(std::abs(moved[d]["regions"][i][c].get<float>()-before[d]["regions"][i][c].get<float>()-(c%2?.04f:.07f))<.00001,"Group drag distorted spacing or dropped a zone");
+    require(moved[1]["regions"][1]==before[1]["regions"][1] && moved[1]["groups"]==before[1]["groups"],"Group drag changed unselected LEDs or hardware identity");
+    canvas->undo();require(*canvas->layout==before,"One undo did not restore the whole group");canvas->redo();require(*canvas->layout==moved,"Group redo failed");canvas->undo();
+    box=canvas->selectionGeometry();p=box.center();mouse(*canvas,QEvent::MouseButtonPress,p,Qt::LeftButton,Qt::LeftButton);mouse(*canvas,QEvent::MouseMove,p+QPointF(10000,10000),Qt::NoButton,Qt::LeftButton);
+    auto bounds=office::bounds(canvas->selected());require(bounds.right<=1.000001 && bounds.bottom<=1.000001,"Group escaped monitor bounds");
+    QKeyEvent escape(QEvent::KeyPress,Qt::Key_Escape,Qt::NoModifier);QApplication::sendEvent(canvas,&escape);require(*canvas->layout==before,"Escape did not cancel the group gesture");
+    QKeyEvent right(QEvent::KeyPress,Qt::Key_Right,Qt::NoModifier);QApplication::sendEvent(canvas,&right);
+    for(auto [d,i]:canvas->targets())require(std::abs((*canvas->layout)[d]["regions"][i][0].get<float>()-before[d]["regions"][i][0].get<float>()-.005f)<.00001,"Arrow key did not move every selected LED");canvas->undo();
+    click(laptop);click(laptop->child(0),Qt::ControlModifier);require(canvas->targets().size()==3,"Parent and child selected the same LED twice");
+    panel.fixtureLayout(original); // Leave no unsaved fixture or active gesture.
 }
 int main(int argc,char** argv) {
     QApplication app(argc,argv);
@@ -66,6 +112,7 @@ int main(int argc,char** argv) {
         auto buttons=spin.findChildren<QToolButton*>();require(buttons.size()==2,"Visible vector step buttons missing");
         require(buttons[0]->width()>=26 && buttons[0]->height()>=20,"Step arrow hit target too small");buttons[0]->click();require(spin.value()==1,"Increase arrow not wired");buttons[1]->click();require(spin.value()==0,"Decrease arrow not wired");
         require(edits>=8,"No live editor change notifications");
+        multiSelection(app);
         std::cout<<"PASS: production mouse handles, anchors, LED identity, bounds, undo/redo, cancel and vector steppers\n";return 0;
     }catch(std::exception const& e){std::cerr<<e.what()<<'\n';return 1;}
 }

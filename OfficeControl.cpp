@@ -56,6 +56,7 @@
 #include <functional>
 #include <map>
 #include <array>
+#include <set>
 
 using office::Json;
 using office::Region;
@@ -186,18 +187,23 @@ public:
     Json colours,effective;
     QImage preview;
     int device=0,group=0,led=-1;
-    bool showAll=false,showGrid=true,snap=false;
+    enum class View {SelectedDevices,SelectedZones,AllDevices};
+    View view=View::SelectedDevices;
+    // Device/group pairs; group -1 denotes every zone of a device. Empty keeps
+    // the original single-zone API for existing editor commands.
+    std::vector<std::pair<int,int>> zones;
+    bool showGrid=true,snap=false;
     bool showCenter=false;
     QPointF effectCenter{.5,.5};
     std::function<void(QPointF)> centerEdited;
     float grid=.01f,blur=0;
     std::function<void()> edited;
-    std::function<void(int,int)> picked;
+    std::function<void(int,int,Qt::KeyboardModifiers)> picked;
     std::function<void(QString)> error;
     MapCanvas() {setMinimumSize(280,210);setMouseTracking(true);setFocusPolicy(Qt::StrongFocus);setAccessibleName("Actual LG sampling map");}
     QRectF imageGeometry() const {return imageRect();}
     QRectF selectionGeometry() const {return screenBounds();}
-    int orientation() const {auto ids=indices();if(ids.empty())return 0;const auto& d=layout->at(device);if(!d.contains("rotation_quarters"))return 0;return d["rotation_quarters"].at(ids.front()).get<int>();}
+    int orientation() const {auto ids=targets();if(ids.empty())return 0;const auto& d=layout->at(ids.front().first);if(!d.contains("rotation_quarters"))return 0;return d["rotation_quarters"].at(ids.front().second).get<int>();}
     QPointF topNormal() const {switch(orientation()){case 1:return {1,0};case 2:return {0,1};case 3:return {-1,0};default:return {0,-1};}}
     QPointF topAnchor() const {auto b=screenBounds();auto n=topNormal();return b.center()+QPointF(n.x()*b.width()/2,n.y()*b.height()/2);}
     QPointF rotationHandle() const {auto p=topAnchor()+topNormal()*38;return {std::clamp(p.x(),17.,width()-17.),std::clamp(p.y(),17.,height()-17.)};}
@@ -208,9 +214,11 @@ public:
         float cx=(from.left+from.right)/2,cy=(from.top+from.bottom)/2;
         float x=std::clamp(cx-w/2,0.f,1-w),y=std::clamp(cy-h/2,0.f,1-h);
         auto next=office::transform(values,from,{x,y,x+w,y+h},90,false);
-        checkpoint();auto& turns=(*layout)[device]["rotation_quarters"];
-        if(turns.is_null())turns=std::vector<int>((*layout)[device]["regions"].size(),0);
-        for(auto id:indices())turns[id]=(turns[id].get<int>()+1)%4;
+        checkpoint();for(auto [d,id]:targets()) {
+            auto& turns=(*layout)[d]["rotation_quarters"];
+            if(turns.is_null())turns=std::vector<int>((*layout)[d]["regions"].size(),0);
+            turns[id]=(turns[id].get<int>()+1)%4;
+        }
         setSelected(next);
     }
     void resetHistory() {undoHistory.clear();redoHistory.clear();}
@@ -218,20 +226,44 @@ public:
     void undo() {if(undoHistory.empty()) return;redoHistory.push_back(*layout);*layout=undoHistory.back();undoHistory.pop_back();update();if(edited) edited();}
     void redo() {if(redoHistory.empty()) return;undoHistory.push_back(*layout);*layout=redoHistory.back();redoHistory.pop_back();update();if(edited) edited();}
     void fit() {zoom=1;pan={};update();}
-    std::vector<unsigned> indices() const {
-        if(!layout || layout->empty()) return {};
-        const auto& g=layout->at(device).at("groups").at(group);
-        if(led>=0) return {static_cast<unsigned>(led)};
-        std::vector<unsigned> out;for(unsigned i=g.at("first").get<unsigned>();i<g.at("first").get<unsigned>()+g.at("count").get<unsigned>();++i) out.push_back(i);
-        return out;
+    std::vector<std::pair<int,unsigned>> targets() const {
+        std::set<std::pair<int,unsigned>> ids;
+        if(!layout || layout->empty())return {};
+        auto include=[&](int d,int g) {
+            if(d<0 || d>=static_cast<int>(layout->size()))return;
+            const auto& groups=layout->at(d).at("groups");
+            for(size_t n=0;n<groups.size();++n)if(g<0 || static_cast<int>(n)==g) {
+                unsigned first=groups[n].at("first"),count=groups[n].at("count");
+                for(unsigned i=first;i<first+count;++i)ids.insert({d,i});
+            }
+        };
+        if(zones.empty())include(device,group);else for(auto [d,g]:zones)include(d,g);
+        if(led>=0 && zones.size()<=1) {ids.clear();ids.insert({device,static_cast<unsigned>(led)});}
+        return {ids.begin(),ids.end()};
+    }
+    bool multipleZones() const {
+        return zones.size()>1 || (zones.size()==1 && zones.front().second<0);
+    }
+    bool visible(int d,unsigned i) const {
+        if(view==View::AllDevices)return true;
+        auto matches=[&](int target,int g) {
+            if(d!=target)return false;
+            if(view==View::SelectedDevices || g<0)return true;
+            if(led>=0 && zones.size()<=1)return i==static_cast<unsigned>(led);
+            const auto& zone=layout->at(d).at("groups").at(g);
+            return i>=zone.at("first").get<unsigned>() && i<zone.at("first").get<unsigned>()+zone.at("count").get<unsigned>();
+        };
+        if(zones.empty())return matches(device,group);
+        return std::any_of(zones.begin(),zones.end(),[&](auto z){return matches(z.first,z.second);});
     }
     std::vector<Region> selected() const {
         std::vector<Region> out;if(!layout) return out;
-        for(auto i:indices()) {auto r=layout->at(device).at("regions").at(i);out.push_back({r[0],r[1],r[2],r[3]});}return out;
+        for(auto [d,i]:targets()) {auto r=layout->at(d).at("regions").at(i);out.push_back({r[0],r[1],r[2],r[3]});}return out;
     }
     void setSelected(const std::vector<Region>& values,bool remember=false) {
         if(remember) checkpoint();
-        auto ids=indices();for(size_t i=0;i<ids.size();++i) (*layout)[device]["regions"][ids[i]]=office::encode(values[i]);
+        auto ids=targets();if(values.size()!=ids.size())throw std::runtime_error("Selected LED count changed during editing");
+        for(size_t i=0;i<ids.size();++i) (*layout)[ids[i].first]["regions"][ids[i].second]=office::encode(values[i]);
         update();if(edited) edited();
     }
     void paintEvent(QPaintEvent*) override {
@@ -244,14 +276,14 @@ public:
         float visualGrid=std::max(grid,static_cast<float>(20./std::max(1.,image.width())));
         if(showGrid) for(float at=visualGrid;at<1;at+=visualGrid) {p.drawLine(QPointF(image.left()+image.width()*at,image.top()),QPointF(image.left()+image.width()*at,image.bottom()));p.drawLine(QPointF(image.left(),image.top()+image.height()*at),QPointF(image.right(),image.top()+image.height()*at));}
         if(!layout || layout->empty()) {p.restore();return;}
-        auto selectedIds=indices();
+        auto selectedIds=targets();
         for(size_t d=0;d<layout->size();++d) {
-            if(!showAll && static_cast<int>(d)!=device) continue;
             const auto& regions=(*layout)[d]["regions"];
             for(size_t i=0;i<regions.size();++i) {
+                if(!visible(static_cast<int>(d),static_cast<unsigned>(i)))continue;
                 auto r=regions[i];QRectF box(image.left()+r[0].get<double>()*image.width(),image.top()+r[1].get<double>()*image.height(),
                     (r[2].get<double>()-r[0].get<double>())*image.width(),(r[3].get<double>()-r[1].get<double>())*image.height());
-                bool active=static_cast<int>(d)==device && std::find(selectedIds.begin(),selectedIds.end(),i)!=selectedIds.end();
+                bool active=std::find(selectedIds.begin(),selectedIds.end(),std::pair<int,unsigned>{static_cast<int>(d),static_cast<unsigned>(i)})!=selectedIds.end();
                 if(active && d<effective.size() && i<effective[d].size()) {
                     auto actual=effective[d][i];QRectF sample(image.left()+actual[0].get<double>()*image.width(),image.top()+actual[1].get<double>()*image.height(),(actual[2].get<double>()-actual[0].get<double>())*image.width(),(actual[3].get<double>()-actual[1].get<double>())*image.height());
                     p.setPen(QPen(QColor("#ffd26e"),1,Qt::DashLine));p.drawRect(sample);
@@ -277,14 +309,14 @@ public:
             p.setBrush(QColor("#061b27"));p.setPen(QPen(cyan,1.5));p.drawEllipse(rotate,15,15);
             p.save();p.translate(rotate);p.rotate(orientation()*90);officeui::symbol(p,{-11,-11,22,22},"restart_alt",cyan,false,21);p.restore();
             p.setPen(Qt::white);p.setBrush(QColor("#061b27"));auto topText=QRectF(anchor+normal*14-QPointF(16,8),QSizeF(32,16));p.drawRoundedRect(topText,3,3);p.drawText(topText,Qt::AlignCenter,"TOP");
-            auto values=selected();if(values.size()>1) {
+            auto values=selected();if(values.size()>1 && !multipleZones()) {
                 auto point=[&](Region r){return QPointF(image.left()+(r.left+r.right)*.5*image.width(),image.top()+(r.top+r.bottom)*.5*image.height());};
                 auto a=point(values.front()),z=point(values.back());QLineF line(a,z);
                 // Local order cue instead of a diagonal across a keyboard.
                 auto key=(*layout)[device].value("id",std::string());bool linear=key!="Keychron" && !(key=="Legion" && group==0);
                 if(linear && line.length()>16) {double angle=std::atan2(z.y()-a.y(),z.x()-a.x());QPointF u(std::cos(angle),std::sin(angle)),v(-u.y(),u.x());z=a+u*std::min(36.,line.length());p.setPen(QPen(Qt::white,1.5));p.drawLine(a,z);p.drawLine(z,z-u*7+v*4);p.drawLine(z,z-u*7-v*4);}
-                p.setPen(Qt::white);p.drawText(QRectF(a.x()+5,a.y()-20,80,18),Qt::AlignLeft,QString("LED %1").arg(selectedIds.front()));
-                auto end=point(values.back());p.setBrush(QColor("#ffd26e"));p.setPen(QPen(QColor("#061b27"),1));p.drawEllipse(a,4,4);p.drawEllipse(end,4,4);p.setPen(Qt::white);p.drawText(QRectF(end.x()+5,end.y()+3,90,18),Qt::AlignLeft,QString("LAST %1").arg(selectedIds.back()));
+                p.setPen(Qt::white);p.drawText(QRectF(a.x()+5,a.y()-20,80,18),Qt::AlignLeft,QString("LED %1").arg(selectedIds.front().second));
+                auto end=point(values.back());p.setBrush(QColor("#ffd26e"));p.setPen(QPen(QColor("#061b27"),1));p.drawEllipse(a,4,4);p.drawEllipse(end,4,4);p.setPen(Qt::white);p.drawText(QRectF(end.x()+5,end.y()+3,90,18),Qt::AlignLeft,QString("LAST %1").arg(selectedIds.back().second));
             }
         }
     }
@@ -296,12 +328,14 @@ public:
         if(showCenter && QLineF(point,QPointF(area.left()+effectCenter.x()*area.width(),area.top()+effectCenter.y()*area.height())).length()<=10) {draggingCenter=true;setCursor(Qt::CrossCursor);return;}
         QPointF normalized((point.x()-area.left())/area.width(),(point.y()-area.top())/area.height());
         auto selectedValues=selected();auto box=office::bounds(selectedValues);
-        if(!handle && !QRectF(QPointF(box.left,box.top),QPointF(box.right,box.bottom)).contains(normalized)) {
+        bool extend=e->modifiers()&(Qt::ControlModifier|Qt::ShiftModifier);
+        if(!handle && (extend || !QRectF(QPointF(box.left,box.top),QPointF(box.right,box.bottom)).contains(normalized))) {
             bool hit=false;
             for(int d=static_cast<int>(layout->size())-1;d>=0 && !hit;--d) {
-                if(!showAll && d!=device) continue;const auto& regions=(*layout)[d]["regions"];
-                for(size_t i=0;i<regions.size();++i) {auto r=regions[i];if(normalized.x()>=r[0].get<double>() && normalized.x()<=r[2].get<double>() && normalized.y()>=r[1].get<double>() && normalized.y()<=r[3].get<double>()) {if(picked) picked(d,static_cast<int>(i));hit=true;break;}}
+                const auto& regions=(*layout)[d]["regions"];
+                for(size_t i=0;i<regions.size();++i) {if(!visible(d,static_cast<unsigned>(i)))continue;auto r=regions[i];if(normalized.x()>=r[0].get<double>() && normalized.x()<=r[2].get<double>() && normalized.y()>=r[1].get<double>() && normalized.y()<=r[3].get<double>()) {if(picked) picked(d,static_cast<int>(i),e->modifiers());hit=true;break;}}
             }if(!hit) return;
+            if(extend){setFocus();e->accept();return;}
         }
         dragStart=normalized;dragRegions=selected();checkpoint();setFocus();
     }
@@ -363,7 +397,7 @@ class Panel : public QMainWindow {
     bool exerciseEditor=false;
     bool allowUnavailable=false;
     int editorPhase=0;
-    Json editorBaseline;
+    Json editorBaseline,editorGroupDraft;
     uint64_t editorRevision=0;
     std::vector<QLabel*> onlineLabels;
     std::vector<QPushButton*> identifyButtons;
@@ -505,7 +539,7 @@ class Panel : public QMainWindow {
         trace("snapshot-accepted");
         lastSnapshot=snapshot;
         if(force || !revision || (!dirty && snapshot.at("revision").get<uint64_t>()!=revision)) {
-            int selectedDevice=map->device,selectedGroup=map->group;
+            int selectedDevice=map->device,selectedGroup=map->group;auto selectedZones=map->zones;
             updating=true;revision=snapshot.at("revision");settings=snapshot.at("settings");layout=snapshot.at("layout");
             enabled->setChecked(settings.at("enabled"));fps->setValue(settings.at("fps"));smooth->setValue(static_cast<int>(settings.at("smoothing_ms").get<double>()));
             for(auto& [key,box]:numbers) box->setValue(settings.value(key,office::processingDefaults().at(key)).get<double>());
@@ -514,7 +548,8 @@ class Panel : public QMainWindow {
             effectCenter[0]->setValue(settings.value("effect_center_x",.5)*100);effectCenter[1]->setValue(settings.value("effect_center_y",.5)*100);map->effectCenter={effectCenter[0]->value()/100,effectCenter[1]->value()/100};
             map->blur=settings.value("blur",0.f)/100;map->resetHistory();
             map->layout=&layout;map->device=map->group=0;map->led=-1;buildTree();buildDevices();
-            dirty=false;dirtyLabel->setText("Saved");save->setEnabled(false);updating=false;select(selectedDevice,selectedGroup);
+            dirty=false;dirtyLabel->setText("Saved");save->setEnabled(false);updating=false;
+            map->zones=selectedZones;restoreTreeSelection(selectedDevice,selectedGroup);
         }
         auto s=snapshot.at("status");
         deviceSummary->setText(QString("%1 / %2 devices online  ·  %3 mapped LEDs").arg(s.at("online_devices").get<int>()).arg(layout.size()).arg(s.at("leds").get<int>()));
@@ -541,7 +576,7 @@ class Panel : public QMainWindow {
         }
         stopTest->setEnabled(snapshot.at("test_mode")!="none");
         if(!exportPath.isEmpty() && !exported && (!map->preview.isNull() || allowUnavailable)) {
-            if(exerciseEditor && editorPhase<3) exerciseSave();else exportViews();
+            if(exerciseEditor && editorPhase<6) exerciseSave();else exportViews();
         }
     }
     void poll() {
@@ -605,22 +640,52 @@ class Panel : public QMainWindow {
         if(layout.empty())inventorySummary->setText("No device maps loaded · reconnect to refresh inventory");
     }
     void syncTree() {
-        QSignalBlocker blocker(tree);int d=map->device,g=map->group;buildTree();
-        if(d>=0 && d<tree->topLevelItemCount()) tree->setCurrentItem(tree->topLevelItem(d)->child(g));
+        int d=map->device,g=map->group;{QSignalBlocker blocker(tree);buildTree();}restoreTreeSelection(d,g);
+    }
+    void restoreTreeSelection(int device,int group) {
+        if(layout.empty())return;
+        {QSignalBlocker blocker(tree);tree->clearSelection();
+            for(auto [d,g]:map->zones)if(d>=0 && d<tree->topLevelItemCount()) {
+                auto parent=tree->topLevelItem(d);auto item=g<0?parent:parent->child(g);if(item)item->setSelected(true);
+            }
+            device=std::clamp(device,0,tree->topLevelItemCount()-1);auto parent=tree->topLevelItem(device);
+            auto current=parent->child(std::clamp(group,0,parent->childCount()-1));
+            if(tree->selectedItems().empty())current->setSelected(true);
+            tree->setCurrentItem(current,0,QItemSelectionModel::NoUpdate);
+        }selectionFromTree();
+    }
+    void selectionFromTree() {
+        if(updating || layout.empty())return;
+        auto items=tree->selectedItems();if(items.empty()){restoreTreeSelection(map->device,map->group);return;}
+        auto primary=tree->currentItem();if(!primary || !primary->isSelected())primary=items.front();
+        int d=primary->data(0,Qt::UserRole).toInt(),g=primary->data(0,Qt::UserRole+1).toInt();
+        updating=true;map->device=d;map->group=std::max(0,g);map->led=-1;map->zones.clear();
+        for(auto item:items)map->zones.emplace_back(item->data(0,Qt::UserRole).toInt(),item->data(0,Qt::UserRole+1).toInt());
+        std::sort(map->zones.begin(),map->zones.end());
+        led->clear();led->addItem(map->multipleZones()?"All selected LEDs":"Entire zone",-1);
+        if(!map->multipleZones()) {
+            auto& zone=layout[d]["groups"][map->group];
+            for(unsigned i=zone["first"].get<unsigned>();i<zone["first"].get<unsigned>()+zone["count"].get<unsigned>();++i)
+                led->addItem(QString("LED %1 · %2").arg(i).arg(text(layout[d]["led_names"][i])),static_cast<int>(i));
+        }
+        led->setEnabled(!map->multipleZones());zoneName->setReadOnly(map->multipleZones());
+        for(auto name:{"reverseSelection","mapToEdge"})if(auto control=findChild<QWidget*>(name))control->setEnabled(!map->multipleZones());
+        updating=false;showGeometry();map->update();
     }
     void select(int device,int group) {
-        if(layout.empty()) return;updating=true;map->device=device;map->group=group;map->led=-1;
-        auto& g=layout[device]["groups"][group];zoneName->setText(text(g["name"]));
-        led->clear();led->addItem("Entire zone",-1);
-        for(unsigned i=g["first"].get<unsigned>();i<g["first"].get<unsigned>()+g["count"].get<unsigned>();++i)
-            led->addItem(QString("LED %1 · %2").arg(i).arg(text(layout[device]["led_names"][i])),static_cast<int>(i));
-        updating=false;showGeometry();map->update();
+        if(layout.empty())return;map->zones={{device,group}};restoreTreeSelection(device,group);
     }
     void showGeometry() {
         if(layout.empty()) return;bool before=updating;updating=true;
         auto b=office::bounds(map->selected());std::array<double,4> values={b.left*100,b.top*100,(b.right-b.left)*100,(b.bottom-b.top)*100};
         for(size_t i=0;i<4;++i) geometry[i]->setValue(values[i]);updating=before;
-        auto& g=layout[map->device]["groups"][map->group];zoneSummary->setText(QString("%1\n%2 LEDs · physical indices %3–%4").arg(text(g["name"])).arg(g["count"].get<int>()).arg(g["first"].get<int>()).arg(g["first"].get<int>()+g["count"].get<int>()-1));
+        auto& g=layout[map->device]["groups"][map->group];
+        if(map->multipleZones()) {
+            std::set<std::pair<int,int>> groups;std::set<int> devices;
+            for(auto [d,n]:map->zones) {devices.insert(d);if(n<0)for(int z=0;z<static_cast<int>(layout[d]["groups"].size());++z)groups.insert({d,z});else groups.insert({d,n});}
+            zoneName->setText(QString("%1 zones selected").arg(groups.size()));
+            zoneSummary->setText(QString("%1 zones · %2 devices\n%3 LEDs · move together").arg(groups.size()).arg(devices.size()).arg(map->targets().size()));
+        } else {zoneName->setText(text(g["name"]));zoneSummary->setText(QString("%1\n%2 LEDs · physical indices %3–%4").arg(text(g["name"])).arg(g["count"].get<int>()).arg(g["first"].get<int>()).arg(g["first"].get<int>()+g["count"].get<int>()-1));}
         mapStatus->setText(QString("Drag to move · corners resize · middle-drag pans · scroll zooms\nX %1%   Y %2%   W %3%   H %4% · cyan draft / amber effective sampling").arg(values[0],0,'f',1).arg(values[1],0,'f',1).arg(values[2],0,'f',1).arg(values[3],0,'f',1));
     }
     void applyGeometry(int rotation=0,bool reverse=false) {
@@ -646,7 +711,7 @@ class Panel : public QMainWindow {
     }
     void exportViews() {
         exported=true;QDir().mkpath(exportPath);
-        Json result={{"native_revision",revision},{"devices",layout.size()},{"editor_save_roundtrip",exerciseEditor && editorPhase==3},
+        Json result={{"native_revision",revision},{"devices",layout.size()},{"editor_save_roundtrip",exerciseEditor && editorPhase==6},{"multi_selection_save_roundtrip",exerciseEditor && editorPhase==6},
             {"actual_preview",!map->preview.isNull()},{"source_error",lastSnapshot.at("status").value("error",std::string())},
             {"font_family",font().family().toStdString()},{"views",Json::array()},{"design","EDAmbilight recovered native assets"}};
         for(auto size:{QSize(1000,700),QSize(1440,900),QSize(1920,1080)}) {
@@ -669,6 +734,13 @@ class Panel : public QMainWindow {
         auto renderState=[this,&result](const char* name){QApplication::sendPostedEvents();centralWidget()->layout()->activate();auto file=exportPath+"/state-"+name+".png";if(!grab().save(file))throw std::runtime_error("Could not export UI state");result["states"].push_back({{"name",name},{"path",file.toStdString()},{"fixture",true}});};
         pages->setCurrentIndex(0);auto disclosure=findChild<QPushButton*>("advancedOptions");disclosure->setChecked(true);renderState("advanced");disclosure->setChecked(false);
         pages->setCurrentIndex(1);select(0,0);tree->setCurrentItem(tree->topLevelItem(0)->child(0));auto beforeRotation=layout;map->rotateSelection();showGeometry();renderState("rotation-quarter-turn");layout=beforeRotation;map->resetHistory();map->update();
+        for(size_t d=0;d<layout.size();++d)if(layout[d].value("id",std::string())=="Legion") {
+            tree->setCurrentItem(tree->topLevelItem(d));renderState("selected-device");
+            auto parent=tree->topLevelItem(d);tree->setCurrentItem(parent->child(0));
+            tree->setCurrentItem(parent->child(1),0,QItemSelectionModel::Select);
+            findChild<QComboBox*>("topologyVisibility")->setCurrentIndex(1);renderState("selected-zones");
+            findChild<QComboBox*>("topologyVisibility")->setCurrentIndex(0);break;
+        }
         auto retainedLayout=layout,retainedSnapshot=lastSnapshot;
         lastSnapshot["online"]=std::vector<bool>(layout.size(),false);buildDevices();pages->setCurrentIndex(2);renderState("offline");
         layout=Json::array();buildDevices();renderState("empty");layout=retainedLayout;lastSnapshot=retainedSnapshot;buildDevices();
@@ -694,20 +766,41 @@ class Panel : public QMainWindow {
             map->replaceLayout(editorBaseline);select(0,0);zoneName->setText(text(editorBaseline[0]["groups"][0]["name"]));
             QMetaObject::invokeMethod(zoneName,"editingFinished",Qt::DirectConnection);
             editorPhase=2;save->click();
-        } else {
+        } else if(editorPhase==2) {
             if(layout!=editorBaseline || revision!=editorRevision+2) throw std::runtime_error("Editor failed to restore the original map");
-            editorPhase=3;trace("editor-save-roundtrip-restored");exportViews();
+            int laptop=-1;for(size_t d=0;d<layout.size();++d)if(layout[d].value("id",std::string())=="Legion")laptop=static_cast<int>(d);
+            if(laptop<0)throw std::runtime_error("Laptop map missing for group Save acceptance");
+            tree->setCurrentItem(tree->topLevelItem(laptop));auto bounds=office::bounds(map->selected());
+            int direction=bounds.left>.001f?Qt::Key_Left:bounds.right<.999f?Qt::Key_Right:bounds.top>.001f?Qt::Key_Up:Qt::Key_Down;
+            QKeyEvent move(QEvent::KeyPress,direction,Qt::ShiftModifier);QApplication::sendEvent(map,&move);
+            editorGroupDraft=layout;
+            if(editorGroupDraft==editorBaseline || map->targets().size()!=layout[laptop]["regions"].size())throw std::runtime_error("Device row failed to produce a moved group draft");
+            editorPhase=3;save->click();
+        } else if(editorPhase==3) {
+            if(layout!=editorGroupDraft || revision!=editorRevision+3 || !map->multipleZones())throw std::runtime_error("Real Save lost group geometry or selection");
+            map->replaceLayout(editorBaseline);editorPhase=4;save->click();
+        } else {
+            if(layout!=editorBaseline || revision!=editorRevision+4)throw std::runtime_error("Group Save check failed to restore the original map");
+            editorPhase=6;trace("editor-group-save-roundtrip-restored");exportViews();
         }
     }
 public:
+#ifdef OFFICE_WIDGET_TEST
+    void fixtureLayout(const Json& value) {
+        refresh.stop();client.error={};updating=true;layout=value;map->layout=&layout;map->zones.clear();buildTree();buildDevices();updating=false;select(0,0);shellPages->setCurrentIndex(0);pages->setCurrentIndex(1);
+    }
+#endif
     Panel(QString stateDirectory,QString exportDirectory,bool exercise=false,bool unavailable=false):state(std::move(stateDirectory)),exportPath(std::move(exportDirectory)),exerciseEditor(exercise),allowUnavailable(unavailable) {
         clock.start();client.trace=[this](QString event){trace(event);};trace("panel-constructing");
         QFile preferences(state+"/office-panel.json");if(preferences.open(QIODevice::ReadOnly)) {auto data=preferences.readAll();panelOptions=Json::parse(data.constData(),data.constData()+data.size(),nullptr,false);}if(!panelOptions.is_object()) panelOptions=Json::object();
         setWindowTitle("Office Ambilight · OpenRGB");resize(1440,900);setMinimumSize(1000,700);
         qApp->setProperty("officeReducedMotion",panelOptions.value("reduced_motion",false));buildViews();
-        map->edited=[this]{changed();showGeometry();if(!layout.empty()) {bool prior=updating;updating=true;zoneName->setText(text(layout[map->device]["groups"][map->group]["name"]));updating=prior;}};
+        map->edited=[this]{changed();showGeometry();};
         map->error=[this](QString message){failure(message);};
-        map->picked=[this](int d,int index){for(size_t g=0;g<layout[d]["groups"].size();++g) {const auto& group=layout[d]["groups"][g];if(index>=group["first"].get<int>() && index<group["first"].get<int>()+group["count"].get<int>()) {select(d,g);tree->setCurrentItem(tree->topLevelItem(d)->child(g));break;}}};
+        map->picked=[this](int d,int index,Qt::KeyboardModifiers modifiers){for(size_t g=0;g<layout[d]["groups"].size();++g) {const auto& group=layout[d]["groups"][g];if(index>=group["first"].get<int>() && index<group["first"].get<int>()+group["count"].get<int>()) {
+            auto item=tree->topLevelItem(d)->child(g);auto flags=modifiers&Qt::ControlModifier?QItemSelectionModel::Toggle:modifiers&Qt::ShiftModifier?QItemSelectionModel::Select:QItemSelectionModel::ClearAndSelect;
+            tree->setCurrentItem(item,0,flags);break;
+        }}};
         client.error=[this](QString message){pending=false;save->setEnabled(false);failure(message);if(!this->exportPath.isEmpty()) QCoreApplication::exit(2);};client.connected=[this]{poll();};
         connect(&refresh,&QTimer::timeout,this,[this]{poll();});refresh.start(1000);
         // Opening after construction also lets a real connection failure exit

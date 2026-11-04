@@ -43,7 +43,13 @@ thresholds, presets and lock/display standby effects. These settings execute in
 the native sampler/output; they are not preview-only filters.
 Topology shows the actual downscaled LG capture, per-LED sampling rectangles,
 hardware LED names/indices, and current output colours. Select a device/zone or
-one LED; drag, resize, quarter-turn or reverse its sampling order. Coordinates
+one LED; drag, resize, quarter-turn or reverse its sampling order. Click a device
+row to select all its zones, Ctrl-click to add/remove entries, or Shift-click a
+range. Drag any selected area or use arrow keys to move the selection together;
+spacing and physical LED identities are preserved. One undo restores the entire
+gesture and Escape cancels it. The Show choice defaults to Selected devices;
+Selected zones hides unselected zones and All devices gives a complete overview.
+Lighting enable checkboxes remain independent of editor selection. Coordinates
 are percentages of the LG image, with Y increasing downwards. Devices includes
 device/zone enable and individual/all-device two-second identify. Eight constant
 pixel corner/edge handles resize regions; grid/snap, pan/zoom, undo/redo and edge
