@@ -502,6 +502,9 @@ struct OfficeAmbience::Impl {
         auto proposed=request.at("layout");auto points=validatedLayout(proposed);next["layout"]=proposed;
         // Detect external edits before replacing a private configuration file.
         std::ifstream currentFile(configPath);Json onDisk;currentFile>>onDisk;
+        // MSVC's stream handle does not share delete access. Release it before
+        // QSaveFile atomically replaces the file identity on Windows.
+        currentFile.close();
         // Compare against the exact loaded document, including its original defaults.
         if(onDisk!=diskConfig) throw std::runtime_error("The private config was edited externally; restart the owner to reload it");
         std::unique_lock<std::mutex> lock;
