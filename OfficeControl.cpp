@@ -32,6 +32,7 @@
 #include <QSaveFile>
 #include <QDebug>
 #include <QElapsedTimer>
+#include <QFontDatabase>
 #include <functional>
 #include <map>
 #include <array>
@@ -70,6 +71,12 @@ public:
                 auto callback=std::move(found->second);callbacks.erase(found);callback(value);
             }
         });
+    }
+    ~Client() {
+        // QLocalSocket can emit disconnected during destruction. Disconnect
+        // before the std::function members (and the panel they capture) die.
+        QObject::disconnect(&socket,nullptr,this,nullptr);
+        callbacks.clear();socket.abort();
     }
     void open(const QString& state) {
         if(trace) trace("opening-endpoint-record");
@@ -321,7 +328,8 @@ class Panel : public QMainWindow {
     }
     void exportViews() {
         exported=true;QDir().mkpath(exportPath);
-        Json result={{"native_revision",revision},{"devices",layout.size()},{"editor_save_roundtrip",exerciseEditor && editorPhase==3},{"views",Json::array()}};
+        Json result={{"native_revision",revision},{"devices",layout.size()},{"editor_save_roundtrip",exerciseEditor && editorPhase==3},
+            {"font_family",font().family().toStdString()},{"views",Json::array()}};
         for(auto size:{QSize(1000,700),QSize(1440,900),QSize(1920,1080)}) {
             resize(size);
             int device=size.width()==1000?0:size.width()==1440?2:1;
@@ -380,6 +388,9 @@ public:
         auto mapPage=new QWidget;auto mapLayout=new QVBoxLayout(mapPage);auto all=new QCheckBox("Show all devices");mapLayout->addWidget(all);mapLayout->addWidget(map,1);
         auto note=new QLabel("Drag a selected region. Arrow keys move 0.5%; Shift moves 0.1%. Coloured marks show live LED output.");note->setWordWrap(true);mapLayout->addWidget(note);topology->addWidget(mapPage);
         auto props=new QWidget;props->setMinimumWidth(215);props->setMaximumWidth(285);auto propLayout=new QVBoxLayout(props);auto fields=new QFormLayout;
+        fields->setRowWrapPolicy(QFormLayout::WrapAllRows);
+        led->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);led->setMinimumContentsLength(10);
+        led->setSizePolicy(QSizePolicy::Ignored,QSizePolicy::Fixed);
         fields->addRow("Zone name",zoneName);fields->addRow("Selection",led);
         size_t i=0;for(auto label:{"X (%)","Y (%)","Width (%)","Height (%)"}) {auto box=new QDoubleSpinBox;box->setDecimals(3);box->setRange(i<2?0:.001,100);box->setSingleStep(.5);geometry[i++]=box;fields->addRow(label,box);connect(box,&QDoubleSpinBox::editingFinished,this,[this]{applyGeometry();});}
         propLayout->addWidget(groupBox("Sampling area",fields));auto rotate=new QPushButton("Rotate 90°");auto reverse=new QPushButton("Reverse LED order");propLayout->addWidget(rotate);propLayout->addWidget(reverse);propLayout->addStretch();topology->addWidget(props);topology->setStretchFactor(1,1);topology->setSizes({230,820,250});pages->addWidget(topology);
@@ -414,6 +425,13 @@ public:
 
 int main(int argc,char** argv) {
     QApplication app(argc,argv);app.setApplicationName("Office Ambilight");
+#ifdef Q_OS_WIN
+    // The offscreen QPA does not discover the Windows font directory. Load
+    // the OS font explicitly so native and offscreen evidence use real glyphs.
+    auto fontFile=qEnvironmentVariable("WINDIR")+"/Fonts/segoeui.ttf";
+    if(QFontDatabase::addApplicationFont(fontFile)<0) {qCritical()<<"Cannot load the Windows UI font";return 3;}
+    app.setFont(QFont("Segoe UI",10));
+#endif
     QCommandLineParser parser;parser.addHelpOption();parser.addOption({"state","Private OpenRGB state directory","directory","D:/Tools/OpenRGB/state-integration"});
     parser.addOption({"export-views","Export all real connected panel views, then exit","directory"});
     parser.addOption({"exercise-editor","Verify the real Save button and restore the original map before exporting"});parser.process(app);
