@@ -1,6 +1,7 @@
 param([Parameter(Mandatory)][string]$QtRoot,[Parameter(Mandatory)][string]$OpenRGBSource,[Parameter(Mandatory)][string]$BuildRoot)
 $ErrorActionPreference='Stop'
 $source=(Resolve-Path (Join-Path $PSScriptRoot '..')).Path
+$git=(Get-Command git -ErrorAction Stop).Source
 $vswhere=Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio/Installer/vswhere.exe'
 $vs=& $vswhere -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
 if(!$vs) { throw 'MSVC not found' }
@@ -18,4 +19,4 @@ $ctest=Join-Path (Split-Path $cmake) 'ctest.exe'
 & $ctest --test-dir $BuildRoot -C Release --output-on-failure
 if($LASTEXITCODE) { throw 'GPU regression check failed' }
 Copy-Item (Join-Path $QtRoot 'bin/Qt6*.dll') (Join-Path $BuildRoot 'Release')
-@{source=(& git -C $source rev-parse HEAD);openrgb=(& git -C $OpenRGBSource rev-parse HEAD);qt='6.8.3'} | ConvertTo-Json | Set-Content (Join-Path $BuildRoot 'Release/office-plugin-build.json')
+@{source=(& $git -C $source rev-parse HEAD);openrgb=(& $git -C $OpenRGBSource rev-parse HEAD);qt='6.8.3'} | ConvertTo-Json | Set-Content (Join-Path $BuildRoot 'Release/office-plugin-build.json')

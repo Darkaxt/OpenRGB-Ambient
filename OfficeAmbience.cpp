@@ -207,6 +207,7 @@ struct CaptureState {
     uint64_t frames=0;
     double lastProcessingMs=0;
     Clock::time_point received{};
+    Clock::time_point firstReceived{};
     com_ptr<ID3D11Device> device;
     com_ptr<ID3D11DeviceContext> context;
     com_ptr<ID3D11Texture2D> input,output,readback;
@@ -288,6 +289,7 @@ struct CaptureState {
         for(size_t i=0;i<colors.size();++i) colors[i]=ToRGBColor(bytes[i*4],bytes[i*4+1],bytes[i*4+2]);
         context->Unmap(readback.get(),0);
         received=Clock::now(); ++frames;
+        if(frames==1) firstReceived=received;
         lastProcessingMs=std::chrono::duration<double,std::milli>(received-began).count();
     }
 };
@@ -354,8 +356,10 @@ struct OfficeAmbience::Impl {
     RECT sourceBounds{},monitorBounds{};
     std::string mode="waiting",error;
     Clock::time_point lastOutput=Clock::now(),switched=lastOutput,lastStatus=lastOutput;
+    Clock::time_point received{};
     uint64_t outputFrames=0,inputFrames=0;
     double smoothingMs=140,processingMs=0,firstFrameDelayMs=0;
+    double callbackToSubmitMs=0,submitMs=0;
     bool initialized=false;
     std::atomic_bool dirty{true};
     HWINEVENTHOOK systemHook{},objectHook{};
@@ -428,13 +432,15 @@ struct OfficeAmbience::Impl {
                 closed=state->closed;
                 if(!closed && state->frames) {
                     latest=state->colors; inputFrames=state->frames; processingMs=state->lastProcessingMs;
-                    if(firstFrameDelayMs==0) firstFrameDelayMs=std::chrono::duration<double,std::milli>(state->received-switched).count();
+                    received=state->received;
+                    if(firstFrameDelayMs==0) firstFrameDelayMs=std::chrono::duration<double,std::milli>(state->firstReceived-switched).count();
                 }
                 if(!state->error.empty()) error=state->error;
             }
             if(closed) { capture.reset(); source=nullptr; dirty=true; }
         }
         if(!latest.empty()) {
+            auto submitBegan=Clock::now();
             float weight=smoothingMs<=0?1.f:static_cast<float>(1-std::exp(-std::chrono::duration<double,std::milli>(now-lastOutput).count()/smoothingMs));
             SmoothingColorPostProcessor smooth{weight};
             for(auto& device:devices) {
@@ -447,6 +453,9 @@ struct OfficeAmbience::Impl {
                 device.controller->UpdateLEDs();
             }
             initialized=true; ++outputFrames;
+            auto submitted=Clock::now();
+            submitMs=std::chrono::duration<double,std::milli>(submitted-submitBegan).count();
+            callbackToSubmitMs=std::chrono::duration<double,std::milli>(submitted-received).count();
         }
         lastOutput=now;
         // Diagnostic reporting cadence never classifies a silent/static frame as
@@ -457,6 +466,7 @@ struct OfficeAmbience::Impl {
         Json report={{"mode",mode},{"source_hwnd",reinterpret_cast<uintptr_t>(source)},
             {"devices",devices.size()},{"leds",samples.size()},{"output_frames",outputFrames},
             {"input_frames",inputFrames},{"gpu_processing_ms",processingMs},
+            {"callback_to_native_submit_ms",callbackToSubmitMs},{"native_submit_ms",submitMs},
             {"first_frame_after_switch_ms",firstFrameDelayMs},{"has_valid_frame",initialized},
             {"error",error},{"updated_utc",QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs).toStdString()}};
         QSaveFile file(QString::fromStdWString(statusPath.wstring()));
