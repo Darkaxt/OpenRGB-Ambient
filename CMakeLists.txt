@@ -64,7 +64,7 @@ foreach(directory "" i2c_smbus net_port RGBController dependencies/json qt hidap
     target_include_directories(${PROJECT_NAME} PRIVATE "${OPENRGB_SOURCE_DIR}/${directory}")
 endforeach()
 
-add_executable(OfficeControl WIN32 OfficeControl.cpp OfficeLayout.h)
+add_executable(OfficeControl WIN32 OfficeControl.cpp OfficeLayout.h OfficeStyle.h OfficeAssets.qrc)
 target_include_directories(OfficeControl PRIVATE "${OPENRGB_SOURCE_DIR}/dependencies/json")
 target_link_libraries(OfficeControl PRIVATE ${REQUIRED_LIBS_QUALIFIED})
 
@@ -83,7 +83,7 @@ if(BUILD_TESTING AND WIN32)
     add_executable(office_layout_tests tests/office_layout_tests.cpp)
     target_include_directories(office_layout_tests PRIVATE "${OPENRGB_SOURCE_DIR}/dependencies/json")
     add_test(NAME office_layout COMMAND office_layout_tests)
-    add_executable(office_widget_tests tests/office_widget_tests.cpp)
+    add_executable(office_widget_tests tests/office_widget_tests.cpp OfficeAssets.qrc)
     target_include_directories(office_widget_tests PRIVATE "${OPENRGB_SOURCE_DIR}/dependencies/json")
     target_link_libraries(office_widget_tests PRIVATE ${REQUIRED_LIBS_QUALIFIED})
     add_test(NAME office_widgets COMMAND office_widget_tests -platform offscreen)

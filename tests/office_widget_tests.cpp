@@ -2,6 +2,8 @@
 #define OFFICE_WIDGET_TEST
 #include "../OfficeControl.cpp"
 #include <iostream>
+#include <QFontInfo>
+#include <QRawFont>
 void require(bool condition,const char* message) {if(!condition) throw std::runtime_error(message);}
 void mouse(QWidget& widget,QEvent::Type type,QPointF point,Qt::MouseButton button,Qt::MouseButtons buttons) {
     QMouseEvent event(type,point,point,button,buttons,Qt::NoModifier);QApplication::sendEvent(&widget,&event);
@@ -9,6 +11,17 @@ void mouse(QWidget& widget,QEvent::Type type,QPointF point,Qt::MouseButton butto
 int main(int argc,char** argv) {
     QApplication app(argc,argv);
     try {
+        officeui::loadFonts();
+        require(QFontInfo(officeui::body()).family()=="Office Body","Native body font fell back instead of using the recovered asset");
+        require(QFontInfo(officeui::display()).family()=="Office Display","Native display font fell back");
+        for(auto family:{"Office Symbols Outline","Office Symbols Active"}) {
+            QFont f(family);f.setPixelSize(26);auto raw=QRawFont::fromFont(f);
+            for(auto code:officeui::symbolCodes)require(raw.glyphIndexesForString(QString(QChar(code))).at(0)!=0,"A recovered icon maps to a missing glyph");
+        }
+        officeui::Switch toggle("Enable");toggle.resize(160,32);toggle.show();app.processEvents();
+        mouse(toggle,QEvent::MouseButtonPress,{22,16},Qt::LeftButton,Qt::LeftButton);mouse(toggle,QEvent::MouseButtonRelease,{22,16},Qt::LeftButton,Qt::NoButton);require(toggle.isChecked(),"Reference switch lost its real checkbox behavior");
+        officeui::Slider slider;slider.setRange(0,100);slider.resize(220,28);slider.show();app.processEvents();
+        mouse(slider,QEvent::MouseButtonPress,{110,14},Qt::LeftButton,Qt::LeftButton);mouse(slider,QEvent::MouseButtonRelease,{110,14},Qt::LeftButton,Qt::NoButton);require(slider.value()==50,"Reference slider pointer does not match its painted track");
         Json baseline=Json::array({{{"regions",office::encode(std::vector<Region>{{.2f,.3f,.4f,.7f},{.4f,.3f,.6f,.7f}})},
             {"groups",Json::array({{{"first",0},{"count",2}}})}}});
         Json layout=baseline;MapCanvas canvas;canvas.layout=&layout;canvas.resize(900,500);canvas.show();app.processEvents();

@@ -1,0 +1,41 @@
+#pragma once
+#include <QHash>
+#include <QString>
+namespace officeui {
+inline const QHash<QString, ushort> symbolCodes = {
+    {"adjust", 0xE000},
+    {"arrow_back", 0xE001},
+    {"auto_awesome", 0xE002},
+    {"bolt", 0xE003},
+    {"center_focus_strong", 0xE004},
+    {"check_circle", 0xE005},
+    {"delete", 0xE006},
+    {"device_hub", 0xE007},
+    {"device_unknown", 0xE008},
+    {"error", 0xE009},
+    {"fiber_manual_record", 0xE00A},
+    {"fit_screen", 0xE00B},
+    {"folder_open", 0xE00C},
+    {"fullscreen", 0xE00D},
+    {"grid_view", 0xE00E},
+    {"help", 0xE00F},
+    {"http", 0xE010},
+    {"hub", 0xE011},
+    {"info", 0xE012},
+    {"keyboard", 0xE013},
+    {"linear_scale", 0xE014},
+    {"memory", 0xE015},
+    {"music_note", 0xE016},
+    {"play_arrow", 0xE017},
+    {"power_settings_new", 0xE018},
+    {"refresh", 0xE019},
+    {"restart_alt", 0xE01A},
+    {"save", 0xE01B},
+    {"settings_brightness", 0xE01C},
+    {"swap_horiz", 0xE01D},
+    {"tune", 0xE01E},
+    {"volume_up", 0xE01F},
+    {"warning", 0xE020},
+    {"wifi_tethering", 0xE021},
+};
+}

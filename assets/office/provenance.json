@@ -1,0 +1,78 @@
+{
+  "source_release": "v1.2.0",
+  "source_archive_sha256": "9b73dc1b13917d4566a960767d2000894ba23adb4c29e7b8e5bef5d0708c2a7c",
+  "generator": "scripts/Prepare-OfficeFonts.py",
+  "fonttools": "4.60.1",
+  "brotli": "1.2.1",
+  "modification": "WOFF2 decompression, renamed converted OFL families; Material Symbols static axes and used-glyph subset",
+  "glyphs": {
+    "adjust": 57344,
+    "arrow_back": 57345,
+    "auto_awesome": 57346,
+    "bolt": 57347,
+    "center_focus_strong": 57348,
+    "check_circle": 57349,
+    "delete": 57350,
+    "device_hub": 57351,
+    "device_unknown": 57352,
+    "error": 57353,
+    "fiber_manual_record": 57354,
+    "fit_screen": 57355,
+    "folder_open": 57356,
+    "fullscreen": 57357,
+    "grid_view": 57358,
+    "help": 57359,
+    "http": 57360,
+    "hub": 57361,
+    "info": 57362,
+    "keyboard": 57363,
+    "linear_scale": 57364,
+    "memory": 57365,
+    "music_note": 57366,
+    "play_arrow": 57367,
+    "power_settings_new": 57368,
+    "refresh": 57369,
+    "restart_alt": 57370,
+    "save": 57371,
+    "settings_brightness": 57372,
+    "swap_horiz": 57373,
+    "tune": 57374,
+    "volume_up": 57375,
+    "warning": 57376,
+    "wifi_tethering": 57377
+  },
+  "outputs": [
+    {
+      "file": "Orbitron-400.ttf",
+      "sha256": "6ba4d095a47b45e074639781b667330d698803627b5d08d3a12b077d641db90a"
+    },
+    {
+      "file": "Orbitron-700.ttf",
+      "sha256": "a3ab48cdd814cffb1018d154bcb2b44a6220543e878a729166d841e3ad93254e"
+    },
+    {
+      "file": "Rajdhani-400.ttf",
+      "sha256": "2ce475520ae2732382f5f643393b85cf042ab3f606c68d8ead72504ea77a8d57"
+    },
+    {
+      "file": "Rajdhani-500.ttf",
+      "sha256": "e3b2e476da4b67bba06b3a051cc3ed574b2b6bb7cd466b460da94c9ff9a25922"
+    },
+    {
+      "file": "Rajdhani-600.ttf",
+      "sha256": "b28a55bb60a024db347023f7692fc3c974718b5e75fc5961c04bd9d92a34df0d"
+    },
+    {
+      "file": "Rajdhani-700.ttf",
+      "sha256": "e260abc30179faaa14106a09198fa760756f89337cbfc364475501b96ed5d9ec"
+    },
+    {
+      "file": "Symbols-Outline.ttf",
+      "sha256": "3648b4f54ec9e8150614869091af7113ef34b0bed914825236445c28d77333f8"
+    },
+    {
+      "file": "Symbols-Active.ttf",
+      "sha256": "4272e6fc77f2498cfebab9110cd4e08e29dd452e90cfe6e470351855657c4eed"
+    }
+  ]
+}

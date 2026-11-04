@@ -1,0 +1,13 @@
+<RCC><qresource prefix="/office">
+<file alias="LICENSE-Material-Symbols.txt">assets/office/LICENSE-Material-Symbols.txt</file>
+<file alias="LICENSE-Orbitron.txt">assets/office/LICENSE-Orbitron.txt</file>
+<file alias="LICENSE-Rajdhani.txt">assets/office/LICENSE-Rajdhani.txt</file>
+<file alias="Orbitron-400.ttf">assets/office/Orbitron-400.ttf</file>
+<file alias="Orbitron-700.ttf">assets/office/Orbitron-700.ttf</file>
+<file alias="Rajdhani-400.ttf">assets/office/Rajdhani-400.ttf</file>
+<file alias="Rajdhani-500.ttf">assets/office/Rajdhani-500.ttf</file>
+<file alias="Rajdhani-600.ttf">assets/office/Rajdhani-600.ttf</file>
+<file alias="Rajdhani-700.ttf">assets/office/Rajdhani-700.ttf</file>
+<file alias="Symbols-Active.ttf">assets/office/Symbols-Active.ttf</file>
+<file alias="Symbols-Outline.ttf">assets/office/Symbols-Outline.ttf</file>
+</qresource></RCC>
