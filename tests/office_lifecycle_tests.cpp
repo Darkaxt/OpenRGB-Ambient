@@ -65,6 +65,7 @@ struct OfficeLifecycleTest {
         auto saved=owner.config;saved["layout"]=owner.layout;
         {std::ofstream out(path);out<<saved;}
         api.controllers.erase(api.controllers.begin());
+        Controller unknown("Govee ",1);api.controllers.push_back(&unknown);
         OfficeAmbience::Impl restarted(&api,path,false);
         require(restarted.devices.size()==6 && restarted.samples.size()==314 && restarted.report()["online_devices"]==5,"Persisted map boots with a missing device");
         owner.resourcesUpdated(RESOURCEMANAGER_UPDATE_REASON_DETECTION_STARTED);

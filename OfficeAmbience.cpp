@@ -571,7 +571,12 @@ struct OfficeAmbience::Impl {
         std::vector<std::string> order;
         for(auto* controller:api->GetRGBControllers()) {
             auto key=deviceKey(controller);
-            if(key.empty() || !live.emplace(key,controller).second || controller->GetLEDCount()!=expectedCount(key)) throw std::runtime_error("Unexpected or duplicate office controller");
+            if(key.empty() || controller->GetLEDCount()!=expectedCount(key)) {
+                if(!config.contains("layout")) throw std::runtime_error("Unexpected office controller before the initial map exists");
+                controllerError="A detected controller has no matching office identity/LED count; its saved map remains offline";
+                continue;
+            }
+            if(!live.emplace(key,controller).second) throw std::runtime_error("Duplicate office controller identity");
             order.push_back(key);
         }
         if(config.contains("layout")) {
