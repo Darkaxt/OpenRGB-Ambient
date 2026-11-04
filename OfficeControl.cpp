@@ -324,7 +324,7 @@ public:
         auto diagPage=new QWidget;auto diag=new QVBoxLayout(diagPage);diagnostics->setReadOnly(true);diag->addWidget(diagnostics,1);auto recover=new QPushButton("Recover capture");diag->addWidget(recover);pages->addWidget(diagPage);
         save->setEnabled(false);
         connect(save,&QPushButton::clicked,this,[this]{saveChanges();});
-        connect(reload,&QPushButton::clicked,this,[this]{if(dirty && QMessageBox::question(this,"Reload saved map","Discard unsaved mapping changes?")!=QMessageBox::Yes) return;dirty=false;revision=0;if(!client.ready()) client.open(state);else poll();});
+        connect(reload,&QPushButton::clicked,this,[this]{if(dirty && QMessageBox::question(this,"Reload saved map","Discard unsaved mapping changes?")!=QMessageBox::Yes) return;dirty=false;revision=0;if(!client.ready()) client.open(this->state);else poll();});
         connect(enabled,&QCheckBox::toggled,this,[this]{changed();});connect(fps,&QSpinBox::valueChanged,this,[this]{changed();});connect(smooth,&QSpinBox::valueChanged,this,[this]{changed();});
         connect(tree,&QTreeWidget::currentItemChanged,this,[this](QTreeWidgetItem* item,QTreeWidgetItem*){if(updating || !item) return;int g=item->data(0,Qt::UserRole+1).toInt();select(item->data(0,Qt::UserRole).toInt(),std::max(0,g));});
         connect(led,&QComboBox::currentIndexChanged,this,[this]{if(updating) return;map->led=led->currentData().toInt();showGeometry();map->update();});

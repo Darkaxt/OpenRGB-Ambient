@@ -309,15 +309,15 @@ struct CaptureState {
         // Preview is demand-driven and GPU downscaled. It is never a second
         // capture source and does not add full-resolution CPU frame readbacks.
         if(wantPreview) try {
-            D3D11_TEXTURE2D_DESC small{};input->GetDesc(&small);
+            D3D11_TEXTURE2D_DESC previewDesc{};input->GetDesc(&previewDesc);
             unsigned level=0;
-            while((small.Width>>(level+1))>=160 && (small.Height>>(level+1))>=60) ++level;
-            small.Width=std::max(1u,small.Width>>level);small.Height=std::max(1u,small.Height>>level);
-            small.MipLevels=1;small.Usage=D3D11_USAGE_STAGING;small.BindFlags=small.MiscFlags=0;small.CPUAccessFlags=D3D11_CPU_ACCESS_READ;
-            if(!preview) check_hresult(device->CreateTexture2D(&small,nullptr,preview.put()));
+            while((previewDesc.Width>>(level+1))>=160 && (previewDesc.Height>>(level+1))>=60) ++level;
+            previewDesc.Width=std::max(1u,previewDesc.Width>>level);previewDesc.Height=std::max(1u,previewDesc.Height>>level);
+            previewDesc.MipLevels=1;previewDesc.Usage=D3D11_USAGE_STAGING;previewDesc.BindFlags=previewDesc.MiscFlags=0;previewDesc.CPUAccessFlags=D3D11_CPU_ACCESS_READ;
+            if(!preview) check_hresult(device->CreateTexture2D(&previewDesc,nullptr,preview.put()));
             context->CopySubresourceRegion(preview.get(),0,0,0,0,input.get(),level,nullptr);
             check_hresult(context->Map(preview.get(),0,D3D11_MAP_READ,0,&mapped));
-            QImage image(static_cast<const uchar*>(mapped.pData),small.Width,small.Height,mapped.RowPitch,QImage::Format_ARGB32);
+            QImage image(static_cast<const uchar*>(mapped.pData),previewDesc.Width,previewDesc.Height,mapped.RowPitch,QImage::Format_ARGB32);
             QByteArray encoded;QBuffer buffer(&encoded);buffer.open(QIODevice::WriteOnly);bool saved=image.save(&buffer,"PNG");
             context->Unmap(preview.get(),0);wantPreview=false;
             if(saved) previewPng=std::move(encoded);
