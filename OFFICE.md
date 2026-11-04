@@ -1,5 +1,22 @@
 # Main-monitor office ambience
 
+Identical captured LG pixels are rejected by an exact GPU comparison before mip
+generation, blur, media-border detection or colour extraction. Only a four-byte
+change flag reaches the CPU; the full image stays on the GPU. Other-monitor pixel
+changes do not invalidate the LG crop. New dimensions, sources, mapping and image
+settings still invalidate their affected work. Static previews reuse the encoded
+generation rather than recompressing an identical screenshot.
+
+The output clock continues pending colour adaptation, but writes only changed
+LED buffers and submits only changed devices. A device reconnect receives the
+complete retained state even if it is black. Device protocols may batch a whole
+controller frame; per-LED API calls that merely repeat that frame are avoided.
+The Govee driver's independent slow cached-colour keepalive remains in place;
+it does not repeat image processing or re-enter streaming on H6609/H8048.
+Diagnostics distinguish capture callbacks, changed/skipped inputs, sampling
+passes, output-clock ticks, LED writes and native device submissions. An output
+clock rate is not a claim that static hardware receives that many fresh frames.
+
 The office path is opt-in: `office-ambience.json` in OpenRGB's private configuration
 directory activates it. Without this file, the upstream desktop capture/settings
 path remains available. The office path requires the verified six-controller,

@@ -9,7 +9,7 @@
 
 struct Controller : StubRGBControllerInterface {
     std::string name, description;
-    unsigned count, writes=0, modes=0;
+    unsigned count, writes=0, modes=0, submissions=0;
     bool retired=false;
     std::mutex barrier;
     std::condition_variable condition;
@@ -25,7 +25,7 @@ struct Controller : StubRGBControllerInterface {
         alive();++writes;
         if(block) {std::unique_lock lock(barrier);entered=true;condition.notify_all();condition.wait(lock,[&]{return release;});block=false;}
     }
-    void UpdateLEDs() override {alive();}
+    void UpdateLEDs() override {alive();++submissions;}
 };
 struct Api : StubOpenRGBPluginAPIInterface {
     std::vector<RGBControllerInterface*> controllers;
@@ -85,10 +85,30 @@ struct OfficeLifecycleTest {
         // Test the missing-monitor rest policy separately after those assertions.
         owner.dirty=false;
         owner.standbyPreview=true;owner.tick();
+        require(strip.writes==20 && strip.submissions==1,"First delivery must transmit black to uninitialized hardware");
+        owner.tick();require(strip.writes==20 && strip.submissions==1,"Settled black must not resend device output");
         require(!owner.report()["has_valid_frame"].get<bool>(),"Standby output must not claim a captured wallpaper frame");
         owner.standbyPreview=false;for(auto* c:{&strip,&bars,&keys,&laptop,&desk,&mouse}) c->writes=0;
         owner.latest.assign(314,ToRGBColor(255,0,0));owner.dirty=false;
         owner.tick();require(strip.writes==20 && mouse.writes==8,"Initial six-device output");
+        auto sent=owner.deviceSubmissions,writes=owner.ledWrites;
+        owner.tick();owner.tick();
+        require(owner.deviceSubmissions==sent && owner.ledWrites==writes,"Unchanged output skips all controller writes and submissions");
+        owner.latest[4]=ToRGBColor(0,255,0);owner.tick();
+        require(owner.deviceSubmissions==sent+1 && owner.ledWrites==writes+1 && mouse.writes==8,"Only one changed LED and its controller may update");
+        owner.latest[4]=ToRGBColor(255,0,0);owner.tick();
+        owner.config["smoothing_ms"]=140;owner.latest[4]=ToRGBColor(255,1,0);
+        owner.lastOutput=Clock::now()-std::chrono::milliseconds(67);owner.tick();
+        require(owner.devices[0].colors[4]==owner.latest[4],"One-byte pending adaptation must converge instead of stalling");
+        sent=owner.deviceSubmissions;owner.tick();require(owner.deviceSubmissions==sent,"Settled smoothing stops hardware traffic");
+        owner.latest[4]=ToRGBColor(0,0,255);
+        unsigned steps=0;
+        while(owner.devices[0].colors[4]!=owner.latest[4] && steps<256) {
+            owner.lastOutput=Clock::now()-std::chrono::milliseconds(67);owner.tick();++steps;
+        }
+        require(steps>1 && steps<256,"Pending multi-step adaptation must finish without more captured frames");
+        sent=owner.deviceSubmissions;owner.tick();require(owner.deviceSubmissions==sent,"Completed multi-step adaptation goes quiet");
+        owner.config["smoothing_ms"]=0;owner.latest[4]=ToRGBColor(255,0,0);owner.tick();
         auto processing=owner.snapshot(false);auto modified=processing["settings"];
         modified["standby"]="off";
         owner.command({{"command","save"},{"revision",processing["revision"]},{"settings",modified},{"layout",processing["layout"]}});
@@ -148,16 +168,18 @@ struct OfficeLifecycleTest {
         // Unregister removes the pointer, signals synchronously, then deletes it.
         // In-flight output must complete before that synchronous callback returns.
         strip.block=true;
+        owner.latest[0]=ToRGBColor(0,0,255);
         std::thread output([&]{owner.tick();});
         {std::unique_lock lock(strip.barrier);strip.condition.wait(lock,[&]{return strip.entered;});}
         api.controllers.erase(api.controllers.begin());
         std::thread removal([&]{owner.resourcesUpdated(RESOURCEMANAGER_UPDATE_REASON_DEVICE_LIST_UPDATED);strip.retired=true;});
         {std::lock_guard lock(strip.barrier);strip.release=true;strip.condition.notify_all();}
         output.join();removal.join();
+        owner.latest[owner.devices.back().start]=ToRGBColor(0,0,255);
         owner.tick();require(owner.report()["online_devices"]==5,"Missing controller remains offline");
         auto snapshot=owner.snapshot(false);
         require(snapshot["layout"].size()==6 && snapshot["online"][0]==false,"Offline map and metadata retained");
-        require(mouse.writes==24,"Other devices continue while one is offline");
+        require(mouse.writes==9,"Only changed LEDs on other devices continue while one is offline");
 
         Controller replacement("Govee H6609",20);api.controllers.insert(api.controllers.begin(),&replacement);
         owner.resourcesUpdated(RESOURCEMANAGER_UPDATE_REASON_DEVICE_LIST_UPDATED);owner.tick();

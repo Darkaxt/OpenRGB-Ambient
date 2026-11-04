@@ -183,6 +183,7 @@ struct Device {
     std::string key;
     std::string name;
     Json ledNames;
+    bool delivered=false;
 };
 std::string deviceKey(RGBControllerInterface* controller) {
     auto name=controller->GetName();
@@ -255,7 +256,7 @@ struct CaptureState {
     std::string error;
     std::vector<RGBColor> colors;
     std::vector<Sample> effectiveRegions;
-    uint64_t frames=0;
+    uint64_t frames=0,changedFrames=0,skippedFrames=0,samplingPasses=0;
     double lastProcessingMs=0;
     Clock::time_point received{};
     Clock::time_point firstReceived{};
@@ -263,6 +264,11 @@ struct CaptureState {
     com_ptr<ID3D11DeviceContext> context;
     com_ptr<ID3D11Texture2D> input,output,readback;
     com_ptr<ID3D11ShaderResourceView> inputView;
+    com_ptr<ID3D11Texture2D> incoming;
+    com_ptr<ID3D11ShaderResourceView> incomingView;
+    com_ptr<ID3D11ComputeShader> compare;
+    com_ptr<ID3D11Buffer> difference,differenceReadback;
+    com_ptr<ID3D11UnorderedAccessView> differenceView;
     com_ptr<ID3D11RenderTargetView> target;
     com_ptr<ID3D11Texture2D> boundsOutput,boundsReadback;
     com_ptr<ID3D11RenderTargetView> boundsTarget;
@@ -326,6 +332,16 @@ struct CaptureState {
         check_hresult(device->CreatePixelShader(ps->GetBufferPointer(),ps->GetBufferSize(),nullptr,previewPixel.put()));
         ps=nullptr;compile("detectContentPs","ps_5_0",ps);
         check_hresult(device->CreatePixelShader(ps->GetBufferPointer(),ps->GetBufferSize(),nullptr,contentPixel.put()));
+        ps=nullptr;compile("compareCs","cs_5_0",ps);
+        check_hresult(device->CreateComputeShader(ps->GetBufferPointer(),ps->GetBufferSize(),nullptr,compare.put()));
+        D3D11_BUFFER_DESC flag{};flag.ByteWidth=4;flag.Usage=D3D11_USAGE_DEFAULT;
+        flag.BindFlags=D3D11_BIND_UNORDERED_ACCESS;flag.MiscFlags=D3D11_RESOURCE_MISC_BUFFER_ALLOW_RAW_VIEWS;
+        check_hresult(device->CreateBuffer(&flag,nullptr,difference.put()));
+        D3D11_UNORDERED_ACCESS_VIEW_DESC view{};view.Format=DXGI_FORMAT_R32_TYPELESS;view.ViewDimension=D3D11_UAV_DIMENSION_BUFFER;
+        view.Buffer.NumElements=1;view.Buffer.Flags=D3D11_BUFFER_UAV_FLAG_RAW;
+        check_hresult(device->CreateUnorderedAccessView(difference.get(),&view,differenceView.put()));
+        flag.Usage=D3D11_USAGE_STAGING;flag.BindFlags=0;flag.MiscFlags=0;flag.CPUAccessFlags=D3D11_CPU_ACCESS_READ;
+        check_hresult(device->CreateBuffer(&flag,nullptr,differenceReadback.put()));
         configure(office::processingDefaults());
         regions=makeRegions(samples);
         D3D11_SAMPLER_DESC sd{}; sd.Filter=D3D11_FILTER_MIN_MAG_MIP_LINEAR;
@@ -423,7 +439,8 @@ struct CaptureState {
     void processTexture(ID3D11Texture2D* source) {
         auto began=Clock::now();
         D3D11_TEXTURE2D_DESC desc{}; source->GetDesc(&desc);
-        if(!input || sourceW!=desc.Width || sourceH!=desc.Height) {
+        bool resized=!input || sourceW!=desc.Width || sourceH!=desc.Height;
+        if(resized) {
             sourceW=desc.Width; sourceH=desc.Height;
             auto sx=[&](LONG v) { return static_cast<UINT>(std::clamp((double)(v-host.left)/(host.right-host.left)*sourceW,0.0,(double)sourceW)); };
             auto sy=[&](LONG v) { return static_cast<UINT>(std::clamp((double)(v-host.top)/(host.bottom-host.top)*sourceH,0.0,(double)sourceH)); };
@@ -436,17 +453,37 @@ struct CaptureState {
             input=nullptr; inputView=nullptr;preview=nullptr;previewTarget=nullptr;previewView=nullptr;
             check_hresult(device->CreateTexture2D(&desc,nullptr,input.put()));
             check_hresult(device->CreateShaderResourceView(input.get(),nullptr,inputView.put()));
+            desc.MipLevels=1;desc.BindFlags=D3D11_BIND_SHADER_RESOURCE;desc.MiscFlags=0;
+            incoming=nullptr;incomingView=nullptr;
+            check_hresult(device->CreateTexture2D(&desc,nullptr,incoming.put()));
+            check_hresult(device->CreateShaderResourceView(incoming.get(),nullptr,incomingView.put()));
         }
         auto sx=[&](LONG v) { return static_cast<UINT>(std::clamp((double)(v-host.left)/(host.right-host.left)*sourceW,0.0,(double)sourceW)); };
         auto sy=[&](LONG v) { return static_cast<UINT>(std::clamp((double)(v-host.top)/(host.bottom-host.top)*sourceH,0.0,(double)sourceH)); };
         D3D11_BOX crop{sx(monitor.left),sy(monitor.top),0,sx(monitor.right),sy(monitor.bottom),1};
-        context->CopySubresourceRegion(input.get(),0,0,0,0,source,0,&crop);
+        context->CopySubresourceRegion(incoming.get(),0,0,0,0,source,0,&crop);
+        bool changed=resized;
+        if(!resized) {
+            const UINT zero[4]={};context->ClearUnorderedAccessViewUint(differenceView.get(),zero);
+            context->CSSetShader(compare.get(),nullptr,0);
+            auto* previous=inputView.get();auto* next=incomingView.get();auto* flag=differenceView.get();
+            context->CSSetShaderResources(0,1,&previous);context->CSSetShaderResources(2,1,&next);
+            context->CSSetUnorderedAccessViews(0,1,&flag,nullptr);
+            D3D11_TEXTURE2D_DESC size{};incoming->GetDesc(&size);
+            context->Dispatch((size.Width+15)/16,(size.Height+15)/16,1);
+            ID3D11ShaderResourceView* empty[3]={};ID3D11UnorderedAccessView* noFlag=nullptr;
+            context->CSSetShaderResources(0,3,empty);context->CSSetUnorderedAccessViews(0,1,&noFlag,nullptr);
+            context->CopyResource(differenceReadback.get(),difference.get());
+            D3D11_MAPPED_SUBRESOURCE mapped{};check_hresult(context->Map(differenceReadback.get(),0,D3D11_MAP_READ,0,&mapped));
+            changed=*static_cast<const UINT*>(mapped.pData)!=0;context->Unmap(differenceReadback.get(),0);
+        }
+        received=Clock::now();++frames;error.clear();if(frames==1) firstReceived=received;
+        if(!changed) {++skippedFrames;lastProcessingMs=std::chrono::duration<double,std::milli>(received-began).count();return;}
+        ++changedFrames;
+        context->CopySubresourceRegion(input.get(),0,0,0,0,incoming.get(),0,nullptr);
         context->GenerateMips(inputView.get());
         sampleRetained();
-        received=Clock::now(); ++frames;
-        error.clear();
-        if(frames==1) firstReceived=received;
-        lastProcessingMs=std::chrono::duration<double,std::milli>(received-began).count();
+        lastProcessingMs=std::chrono::duration<double,std::milli>(Clock::now()-began).count();
     }
     void sampleRetained() {
         if(!input) return;
@@ -478,6 +515,7 @@ struct CaptureState {
         check_hresult(context->Map(boundsReadback.get(),0,D3D11_MAP_READ,0,&mapped));
         std::memcpy(effectiveRegions.data(),mapped.pData,effectiveRegions.size()*sizeof(Sample));context->Unmap(boundsReadback.get(),0);
         ++previewRevision;
+        ++samplingPasses;
     }
 };
 
@@ -552,6 +590,7 @@ struct OfficeAmbience::Impl {
     Clock::time_point lastOutput=Clock::now(),switched=lastOutput,lastStatus=lastOutput;
     Clock::time_point received{};
     uint64_t outputFrames=0,inputFrames=0;
+    uint64_t changedInputFrames=0,skippedInputFrames=0,samplingPasses=0,deviceSubmissions=0,ledWrites=0;
     double smoothingMs=140,processingMs=0,firstFrameDelayMs=0;
     double callbackToSubmitMs=0,submitMs=0;
     uint64_t deliveredFrames=0,revision=1,sourceGeneration=0;
@@ -834,7 +873,7 @@ struct OfficeAmbience::Impl {
                 if(found || c->GetLEDCount()!=d.count) {controllerError="Reconnected controller identity/count differs: "+d.key;found=nullptr;break;}
                 found=c;
             }
-            if(found && found!=d.controller) found->SetCustomMode();
+            if(found && found!=d.controller) {found->SetCustomMode();d.delivered=false;}
             d.controller=found;
         }
     }
@@ -855,7 +894,7 @@ struct OfficeAmbience::Impl {
         capture.reset(); source=candidate; mode=candidate?selected:"waiting";
         ++sourceGeneration;
         sourceBounds=bounds; monitorBounds=monitor.bounds;
-        switched=Clock::now();firstFrameDelayMs=0;inputFrames=deliveredFrames=0;
+        switched=Clock::now();firstFrameDelayMs=0;inputFrames=deliveredFrames=0;changedInputFrames=skippedInputFrames=samplingPasses=0;
         if(!candidate) error=saver?"Waiting for the LG screensaver window; holding the last valid colours":"No capturable wallpaper host or maximized LG application is available; holding the last valid colours";
         if(candidate) try { capture=std::make_unique<Capture>(candidate,monitor.bounds,samples);std::lock_guard lock(capture->state->mutex);capture->state->configure(config); }
         catch(hresult_error const& failure) { error=to_string(failure.message()); }
@@ -870,7 +909,7 @@ struct OfficeAmbience::Impl {
         const bool resting=!restReason().empty();
         if(resting) {
             capture.reset();source=nullptr;mode="resting";latest.clear();
-            inputFrames=deliveredFrames=0;received={};error.clear();
+            inputFrames=deliveredFrames=0;changedInputFrames=skippedInputFrames=samplingPasses=0;received={};error.clear();
         }
         auto now=Clock::now();
         if(capture) {
@@ -881,7 +920,8 @@ struct OfficeAmbience::Impl {
                 closed=state->closed;
                 if(!closed && state->frames) {
                     if(!sessionLocked && !displayOff) latest=state->colors;
-                    inputFrames=state->frames; processingMs=state->lastProcessingMs;
+                    inputFrames=state->frames;changedInputFrames=state->changedFrames;skippedInputFrames=state->skippedFrames;
+                    samplingPasses=state->samplingPasses;processingMs=state->lastProcessingMs;
                     received=state->received;
                     if(state->error.empty()) error.clear();
                     if(firstFrameDelayMs==0) firstFrameDelayMs=std::chrono::duration<double,std::milli>(state->firstReceived-switched).count();
@@ -894,10 +934,12 @@ struct OfficeAmbience::Impl {
         bool standby=resting || standbyPreview;
         if(!latest.empty() || calibration || !identifyDevice.empty() || standby) {
             auto submitBegan=Clock::now();
+            auto sentBefore=deviceSubmissions;
             double elapsedMs=std::chrono::duration<double,std::milli>(now-lastOutput).count();
             size_t deviceIndex=0;
             {std::lock_guard lock(controllersMutex);
             for(auto& device:devices) {
+                bool changed=false;
                 for(size_t index=0;index<device.count;++index) {
                     bool enabled=config["enabled"].get<bool>() && layout[deviceIndex]["enabled"].get<bool>();
                     for(const auto& group:layout[deviceIndex]["groups"]) if(index>=group.at("first").get<size_t>() && index<group.at("first").get<size_t>()+group.at("count").get<size_t>()) enabled=enabled && group.value("enabled",true);
@@ -915,19 +957,24 @@ struct OfficeAmbience::Impl {
                     if(resting) target=0;
                     auto previous=device.colors[index];
                     double delta=std::max({std::abs(int(RGBGetRValue(target))-int(RGBGetRValue(previous))),std::abs(int(RGBGetGValue(target))-int(RGBGetGValue(previous))),std::abs(int(RGBGetBValue(target))-int(RGBGetBValue(previous)))});
-                    SmoothingColorPostProcessor smooth{office::smoothingWeight(config,elapsedMs,delta)};
-                    auto color=initialized?smooth.process(RGBGetRValue(target),RGBGetGValue(target),RGBGetBValue(target),previous):target;
+                    auto weight=office::smoothingWeight(config,elapsedMs,delta);
+                    auto color=initialized?ToRGBColor(
+                        office::adaptedChannel(RGBGetRValue(target),RGBGetRValue(previous),weight),
+                        office::adaptedChannel(RGBGetGValue(target),RGBGetGValue(previous),weight),
+                        office::adaptedChannel(RGBGetBValue(target),RGBGetBValue(previous),weight)):target;
                     if(testing || !enabled || resting) color=target;
                     device.colors[index]=color;
-                    if(device.controller) device.controller->SetColor(static_cast<unsigned>(index),color);
+                    if(device.controller && (!device.delivered || previous!=color)) {
+                        device.controller->SetColor(static_cast<unsigned>(index),color);changed=true;++ledWrites;
+                    }
                 }
-                if(device.controller) device.controller->UpdateLEDs();
+                if(device.controller && changed) {device.controller->UpdateLEDs();device.delivered=true;++deviceSubmissions;}
                 ++deviceIndex;
             }}
             initialized=true; ++outputFrames;
             auto submitted=Clock::now();
-            submitMs=std::chrono::duration<double,std::milli>(submitted-submitBegan).count();
-            if(inputFrames && deliveredFrames!=inputFrames) {
+            submitMs=deviceSubmissions==sentBefore?0:std::chrono::duration<double,std::milli>(submitted-submitBegan).count();
+            if(deviceSubmissions!=sentBefore && inputFrames && deliveredFrames!=inputFrames) {
                 callbackToSubmitMs=std::chrono::duration<double,std::milli>(submitted-received).count();deliveredFrames=inputFrames;
             }
         }
@@ -942,6 +989,8 @@ struct OfficeAmbience::Impl {
             {"source_generation",sourceGeneration},
             {"devices",devices.size()},{"leds",samples.size()},{"output_frames",outputFrames},
             {"input_frames",inputFrames},{"gpu_processing_ms",processingMs},
+            {"changed_input_frames",changedInputFrames},{"skipped_input_frames",skippedInputFrames},{"sampling_passes",samplingPasses},
+            {"device_submissions",deviceSubmissions},{"led_writes",ledWrites},
             {"callback_to_native_submit_ms",callbackToSubmitMs},{"native_submit_ms",submitMs},
             {"frame_age_ms",received==Clock::time_point{}?Json(nullptr):Json(std::chrono::duration<double,std::milli>(Clock::now()-received).count())},
             {"output_fps",measuredFps},

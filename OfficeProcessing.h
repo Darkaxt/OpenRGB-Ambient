@@ -45,6 +45,13 @@ inline float smoothingWeight(const Json& c,double elapsedMs,double delta) {
     if(c.at("smoothing_mode")=="ema") return static_cast<float>(1-std::pow(1-c.at("ema_alpha").get<double>(),elapsedMs/(1000.0/15)));
     double ms=c.at("smoothing_ms");return ms<=0?1.f:static_cast<float>(1-std::exp(-elapsedMs/ms));
 }
+inline unsigned char adaptedChannel(unsigned char target,unsigned char previous,float weight) {
+    if(target==previous || weight<=0) return previous;
+    int next=std::lround(previous+(int(target)-int(previous))*std::min(weight,1.f));
+    // Integer output must converge, rather than stall below a one-byte step.
+    if(next==previous) next+=target>previous?1:-1;
+    return static_cast<unsigned char>(next);
+}
 inline std::array<unsigned char,3> standbyColor(const Json& c,std::array<unsigned char,3> last,double seconds,float x,float y) {
     std::string mode=c.at("standby");double level=c.at("standby_brightness");
     std::array<double,3> color{last[0]/255.,last[1]/255.,last[2]/255.};

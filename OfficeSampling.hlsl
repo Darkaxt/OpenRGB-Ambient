@@ -1,6 +1,19 @@
 // Same filtered source for LED extraction and the topology's image preview.
 Texture2D image : register(t0);
 Texture2D<float4> activeContent : register(t1);
+Texture2D nextImage : register(t2);
+RWByteAddressBuffer difference : register(u0);
+groupshared uint tileChanged;
+[numthreads(16,16,1)]
+void compareCs(uint3 point:SV_DispatchThreadID,uint local:SV_GroupIndex) {
+    if(local==0) tileChanged=0;
+    GroupMemoryBarrierWithGroupSync();
+    uint w,h;image.GetDimensions(w,h);
+    if(point.x<w && point.y<h && any(image.Load(int3(point.xy,0)).rgb!=nextImage.Load(int3(point.xy,0)).rgb))
+        InterlockedOr(tileChanged,1);
+    GroupMemoryBarrierWithGroupSync();
+    if(local==0 && tileChanged) {uint previous;difference.InterlockedOr(0,1,previous);}
+}
 SamplerState linearSampler : register(s0);
 cbuffer Regions : register(b0) { float4 region[384]; };
 cbuffer Options : register(b1) { float4 algorithm; float4 appearance; float4 borders; float4 spare; };

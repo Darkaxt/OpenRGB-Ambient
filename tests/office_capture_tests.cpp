@@ -110,8 +110,20 @@ int main() {
         auto firstPreview=awaitPreview();
         if(firstPreview.empty() || state.frames!=1)
             throw std::runtime_error("Static retained frame preview requires another capture callback");
+        auto revision=state.previewRevision,passes=state.samplingPasses;
+        state.processTexture(texture.get());
+        if(state.frames!=2 || state.changedFrames!=1 || state.skippedFrames!=1 || state.previewRevision!=revision || state.samplingPasses!=passes)
+            throw std::runtime_error("Identical source must skip sampling and preview invalidation while counting the real callback");
+        if(awaitPreview()!=firstPreview || state.previewEncodes!=1) throw std::runtime_error("Identical captured image must reuse encoded preview");
+        // A pixel outside this LG crop cannot affect the wallpaper input.
+        pixels[0]^=1;state.context->UpdateSubresource(texture.get(),0,nullptr,pixels.data(),128*4,0);state.processTexture(texture.get());
+        if(state.skippedFrames!=2 || state.samplingPasses!=passes) throw std::runtime_error("Other-monitor changes must remain static for the LG");
+        // Exact comparison includes even one low-bit pixel, not just sampled LEDs.
+        pixels[64]^=1;state.context->UpdateSubresource(texture.get(),0,nullptr,pixels.data(),128*4,0);state.processTexture(texture.get());
+        if(state.changedFrames!=2 || state.samplingPasses!=passes+1) throw std::runtime_error("Single-pixel LG change was missed by GPU equality");
+        auto changedPreview=awaitPreview();
         for(int i=0;i<100;++i) state.requestPreview();
-        if(awaitPreview()!=firstPreview || state.previewEncodes!=1) throw std::runtime_error("Unchanged static frames must share one encoded preview across clients");
+        if(awaitPreview()!=changedPreview || state.previewEncodes!=2) throw std::runtime_error("Unchanged static frames must share one encoded preview across clients");
         // The panel's save path must update the actual constant buffer, with
         // unchanged hardware indexes, rather than merely redrawing an editor.
         state.regions=state.makeRegions({around(.75f,.75f,.2f,.2f),around(.25f,.75f,.2f,.2f),
@@ -126,7 +138,7 @@ int main() {
         state.context->UpdateSubresource(texture.get(),0,nullptr,pixels.data(),128*4,0);
         state.processTexture(texture.get());
         for(auto color:state.colors) if(color) throw std::runtime_error("Valid black frame was discarded");
-        if(state.frames!=3) throw std::runtime_error("Frame accounting failed");
+        if(state.frames!=6) throw std::runtime_error("Frame accounting failed");
         // Controls exercise the same GPU path used by the actual lighting.
         std::fill(pixels.begin(),pixels.end(),0xff000000);
         for(unsigned y=0;y<64;++y) for(unsigned x=64;x<96;++x) pixels[y*128+x]=0xffff0000;
@@ -141,7 +153,7 @@ int main() {
         options["brightness"]=1;options["saturation"]=0;state.configure(options);state.sampleRetained();
         auto gray=state.colors[1];if(RGBGetRValue(gray)!=RGBGetGValue(gray) || RGBGetGValue(gray)!=RGBGetBValue(gray)) throw std::runtime_error("Saturation control did not produce gray");
         options["saturation"]=1;state.configure(options);state.sampleRetained();
-        if(state.colors!=unblurred || state.frames!=4) throw std::runtime_error("Static-frame settings failed to restore exact identity without inventing capture frames");
+        if(state.colors!=unblurred || state.frames!=7) throw std::runtime_error("Static-frame settings failed to restore exact identity without inventing capture frames");
         for(unsigned y=0;y<64;++y) for(unsigned x=64;x<128;++x) pixels[y*128+x]=(y<16 || y>=48)?0xff000000:0xffff0000;
         state.context->UpdateSubresource(texture.get(),0,nullptr,pixels.data(),128*4,0);
         state.regions=state.makeRegions(std::vector<Sample>(4,Sample{.1f,0,.9f,.1f}));state.processTexture(texture.get());
@@ -163,6 +175,13 @@ int main() {
         awaitPreview();
         if(!available || !held) throw std::runtime_error("Preview encoding blocks capture or clears the last valid image");
         state.beforePreviewEncode={};
+        auto changedBefore=state.changedFrames;desc.Width=256;desc.Height=128;
+        std::vector<uint32_t> resized(256*128,0xff000000);D3D11_SUBRESOURCE_DATA resizedData{resized.data(),256*4,0};
+        com_ptr<ID3D11Texture2D> resizedTexture;check_hresult(state.device->CreateTexture2D(&desc,&resizedData,resizedTexture.put()));
+        state.processTexture(resizedTexture.get());
+        if(state.changedFrames!=changedBefore+1) throw std::runtime_error("Resized capture must invalidate equality and sampling");
+        auto passesBefore=state.samplingPasses;state.processTexture(resizedTexture.get());
+        if(state.samplingPasses!=passesBefore) throw std::runtime_error("Resized static capture must settle again");
         std::cout<<"PASS: production D3D11 shader, monitor isolation, RGB ordering, valid black, frame accounting\n";
         return 0;
     } catch(hresult_error const& error) { std::cerr<<to_string(error.message())<<'\n'; }
