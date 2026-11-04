@@ -128,7 +128,9 @@ int main() {
         // unchanged hardware indexes, rather than merely redrawing an editor.
         state.regions=state.makeRegions({around(.75f,.75f,.2f,.2f),around(.25f,.75f,.2f,.2f),
                                         around(.75f,.25f,.2f,.2f),around(.25f,.25f,.2f,.2f)});
-        {std::lock_guard lock(state.mutex);state.processTexture(texture.get());}
+        // Production map saves explicitly resample the retained GPU texture;
+        // an unchanged capture callback must not be needed to apply that edit.
+        {std::lock_guard lock(state.mutex);state.sampleRetained();}
         awaitPreview();
         std::reverse(expected.begin(),expected.end());
         if(state.colors!=expected || state.previewBase64.empty())
@@ -138,7 +140,7 @@ int main() {
         state.context->UpdateSubresource(texture.get(),0,nullptr,pixels.data(),128*4,0);
         state.processTexture(texture.get());
         for(auto color:state.colors) if(color) throw std::runtime_error("Valid black frame was discarded");
-        if(state.frames!=6) throw std::runtime_error("Frame accounting failed");
+        if(state.frames!=5) throw std::runtime_error("Frame accounting failed");
         // Controls exercise the same GPU path used by the actual lighting.
         std::fill(pixels.begin(),pixels.end(),0xff000000);
         for(unsigned y=0;y<64;++y) for(unsigned x=64;x<96;++x) pixels[y*128+x]=0xffff0000;
@@ -153,7 +155,7 @@ int main() {
         options["brightness"]=1;options["saturation"]=0;state.configure(options);state.sampleRetained();
         auto gray=state.colors[1];if(RGBGetRValue(gray)!=RGBGetGValue(gray) || RGBGetGValue(gray)!=RGBGetBValue(gray)) throw std::runtime_error("Saturation control did not produce gray");
         options["saturation"]=1;state.configure(options);state.sampleRetained();
-        if(state.colors!=unblurred || state.frames!=7) throw std::runtime_error("Static-frame settings failed to restore exact identity without inventing capture frames");
+        if(state.colors!=unblurred || state.frames!=6) throw std::runtime_error("Static-frame settings failed to restore exact identity without inventing capture frames");
         for(unsigned y=0;y<64;++y) for(unsigned x=64;x<128;++x) pixels[y*128+x]=(y<16 || y>=48)?0xff000000:0xffff0000;
         state.context->UpdateSubresource(texture.get(),0,nullptr,pixels.data(),128*4,0);
         state.regions=state.makeRegions(std::vector<Sample>(4,Sample{.1f,0,.9f,.1f}));state.processTexture(texture.get());
