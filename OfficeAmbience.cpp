@@ -18,11 +18,16 @@
 #include <winrt/Windows.Graphics.DirectX.Direct3D11.h>
 #include "OfficeAmbience.h"
 #include "ColorPostProcessor.h"
+#include "OfficeControlServer.h"
 #include <OpenRGBPluginInterface.h>
 #include <QTimer>
 #include <QSaveFile>
 #include <QFile>
 #include <QDateTime>
+#include <QImage>
+#include <QBuffer>
+#include <QCoreApplication>
+#include <wtsapi32.h>
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -53,7 +58,7 @@ struct DpiContext {
     DpiContext() { check_bool(previous!=nullptr); }
     ~DpiContext() { SetThreadDpiAwarenessContext(previous); }
 };
-struct Sample { float left,top,right,bottom; };
+using Sample=office::Region;
 struct Monitor { HMONITOR handle{}; RECT bounds{}; };
 
 std::wstring windowClass(HWND window) {
@@ -130,6 +135,7 @@ struct Device {
     RGBControllerInterface* controller;
     size_t start,count;
     std::vector<RGBColor> colors;
+    std::string key;
 };
 Sample around(float x,float y,float width,float height) {
     return {std::clamp(x-width/2,0.f,1.f),std::clamp(y-height/2,0.f,1.f),
@@ -224,6 +230,16 @@ struct CaptureState {
     com_ptr<ID3D11SamplerState> sampler;
     unsigned sourceW=0,sourceH=0;
     RECT host{},monitor{};
+    bool wantPreview=false;
+    QByteArray previewPng;
+    com_ptr<ID3D11Texture2D> preview;
+
+    com_ptr<ID3D11Buffer> makeRegions(const std::vector<Sample>& samples) {
+        std::array<Sample,maxSamples> data{};std::copy(samples.begin(),samples.end(),data.begin());
+        D3D11_BUFFER_DESC desc{};desc.ByteWidth=sizeof(data);desc.Usage=D3D11_USAGE_IMMUTABLE;desc.BindFlags=D3D11_BIND_CONSTANT_BUFFER;
+        D3D11_SUBRESOURCE_DATA initial{};initial.pSysMem=data.data();
+        com_ptr<ID3D11Buffer> result;check_hresult(device->CreateBuffer(&desc,&initial,result.put()));return result;
+    }
 
     CaptureState(const std::vector<Sample>& samples,RECT windowBounds,RECT monitorBounds,D3D_DRIVER_TYPE driver=D3D_DRIVER_TYPE_HARDWARE):colors(samples.size()),host(windowBounds),monitor(monitorBounds) {
         check_hresult(D3D11CreateDevice(nullptr,driver,nullptr,D3D11_CREATE_DEVICE_BGRA_SUPPORT,
@@ -234,10 +250,7 @@ struct CaptureState {
         check_hresult(D3DCompile(shader,strlen(shader),nullptr,nullptr,nullptr,"ps","ps_5_0",D3DCOMPILE_OPTIMIZATION_LEVEL3,0,ps.put(),errors.put()));
         check_hresult(device->CreateVertexShader(vs->GetBufferPointer(),vs->GetBufferSize(),nullptr,vertex.put()));
         check_hresult(device->CreatePixelShader(ps->GetBufferPointer(),ps->GetBufferSize(),nullptr,pixel.put()));
-        std::array<Sample,maxSamples> data{}; std::copy(samples.begin(),samples.end(),data.begin());
-        D3D11_BUFFER_DESC buffer{}; buffer.ByteWidth=sizeof(data); buffer.Usage=D3D11_USAGE_IMMUTABLE; buffer.BindFlags=D3D11_BIND_CONSTANT_BUFFER;
-        D3D11_SUBRESOURCE_DATA initial{}; initial.pSysMem=data.data();
-        check_hresult(device->CreateBuffer(&buffer,&initial,regions.put()));
+        regions=makeRegions(samples);
         D3D11_SAMPLER_DESC sd{}; sd.Filter=D3D11_FILTER_MIN_MAG_MIP_LINEAR;
         sd.AddressU=sd.AddressV=sd.AddressW=D3D11_TEXTURE_ADDRESS_CLAMP; sd.MaxLOD=D3D11_FLOAT32_MAX;
         check_hresult(device->CreateSamplerState(&sd,sampler.put()));
@@ -269,7 +282,7 @@ struct CaptureState {
             desc.ArraySize=1; desc.SampleDesc.Count=1; desc.Usage=D3D11_USAGE_DEFAULT;
             desc.BindFlags=D3D11_BIND_SHADER_RESOURCE|D3D11_BIND_RENDER_TARGET;
             desc.CPUAccessFlags=0; desc.MiscFlags=D3D11_RESOURCE_MISC_GENERATE_MIPS;
-            input=nullptr; inputView=nullptr;
+            input=nullptr; inputView=nullptr;preview=nullptr;
             check_hresult(device->CreateTexture2D(&desc,nullptr,input.put()));
             check_hresult(device->CreateShaderResourceView(input.get(),nullptr,inputView.put()));
         }
@@ -293,7 +306,24 @@ struct CaptureState {
         auto* bytes=static_cast<const unsigned char*>(mapped.pData);
         for(size_t i=0;i<colors.size();++i) colors[i]=ToRGBColor(bytes[i*4],bytes[i*4+1],bytes[i*4+2]);
         context->Unmap(readback.get(),0);
+        // Preview is demand-driven and GPU downscaled. It is never a second
+        // capture source and does not add full-resolution CPU frame readbacks.
+        if(wantPreview) try {
+            D3D11_TEXTURE2D_DESC small{};input->GetDesc(&small);
+            unsigned level=0;
+            while((small.Width>>(level+1))>=160 && (small.Height>>(level+1))>=60) ++level;
+            small.Width=std::max(1u,small.Width>>level);small.Height=std::max(1u,small.Height>>level);
+            small.MipLevels=1;small.Usage=D3D11_USAGE_STAGING;small.BindFlags=small.MiscFlags=0;small.CPUAccessFlags=D3D11_CPU_ACCESS_READ;
+            if(!preview) check_hresult(device->CreateTexture2D(&small,nullptr,preview.put()));
+            context->CopySubresourceRegion(preview.get(),0,0,0,0,input.get(),level,nullptr);
+            check_hresult(context->Map(preview.get(),0,D3D11_MAP_READ,0,&mapped));
+            QImage image(static_cast<const uchar*>(mapped.pData),small.Width,small.Height,mapped.RowPitch,QImage::Format_ARGB32);
+            QByteArray encoded;QBuffer buffer(&encoded);buffer.open(QIODevice::WriteOnly);bool saved=image.save(&buffer,"PNG");
+            context->Unmap(preview.get(),0);wantPreview=false;
+            if(saved) previewPng=std::move(encoded);
+        } catch(hresult_error const&) {wantPreview=false;preview=nullptr;}
         received=Clock::now(); ++frames;
+        error.clear();
         if(frames==1) firstReceived=received;
         lastProcessingMs=std::chrono::duration<double,std::milli>(received-began).count();
     }
@@ -314,6 +344,7 @@ public:
         auto dxgi=state->device.as<IDXGIDevice>(); com_ptr<IInspectable> wrapper;
         check_hresult(CreateDirect3D11DeviceFromDXGIDevice(dxgi.get(),wrapper.put()));
         auto winDevice=wrapper.as<IDirect3DDevice>();
+        try {
         pool=Direct3D11CaptureFramePool::CreateFreeThreaded(winDevice,DirectXPixelFormat::B8G8R8A8UIntNormalized,2,item.Size());
         session=pool.CreateCaptureSession(item); session.IsCursorCaptureEnabled(false);
         try { session.IsBorderRequired(false); } catch(hresult_error const&) {}
@@ -323,28 +354,31 @@ public:
         arrived=pool.FrameArrived([owned,winDevice,size](auto const& sender,auto const&) mutable {
             std::lock_guard lock(owned->mutex);
             if(!owned->active) return;
-            auto frame=sender.TryGetNextFrame(); if(!frame) return;
-            auto content=frame.ContentSize();
             try {
-                if(content.Width==size.Width && content.Height==size.Height) owned->process(frame);
+                auto frame=sender.TryGetNextFrame(); if(!frame) return;
+                auto content=frame.ContentSize();
+                auto callbackBegan=Clock::now();
+                if(content.Width==size.Width && content.Height==size.Height) {owned->process(frame);owned->received=callbackBegan;}
+                frame.Close();
+                if(content.Width>0 && content.Height>0 && (content.Width!=size.Width || content.Height!=size.Height)) {
+                    size=content;
+                    sender.Recreate(winDevice,DirectXPixelFormat::B8G8R8A8UIntNormalized,2,size);
+                }
             }
-            catch(hresult_error const& error) { owned->error=to_string(error.message()); }
+            catch(hresult_error const& error) { owned->error=to_string(error.message());if(FAILED(owned->device->GetDeviceRemovedReason())) owned->closed=true; }
             catch(std::exception const& error) { owned->error=error.what(); }
-            frame.Close();
-            if(content.Width>0 && content.Height>0 && (content.Width!=size.Width || content.Height!=size.Height)) {
-                size=content;
-                sender.Recreate(winDevice,DirectXPixelFormat::B8G8R8A8UIntNormalized,2,size);
-            }
         });
         session.StartCapture();
+        } catch(...) {stop();throw;}
     }
-    ~Capture() {
+    void stop() noexcept {
         { std::lock_guard lock(state->mutex); state->active=false; }
-        if(pool) pool.FrameArrived(arrived);
-        if(item) item.Closed(closed);
-        if(session) session.Close();
-        if(pool) pool.Close();
+        try {if(pool && arrived.value) pool.FrameArrived(arrived);} catch(...) {}
+        try {if(item && closed.value) item.Closed(closed);} catch(...) {}
+        try {if(session) session.Close();} catch(...) {}
+        try {if(pool) pool.Close();} catch(...) {}
     }
+    ~Capture() {stop();}
 };
 } // namespace
 
@@ -365,19 +399,138 @@ struct OfficeAmbience::Impl {
     uint64_t outputFrames=0,inputFrames=0;
     double smoothingMs=140,processingMs=0,firstFrameDelayMs=0;
     double callbackToSubmitMs=0,submitMs=0;
+    uint64_t deliveredFrames=0,revision=1;
+    double measuredFps=0;
+    uint64_t previousStatusOutput=0;
+    Json config,layout;
+    std::unique_ptr<OfficeControlServer> control;
+    std::string identifyDevice;
+    bool calibration=false;
+    Clock::time_point identifyUntil{};
+    HWND eventWindow{};
     bool initialized=false;
     std::atomic_bool dirty{true};
+    std::atomic_bool invalidate{false};
     HWINEVENTHOOK systemHook{},objectHook{};
     static inline std::map<HWINEVENTHOOK,Impl*> hooks;
     Apartment apartment;
     DpiContext dpi;
+
+    static LRESULT CALLBACK nativeEvent(HWND window,UINT message,WPARAM w,LPARAM l) {
+        auto self=reinterpret_cast<Impl*>(GetWindowLongPtrW(window,GWLP_USERDATA));
+        if(message==WM_NCCREATE) {
+            self=static_cast<Impl*>(reinterpret_cast<CREATESTRUCTW*>(l)->lpCreateParams);
+            SetWindowLongPtrW(window,GWLP_USERDATA,reinterpret_cast<LONG_PTR>(self));
+        }
+        if(self && (message==WM_DISPLAYCHANGE || (message==WM_POWERBROADCAST && w==PBT_APMRESUMEAUTOMATIC) ||
+                    (message==WM_WTSSESSION_CHANGE && (w==WTS_SESSION_UNLOCK || w==WTS_CONSOLE_CONNECT || w==WTS_REMOTE_CONNECT)))) {self->invalidate=true;self->dirty=true;}
+        return DefWindowProcW(window,message,w,l);
+    }
+
+    Json defaultLayout() const {
+        auto result=Json::array();
+        for(auto& d:devices) {
+            auto regions=std::vector<Sample>(samples.begin()+d.start,samples.begin()+d.start+d.count);
+            auto groups=Json::array();
+            auto group=[&](const char* id,const char* name,unsigned first,unsigned count) {
+                groups.push_back({{"id",id},{"name",name},{"first",first},{"count",count}});
+            };
+            if(d.key=="H6609") {group("left","Monitor - Left",0,3);group("top","Monitor - Top",3,7);group("right","Monitor - Right",10,4);group("bottom","Monitor - Bottom",14,6);}
+            else if(d.key=="H8048") {group("left","Tower - Left",0,10);group("right","Tower - Right",10,10);}
+            else if(d.key=="Legion") {group("keys","Laptop keyboard",0,102);group("front","Laptop front",102,6);group("aux","Laptop auxiliary",108,1);}
+            else group("all",d.controller->GetName().c_str(),0,static_cast<unsigned>(d.count));
+            auto names=Json::array();for(unsigned i=0;i<d.count;++i) names.push_back(d.controller->GetLEDName(i));
+            result.push_back({{"id",d.key},{"name",d.controller->GetName()},{"regions",office::encode(regions)},
+                              {"led_names",names},{"groups",groups},{"enabled",true}});
+        }
+        return result;
+    }
+    std::vector<Sample> validatedLayout(const Json& candidate) const {
+        if(!candidate.is_array() || candidate.size()!=devices.size()) throw std::runtime_error("The map must contain all six connected devices");
+        auto defaults=defaultLayout();std::vector<Sample> result;
+        for(size_t i=0;i<devices.size();++i) {
+            const auto& value=candidate.at(i);const auto& expected=defaults.at(i);
+            if(value.at("id")!=devices[i].key || !value.at("enabled").is_boolean()) throw std::runtime_error("Device identity changed");
+            if(value.at("name")!=expected.at("name") || value.at("led_names")!=expected.at("led_names")) throw std::runtime_error("Physical LED metadata cannot be renamed by editing zone names");
+            auto points=office::validateRegions(value.at("regions"),devices[i].count);
+            if(value.at("groups").size()!=expected.at("groups").size()) throw std::runtime_error("Physical zone grouping changed");
+            for(size_t g=0;g<value.at("groups").size();++g) {
+                const auto& group=value["groups"][g];const auto& baseline=expected["groups"][g];
+                for(auto key:{"id","first","count"}) if(group.at(key)!=baseline.at(key)) throw std::runtime_error("Hardware LED identities cannot be renumbered by editing the map");
+                auto name=group.at("name").get<std::string>();if(name.empty() || name.size()>120) throw std::runtime_error("Zone names need 1-120 UTF-8 bytes");
+            }
+            result.insert(result.end(),points.begin(),points.end());
+        }
+        return result;
+    }
+    void validateSettings(const Json& candidate) const {
+        if(candidate.at("monitor")!=config.at("monitor")) throw std::runtime_error("This panel controls the configured LG display only");
+        if(!candidate.at("enabled").is_boolean() || !candidate.at("fps").is_number_integer() || candidate.at("fps")<1 || candidate.at("fps")>30)
+            throw std::runtime_error("Output FPS must be an integer from 1 to 30");
+        double smooth=candidate.at("smoothing_ms").get<double>();
+        if(!std::isfinite(smooth) || smooth<0 || smooth>2000) throw std::runtime_error("Smoothing must be 0-2000 milliseconds");
+    }
+    Json snapshot(bool preview=false) {
+        if(preview && capture) {std::lock_guard lock(capture->state->mutex);capture->state->wantPreview=true;}
+        auto colours=Json::array();
+        for(auto& d:devices) {auto row=Json::array();for(auto c:d.colors) row.push_back(Json::array({RGBGetRValue(c),RGBGetGValue(c),RGBGetBValue(c)}));colours.push_back(row);}
+        std::string image;
+        if(capture) {std::lock_guard lock(capture->state->mutex);image=capture->state->previewPng.toBase64().toStdString();}
+        return {{"revision",revision},{"settings",{{"monitor",config.at("monitor")},{"enabled",config.at("enabled")},
+                {"fps",config.at("fps")},{"smoothing_ms",config.at("smoothing_ms")}}},
+                {"layout",layout},{"status",report()},{"colors",colours},{"preview_png",image},
+                {"test_mode",calibration?"calibration":identifyDevice.empty()?"none":"identify"}};
+    }
+    Json command(const Json& request) {
+        auto name=request.at("command").get<std::string>();
+        if(name=="snapshot") return snapshot(request.value("preview",false));
+        if(name=="recover") {invalidate=true;dirty=true;return {{"accepted",true}};}
+        if(name=="stop_test") {calibration=false;identifyDevice.clear();return {{"accepted",true}};}
+        if(name=="identify") {
+            auto key=request.at("device").get<std::string>();
+            if(std::none_of(devices.begin(),devices.end(),[&](const auto& d){return d.key==key;})) throw std::runtime_error("Unknown physical device");
+            calibration=false;identifyDevice=key;
+            // User-visible identify duration; never a capture/recovery deadline.
+            identifyUntil=Clock::now()+std::chrono::seconds(2);return {{"accepted",true}};
+        }
+        if(name=="calibrate") {identifyDevice.clear();calibration=true;return {{"accepted",true}};}
+        if(name!="save") throw std::runtime_error("Unknown control command");
+        if(request.at("revision").get<uint64_t>()!=revision) throw std::runtime_error("Settings changed in another panel. Reload before saving");
+        auto next=config;
+        for(auto key:{"monitor","enabled","fps","smoothing_ms"}) next[key]=request.at("settings").at(key);
+        validateSettings(next);
+        auto proposed=request.at("layout");auto points=validatedLayout(proposed);next["layout"]=proposed;
+        // Detect external edits before replacing a private configuration file.
+        std::ifstream currentFile(configPath);Json onDisk;currentFile>>onDisk;
+        // Compare against the exact loaded document, including its original defaults.
+        if(onDisk!=diskConfig) throw std::runtime_error("The private config was edited externally; restart the owner to reload it");
+        std::unique_lock<std::mutex> lock;
+        com_ptr<ID3D11Buffer> newRegions;
+        if(capture) {lock=std::unique_lock(capture->state->mutex);newRegions=capture->state->makeRegions(points);}
+        QSaveFile file(QString::fromStdWString(configPath.wstring()));
+        auto bytes=next.dump(2);
+        if(!file.open(QIODevice::WriteOnly) || file.write(bytes.data(),bytes.size())!=static_cast<qint64>(bytes.size()) || !file.commit())
+            throw std::runtime_error("Could not save settings; the active map is unchanged");
+        if(capture) capture->state->regions=std::move(newRegions);
+        samples=std::move(points);layout=std::move(proposed);config=next;diskConfig=next;smoothingMs=config["smoothing_ms"].get<double>();
+        output.setInterval(std::max(1,static_cast<int>(std::round(1000.0/config["fps"].get<int>()))));
+        ++revision;
+        if(lock.owns_lock()) lock.unlock();
+        return snapshot();
+    }
+    Json diskConfig;
 
     static void CALLBACK winEvent(HWINEVENTHOOK hook,DWORD,HWND,LONG object,LONG,DWORD,DWORD) {
         if(object!=OBJID_WINDOW) return;
         auto found=hooks.find(hook); if(found!=hooks.end()) found->second->dirty=true;
     }
     Impl(OpenRGBPluginAPIInterface* api,const std::filesystem::path& path):api(api),configPath(path) {
-        std::ifstream file(path); Json config; file>>config;
+        std::ifstream file(path);file>>config;diskConfig=config;
+        if(!config.contains("monitor")) config["monitor"]="\\\\.\\DISPLAY2";
+        if(!config.contains("fps")) config["fps"]=15;
+        if(!config.contains("smoothing_ms")) config["smoothing_ms"]=140;
+        if(!config.contains("enabled")) config["enabled"]=true;
+        validateSettings(config);
         auto wide=to_hstring(config.value("monitor",std::string("\\\\.\\DISPLAY2")));
         display.assign(wide.c_str(),wide.size());
         int fps=config.value("fps",15);
@@ -388,26 +541,44 @@ struct OfficeAmbience::Impl {
         for(auto* controller:api->GetRGBControllers()) {
             auto points=deviceSamples(controller);
             if(!names.insert(controller->GetName()).second) throw std::runtime_error("Duplicate office controller");
-            devices.push_back({controller,samples.size(),points.size(),std::vector<RGBColor>(points.size())});
+            auto name=controller->GetName();
+            std::string key=name.find("H6609")!=std::string::npos?"H6609":name.find("H8048")!=std::string::npos?"H8048":
+                name.find("Q6 HE ISO")!=std::string::npos?"Keychron":name.find("Lenovo Legion")!=std::string::npos?"Legion":
+                controller->GetDescription().find("NL72S2")!=std::string::npos?"Secretlab":"Logitech";
+            devices.push_back({controller,samples.size(),points.size(),std::vector<RGBColor>(points.size()),key});
             samples.insert(samples.end(),points.begin(),points.end());
         }
         if(devices.size()!=6 || samples.size()!=314) throw std::runtime_error("Office ambience requires the verified six-device 314-LED inventory");
+        layout=defaultLayout();
+        if(config.contains("layout")) {samples=validatedLayout(config["layout"]);layout=config["layout"];}
         for(auto& device:devices) device.controller->SetCustomMode();
+        try {
         systemHook=SetWinEventHook(EVENT_SYSTEM_FOREGROUND,EVENT_SYSTEM_MINIMIZEEND,nullptr,winEvent,0,0,WINEVENT_OUTOFCONTEXT);
         objectHook=SetWinEventHook(EVENT_OBJECT_CREATE,EVENT_OBJECT_LOCATIONCHANGE,nullptr,winEvent,0,0,WINEVENT_OUTOFCONTEXT);
         if(!systemHook || !objectHook) {
-            if(systemHook) UnhookWinEvent(systemHook);
-            if(objectHook) UnhookWinEvent(objectHook);
             throw std::runtime_error("Window-state event registration failed");
         }
         hooks[systemHook]=this; hooks[objectHook]=this;
+        WNDCLASSW cls{};cls.lpfnWndProc=nativeEvent;cls.lpszClassName=L"OpenRGBOfficeCaptureEvents";cls.hInstance=GetModuleHandleW(nullptr);
+        if(!RegisterClassW(&cls) && GetLastError()!=ERROR_CLASS_ALREADY_EXISTS) throw std::runtime_error("Cannot register capture lifecycle events");
+        eventWindow=CreateWindowW(cls.lpszClassName,L"",0,0,0,0,0,nullptr,nullptr,cls.hInstance,this);
+        if(!eventWindow || !WTSRegisterSessionNotification(eventWindow,NOTIFY_FOR_THIS_SESSION)) throw std::runtime_error("Cannot register session capture events");
+        control=std::make_unique<OfficeControlServer>(QString::fromStdWString(path.parent_path().wstring()),[this](const Json& request){return command(request);});
         QObject::connect(&output,&QTimer::timeout,[this] { tick(); });
         output.setTimerType(Qt::PreciseTimer); output.start(std::max(1,static_cast<int>(std::round(1000.0/fps))));
         status();
+        } catch(...) {control.reset();releaseEvents();throw;}
+    }
+    void releaseEvents() noexcept {
+        if(eventWindow) {WTSUnRegisterSessionNotification(eventWindow);DestroyWindow(eventWindow);eventWindow=nullptr;}
+        UnregisterClassW(L"OpenRGBOfficeCaptureEvents",GetModuleHandleW(nullptr));
+        for(auto hook:{systemHook,objectHook}) if(hook) { hooks.erase(hook); UnhookWinEvent(hook); }
+        systemHook=objectHook=nullptr;
     }
     ~Impl() {
+        control.reset();
         output.stop();
-        for(auto hook:{systemHook,objectHook}) if(hook) { hooks.erase(hook); UnhookWinEvent(hook); }
+        releaseEvents();
         capture.reset();
         mode="stopped"; status();
     }
@@ -417,11 +588,12 @@ struct OfficeAmbience::Impl {
         std::string selected=candidate?"app":"wallpaper";
         if(!candidate && monitor.handle) candidate=wallpaperHost(monitor);
         RECT bounds{}; if(candidate) GetWindowRect(candidate,&bounds);
-        if(candidate==source && capture && EqualRect(&bounds,&sourceBounds) && EqualRect(&monitor.bounds,&monitorBounds)) return;
+        bool force=invalidate.exchange(false);
+        if(!force && candidate==source && capture && EqualRect(&bounds,&sourceBounds) && EqualRect(&monitor.bounds,&monitorBounds)) return;
         capture.reset(); source=candidate; mode=candidate?selected:"waiting";
         sourceBounds=bounds; monitorBounds=monitor.bounds;
-        switched=Clock::now(); firstFrameDelayMs=0;
-        error.clear();
+        switched=Clock::now();firstFrameDelayMs=0;inputFrames=deliveredFrames=0;
+        if(!candidate) error="No capturable wallpaper host or maximized LG application is available; holding the last valid colours";
         if(candidate) try { capture=std::make_unique<Capture>(candidate,monitor.bounds,samples); }
         catch(hresult_error const& failure) { error=to_string(failure.message()); }
         catch(std::exception const& failure) { error=failure.what(); }
@@ -439,44 +611,66 @@ struct OfficeAmbience::Impl {
                 if(!closed && state->frames) {
                     latest=state->colors; inputFrames=state->frames; processingMs=state->lastProcessingMs;
                     received=state->received;
+                    if(state->error.empty()) error.clear();
                     if(firstFrameDelayMs==0) firstFrameDelayMs=std::chrono::duration<double,std::milli>(state->firstReceived-switched).count();
                 }
                 if(!state->error.empty()) error=state->error;
             }
             if(closed) { capture.reset(); source=nullptr; dirty=true; }
         }
-        if(!latest.empty()) {
+        if(!identifyDevice.empty() && now>=identifyUntil) identifyDevice.clear();
+        if(!latest.empty() || calibration || !identifyDevice.empty()) {
             auto submitBegan=Clock::now();
             float weight=smoothingMs<=0?1.f:static_cast<float>(1-std::exp(-std::chrono::duration<double,std::milli>(now-lastOutput).count()/smoothingMs));
             SmoothingColorPostProcessor smooth{weight};
+            size_t deviceIndex=0;
             for(auto& device:devices) {
                 for(size_t index=0;index<device.count;++index) {
-                    auto target=latest[device.start+index];
+                    bool enabled=config["enabled"].get<bool>() && layout[deviceIndex]["enabled"].get<bool>();
+                    auto target=latest.empty()?0:latest[device.start+index];
+                    bool testing=calibration || !identifyDevice.empty();
+                    if(calibration) {
+                        const auto p=samples[device.start+index];float x=(p.left+p.right)/2,y=(p.top+p.bottom)/2;
+                        target=ToRGBColor(static_cast<unsigned char>(x*255),static_cast<unsigned char>((1-y)*255),static_cast<unsigned char>(index%2?40:160));
+                    } else if(!identifyDevice.empty()) target=device.key==identifyDevice?ToRGBColor(255,255,255):0;
+                    else if(!enabled) target=0;
                     auto color=initialized?smooth.process(RGBGetRValue(target),RGBGetGValue(target),RGBGetBValue(target),device.colors[index]):target;
+                    if(testing || !enabled) color=target;
                     device.colors[index]=color;
                     device.controller->SetColor(static_cast<unsigned>(index),color);
                 }
                 device.controller->UpdateLEDs();
+                ++deviceIndex;
             }
             initialized=true; ++outputFrames;
             auto submitted=Clock::now();
             submitMs=std::chrono::duration<double,std::milli>(submitted-submitBegan).count();
-            callbackToSubmitMs=std::chrono::duration<double,std::milli>(submitted-received).count();
+            if(inputFrames && deliveredFrames!=inputFrames) {
+                callbackToSubmitMs=std::chrono::duration<double,std::milli>(submitted-received).count();deliveredFrames=inputFrames;
+            }
         }
         lastOutput=now;
         // Diagnostic reporting cadence never classifies a silent/static frame as
         // failure and never cancels or restarts a valid capture session.
         if(now-lastStatus>=std::chrono::seconds(1)) status();
     }
-    void status() {
-        Json report={{"mode",mode},{"source_hwnd",reinterpret_cast<uintptr_t>(source)},
+    Json report() const {
+        return {{"mode",mode},{"source_hwnd",reinterpret_cast<uintptr_t>(source)},
             {"devices",devices.size()},{"leds",samples.size()},{"output_frames",outputFrames},
             {"input_frames",inputFrames},{"gpu_processing_ms",processingMs},
             {"callback_to_native_submit_ms",callbackToSubmitMs},{"native_submit_ms",submitMs},
+            {"frame_age_ms",received==Clock::time_point{}?Json(nullptr):Json(std::chrono::duration<double,std::milli>(Clock::now()-received).count())},
+            {"output_fps",measuredFps},
             {"first_frame_after_switch_ms",firstFrameDelayMs},{"has_valid_frame",initialized},
             {"error",error},{"updated_utc",QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs).toStdString()}};
+    }
+    void status() {
+        auto elapsed=std::chrono::duration<double>(Clock::now()-lastStatus).count();
+        if(elapsed>0) measuredFps=(outputFrames-previousStatusOutput)/elapsed;
+        previousStatusOutput=outputFrames;
+        auto value=report();
         QSaveFile file(QString::fromStdWString(statusPath.wstring()));
-        if(file.open(QIODevice::WriteOnly)) { auto data=report.dump(2); file.write(data.data(),data.size()); file.commit(); }
+        if(file.open(QIODevice::WriteOnly)) { auto data=value.dump(2); file.write(data.data(),data.size()); file.commit(); }
         lastStatus=Clock::now();
     }
 };

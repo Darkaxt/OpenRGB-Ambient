@@ -12,8 +12,8 @@ if (NOT QT_VERSION)
     set(QT_VERSION 5)
 endif()
 
-set(REQUIRED_LIBS Core Gui Widgets)
-set(REQUIRED_LIBS_QUALIFIED Qt${QT_VERSION}::Core Qt${QT_VERSION}::Gui Qt${QT_VERSION}::Widgets)
+set(REQUIRED_LIBS Core Gui Widgets Network)
+set(REQUIRED_LIBS_QUALIFIED Qt${QT_VERSION}::Core Qt${QT_VERSION}::Gui Qt${QT_VERSION}::Widgets Qt${QT_VERSION}::Network)
 
 set(CMAKE_MODULE_PATH ${CMAKE_SOURCE_DIR})
 
@@ -62,17 +62,28 @@ foreach(directory "" i2c_smbus net_port RGBController dependencies/json qt hidap
     target_include_directories(${PROJECT_NAME} PRIVATE "${OPENRGB_SOURCE_DIR}/${directory}")
 endforeach()
 
+add_executable(OfficeControl WIN32 OfficeControl.cpp OfficeLayout.h)
+target_include_directories(OfficeControl PRIVATE "${OPENRGB_SOURCE_DIR}/dependencies/json")
+target_link_libraries(OfficeControl PRIVATE ${REQUIRED_LIBS_QUALIFIED})
+
 include(CTest)
 if(BUILD_TESTING AND WIN32)
     add_executable(office_capture_tests tests/office_capture_tests.cpp)
     target_include_directories(office_capture_tests PRIVATE $<TARGET_PROPERTY:${PROJECT_NAME},INCLUDE_DIRECTORIES>)
     target_compile_definitions(office_capture_tests PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX _WINSOCKAPI_)
-    target_link_libraries(office_capture_tests PRIVATE ${REQUIRED_LIBS_QUALIFIED} d3d11 dxgi windowsapp d3dcompiler dwmapi)
+    target_link_libraries(office_capture_tests PRIVATE ${REQUIRED_LIBS_QUALIFIED} d3d11 dxgi windowsapp d3dcompiler dwmapi wtsapi32)
     add_test(NAME office_capture COMMAND office_capture_tests)
+    add_executable(office_layout_tests tests/office_layout_tests.cpp)
+    target_include_directories(office_layout_tests PRIVATE "${OPENRGB_SOURCE_DIR}/dependencies/json")
+    add_test(NAME office_layout COMMAND office_layout_tests)
+    add_executable(office_control_tests tests/office_control_tests.cpp)
+    target_include_directories(office_control_tests PRIVATE "${OPENRGB_SOURCE_DIR}/dependencies/json")
+    target_link_libraries(office_control_tests PRIVATE Qt${QT_VERSION}::Core Qt${QT_VERSION}::Network)
+    add_test(NAME office_control COMMAND office_control_tests)
 endif()
 
 if (WIN32)
-    target_link_libraries(${PROJECT_NAME} ${DirectX11_LIBRARY} windowsapp d3dcompiler dwmapi)
+    target_link_libraries(${PROJECT_NAME} ${DirectX11_LIBRARY} windowsapp d3dcompiler dwmapi wtsapi32)
 
     set(DEBUG_SUFFIX)
     if (CMAKE_BUILD_TYPE MATCHES "Debug")

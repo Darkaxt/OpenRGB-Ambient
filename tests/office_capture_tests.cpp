@@ -25,12 +25,20 @@ int main() {
         state.processTexture(texture.get());
         std::vector<RGBColor> expected={ToRGBColor(255,0,0),ToRGBColor(0,255,0),ToRGBColor(0,0,255),ToRGBColor(255,255,0)};
         if(state.colors!=expected) throw std::runtime_error("GPU region average or selected-monitor crop is incorrect");
+        // The panel's save path must update the actual constant buffer, with
+        // unchanged hardware indexes, rather than merely redrawing an editor.
+        state.regions=state.makeRegions({around(.75f,.75f,.2f,.2f),around(.25f,.75f,.2f,.2f),
+                                        around(.75f,.25f,.2f,.2f),around(.25f,.25f,.2f,.2f)});
+        state.wantPreview=true;state.processTexture(texture.get());
+        std::reverse(expected.begin(),expected.end());
+        if(state.colors!=expected || state.previewPng.isEmpty() || state.wantPreview)
+            throw std::runtime_error("Live GPU region replacement or requested capture preview failed");
         // Genuine dark imagery must become dark, not be treated as a bad frame.
         std::fill(pixels.begin(),pixels.end(),0xff000000);
         state.context->UpdateSubresource(texture.get(),0,nullptr,pixels.data(),128*4,0);
         state.processTexture(texture.get());
         for(auto color:state.colors) if(color) throw std::runtime_error("Valid black frame was discarded");
-        if(state.frames!=2) throw std::runtime_error("Frame accounting failed");
+        if(state.frames!=3) throw std::runtime_error("Frame accounting failed");
         std::cout<<"PASS: production D3D11 shader, monitor isolation, RGB ordering, valid black, frame accounting\n";
         return 0;
     } catch(hresult_error const& error) { std::cerr<<to_string(error.message())<<'\n'; }
