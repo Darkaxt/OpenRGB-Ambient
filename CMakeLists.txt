@@ -105,6 +105,13 @@ if (WIN32)
                 "${QT_INSTALL_PATH}/plugins/platforms/qwindows${DEBUG_SUFFIX}.dll"
                 "$<TARGET_FILE_DIR:${PROJECT_NAME}>/plugins/platforms/")
     endif ()
+    # App-owned rendered validation without taking control of the host desktop.
+    if(EXISTS "${QT_INSTALL_PATH}/plugins/platforms/qoffscreen${DEBUG_SUFFIX}.dll")
+        add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy
+            "${QT_INSTALL_PATH}/plugins/platforms/qoffscreen${DEBUG_SUFFIX}.dll"
+            "$<TARGET_FILE_DIR:${PROJECT_NAME}>/plugins/platforms/")
+    endif()
     foreach (QT_LIB ${REQUIRED_LIBS})
         add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
                 COMMAND ${CMAKE_COMMAND} -E copy

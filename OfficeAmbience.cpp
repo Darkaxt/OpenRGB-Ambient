@@ -399,7 +399,7 @@ struct OfficeAmbience::Impl {
     uint64_t outputFrames=0,inputFrames=0;
     double smoothingMs=140,processingMs=0,firstFrameDelayMs=0;
     double callbackToSubmitMs=0,submitMs=0;
-    uint64_t deliveredFrames=0,revision=1;
+    uint64_t deliveredFrames=0,revision=1,sourceGeneration=0;
     double measuredFps=0;
     uint64_t previousStatusOutput=0;
     Json config,layout;
@@ -591,6 +591,7 @@ struct OfficeAmbience::Impl {
         bool force=invalidate.exchange(false);
         if(!force && candidate==source && capture && EqualRect(&bounds,&sourceBounds) && EqualRect(&monitor.bounds,&monitorBounds)) return;
         capture.reset(); source=candidate; mode=candidate?selected:"waiting";
+        ++sourceGeneration;
         sourceBounds=bounds; monitorBounds=monitor.bounds;
         switched=Clock::now();firstFrameDelayMs=0;inputFrames=deliveredFrames=0;
         if(!candidate) error="No capturable wallpaper host or maximized LG application is available; holding the last valid colours";
@@ -656,6 +657,7 @@ struct OfficeAmbience::Impl {
     }
     Json report() const {
         return {{"mode",mode},{"source_hwnd",reinterpret_cast<uintptr_t>(source)},
+            {"source_generation",sourceGeneration},
             {"devices",devices.size()},{"leds",samples.size()},{"output_frames",outputFrames},
             {"input_frames",inputFrames},{"gpu_processing_ms",processingMs},
             {"callback_to_native_submit_ms",callbackToSubmitMs},{"native_submit_ms",submitMs},

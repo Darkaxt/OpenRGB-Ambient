@@ -267,6 +267,15 @@ class Panel : public QMainWindow {
         auto values=map->selected();auto from=office::bounds(values);
         Region to{static_cast<float>(geometry[0]->value()/100),static_cast<float>(geometry[1]->value()/100),0,0};
         to.right=to.left+static_cast<float>(geometry[2]->value()/100);to.bottom=to.top+static_cast<float>(geometry[3]->value()/100);
+        if(rotation%180) {
+            // Quarter-turn about the centre, preserving dimensions in monitor
+            // pixels rather than stretching a horizontal strip inside its old box.
+            float cx=(from.left+from.right)/2,cy=(from.top+from.bottom)/2;
+            float width=(from.bottom-from.top)*2160.f/5120.f,height=(from.right-from.left)*5120.f/2160.f;
+            if(width>1 || height>1) {failure("Resize this zone before rotating it inside the LG image.");return;}
+            float left=std::clamp(cx-width/2,0.f,1-width),top=std::clamp(cy-height/2,0.f,1-height);
+            to={left,top,left+width,top+height};
+        }
         try {map->setSelected(office::transform(values,from,to,rotation,reverse));}
         catch(std::exception const& e) {failure(e.what());showGeometry();}
     }
@@ -282,7 +291,9 @@ class Panel : public QMainWindow {
         exported=true;QDir().mkpath(exportPath);
         Json result={{"native_revision",revision},{"devices",layout.size()},{"views",Json::array()}};
         for(auto size:{QSize(1000,700),QSize(1440,900),QSize(1920,1080)}) {
-            resize(size);select(0,0);
+            resize(size);
+            int device=size.width()==1000?0:size.width()==1440?2:1;
+            select(device,0);tree->setCurrentItem(tree->topLevelItem(device)->child(0));
             for(int page=0;page<4;++page) {
                 pages->setCurrentIndex(page);QApplication::sendPostedEvents();centralWidget()->layout()->activate();
                 auto file=QString("%1/%2x%3-page%4.png").arg(exportPath).arg(size.width()).arg(size.height()).arg(page);
