@@ -197,7 +197,8 @@ public:
     bool showCenter=false;
     QPointF effectCenter{.5,.5};
     std::function<void(QPointF)> centerEdited;
-    float grid=.01f,blur=0;
+    double grid=.01;
+    float blur=0;
     std::function<void()> edited;
     std::function<void(int,int,Qt::KeyboardModifiers)> picked;
     std::function<void(QString)> error;
@@ -273,13 +274,13 @@ public:
         if(!preview.isNull()) p.drawImage(image,preview);
         else {p.fillRect(image,QColor("#102333"));p.setPen(QColor("#cdd6e0"));p.drawText(image,Qt::AlignCenter,"Waiting for a live LG preview");}
         p.save();p.setClipRect(image.intersected(rect()));
-        float visualGrid=std::max(grid,static_cast<float>(20./std::max(1.,image.width())));
         if(showGrid) {
             // White difference composition inverts the preview only. Fill the
             // union once: separate strokes would invert intersections twice.
             QPainterPath lines;lines.setFillRule(Qt::WindingFill);
             const double scale=p.deviceTransform().m11(),pixel=1./scale;
-            for(float at=visualGrid;at<1;at+=visualGrid) {
+            for(int line=1;line*grid<1; ++line) {
+                const double at=line*grid;
                 double x=std::round((image.left()+image.width()*at)*scale)/scale;
                 double y=std::round((image.top()+image.height()*at)*scale)/scale;
                 lines.addRect(QRectF(x,image.top(),pixel,image.height()));

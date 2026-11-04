@@ -28,6 +28,16 @@ void invertedGrid(QApplication& app) {
         require(grid.pixelColor(x+8,y+8)==original.pixelColor(x+8,y+8),"Grid changed pixels between its lines");
         canvas.showGrid=false;require(render(scale)==original,"Disabling grid did not restore the exact preview");
     }
+    canvas.preview.fill(QColor(12,35,68));
+    for(auto size:{QSize(1048,600),QSize(380,280)})for(double scale:{1.,1.5,2.})for(double step:{.01,.05,.1}) {
+        canvas.resize(size);canvas.grid=step;canvas.showGrid=true;auto output=render(scale);auto image=canvas.imageGeometry();
+        const QColor inverse(243,220,187);
+        int x=qRound((image.left()+image.width()*.003)*scale),y=qRound((image.top()+image.height()*.003)*scale),vertical=0,horizontal=0;
+        for(int column=qCeil(image.left()*scale)+1;column<qFloor(image.right()*scale);++column)if(output.pixelColor(column,y)==inverse)++vertical;
+        for(int row=qCeil(image.top()*scale)+1;row<qFloor(image.bottom()*scale);++row)if(output.pixelColor(x,row)==inverse)++horizontal;
+        require(vertical==qRound(1./step)-1 && horizontal==vertical,"Grid percentage must match the actual divisions at every viewport size and DPI");
+    }
+    canvas.resize(1048,600);canvas.grid=.01;
     Json layout=Json::array({{{"regions",office::encode(std::vector<Region>{{.25f,.25f,.55f,.65f}})},
         {"groups",Json::array({{{"first",0},{"count",1}}})}}});
     canvas.layout=&layout;auto saved=layout;
@@ -36,6 +46,11 @@ void invertedGrid(QApplication& app) {
     for(auto point:{bounds.topLeft(),bounds.bottomRight(),canvas.rotationHandle()})
         require(grid.pixelColor(point.toPoint())==original.pixelColor(point.toPoint()),"Grid inverted a selection or rotation handle");
     require(layout==saved,"Rendering the grid changed the saved map");
+    canvas.snap=true;auto p=canvas.selectionGeometry().center();
+    mouse(canvas,QEvent::MouseButtonPress,p,Qt::LeftButton,Qt::LeftButton);
+    mouse(canvas,QEvent::MouseMove,p+QPointF(14,11),Qt::NoButton,Qt::LeftButton);
+    mouse(canvas,QEvent::MouseButtonRelease,p+QPointF(14,11),Qt::LeftButton,Qt::NoButton);
+    require(std::abs(layout[0]["regions"][0][0].get<double>()-.26)<.00001 && std::abs(layout[0]["regions"][0][1].get<double>()-.28)<.00001,"Snapping does not match the visible one-percent grid");
 }
 void multiSelection(QApplication& app) {
     Json original=Json::array();
