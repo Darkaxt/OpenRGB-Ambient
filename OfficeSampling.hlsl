@@ -47,7 +47,7 @@ float4 contentBounds() {
     // Do not crop an entirely black frame into a synthetic bright frame.
     return b;
 }
-float4 ps(Vertex input) : SV_TARGET {
+float4 ps(Vertex input,out float4 sampled : SV_Target1) : SV_Target0 {
     float4 r=region[(uint)input.position.x];float4 content=contentBounds();
     r=float4(lerp(content.xy,content.zw,r.xy),lerp(content.xy,content.zw,r.zw));
     if(algorithm.x==1 || algorithm.x==2) {
@@ -64,6 +64,7 @@ float4 ps(Vertex input) : SV_TARGET {
             depth*=((float)h/w);float left=clamp(mid.x-depth*.5,content.x,max(content.x,content.z-depth));r.x=left;r.z=min(content.z,left+depth);
         }
     }
+    sampled=r;
     float3 values[16];float brightness[16];float3 total=0;
     uint width,height;image.GetDimensions(width,height);
     float lod=max(0,log2(max((r.z-r.x)*width,(r.w-r.y)*height)/4));

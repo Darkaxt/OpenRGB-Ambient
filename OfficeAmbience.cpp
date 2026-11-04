@@ -138,6 +138,7 @@ struct Device {
     RGBControllerInterface* controller;
     size_t start,count;
     std::vector<RGBColor> colors;
+    std::vector<Sample> effectiveRegions;
     std::string key;
     std::string name;
     Json ledNames;
@@ -221,6 +222,8 @@ struct CaptureState {
     com_ptr<ID3D11Texture2D> input,output,readback;
     com_ptr<ID3D11ShaderResourceView> inputView;
     com_ptr<ID3D11RenderTargetView> target;
+    com_ptr<ID3D11Texture2D> boundsOutput,boundsReadback;
+    com_ptr<ID3D11RenderTargetView> boundsTarget;
     com_ptr<ID3D11VertexShader> vertex;
     com_ptr<ID3D11PixelShader> pixel;
     com_ptr<ID3D11PixelShader> previewPixel;
@@ -280,6 +283,11 @@ struct CaptureState {
         check_hresult(device->CreateRenderTargetView(output.get(),nullptr,target.put()));
         desc.Usage=D3D11_USAGE_STAGING; desc.BindFlags=0; desc.CPUAccessFlags=D3D11_CPU_ACCESS_READ;
         check_hresult(device->CreateTexture2D(&desc,nullptr,readback.put()));
+        desc.Format=DXGI_FORMAT_R32G32B32A32_FLOAT;desc.Usage=D3D11_USAGE_DEFAULT;desc.BindFlags=D3D11_BIND_RENDER_TARGET;desc.CPUAccessFlags=0;
+        check_hresult(device->CreateTexture2D(&desc,nullptr,boundsOutput.put()));
+        check_hresult(device->CreateRenderTargetView(boundsOutput.get(),nullptr,boundsTarget.put()));
+        desc.Usage=D3D11_USAGE_STAGING;desc.BindFlags=0;desc.CPUAccessFlags=D3D11_CPU_ACCESS_READ;
+        check_hresult(device->CreateTexture2D(&desc,nullptr,boundsReadback.put()));effectiveRegions.resize(samples.size());
     }
     void process(const Direct3D11CaptureFrame& frame) {
         auto access=frame.Surface().as<::Windows::Graphics::DirectX::Direct3D11::IDirect3DDxgiInterfaceAccess>();
@@ -353,7 +361,7 @@ struct CaptureState {
         if(!input) return;
         D3D11_VIEWPORT viewport{0,0,static_cast<float>(colors.size()),1,0,1};
         context->RSSetViewports(1,&viewport);
-        auto* rt=target.get(); context->OMSetRenderTargets(1,&rt,nullptr);
+        ID3D11RenderTargetView* targets[]={target.get(),boundsTarget.get()};context->OMSetRenderTargets(2,targets,nullptr);
         context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
         context->VSSetShader(vertex.get(),nullptr,0); context->PSSetShader(pixel.get(),nullptr,0);
         auto* constants=regions.get(); context->PSSetConstantBuffers(0,1,&constants);
@@ -367,6 +375,9 @@ struct CaptureState {
         auto* bytes=static_cast<const unsigned char*>(mapped.pData);
         for(size_t i=0;i<colors.size();++i) colors[i]=ToRGBColor(bytes[i*4],bytes[i*4+1],bytes[i*4+2]);
         context->Unmap(readback.get(),0);
+        context->CopyResource(boundsReadback.get(),boundsOutput.get());
+        check_hresult(context->Map(boundsReadback.get(),0,D3D11_MAP_READ,0,&mapped));
+        std::memcpy(effectiveRegions.data(),mapped.pData,effectiveRegions.size()*sizeof(Sample));context->Unmap(boundsReadback.get(),0);
     }
 };
 
@@ -517,13 +528,14 @@ struct OfficeAmbience::Impl {
         if(preview && capture) {std::lock_guard lock(capture->state->mutex);capture->state->wantPreview=true;capture->state->capturePreview();}
         auto colours=Json::array();
         for(auto& d:devices) {auto row=Json::array();for(auto c:d.colors) row.push_back(Json::array({RGBGetRValue(c),RGBGetGValue(c),RGBGetBValue(c)}));colours.push_back(row);}
-        std::string image,previewError;
-        if(capture) {std::lock_guard lock(capture->state->mutex);image=capture->state->previewPng.toBase64().toStdString();previewError=capture->state->previewError;}
+        std::string image,previewError;Json effective=Json::array();
+        if(capture) {std::lock_guard lock(capture->state->mutex);image=capture->state->previewPng.toBase64().toStdString();previewError=capture->state->previewError;
+            for(auto& d:devices) effective.push_back(office::encode(std::vector<Sample>(capture->state->effectiveRegions.begin()+d.start,capture->state->effectiveRegions.begin()+d.start+d.count)));}
         auto online=Json::array();{std::lock_guard lock(controllersMutex);for(auto& d:devices) online.push_back(d.controller!=nullptr);}
         Json settings={{"monitor",config.at("monitor")},{"enabled",config.at("enabled")},{"fps",config.at("fps")},{"smoothing_ms",config.at("smoothing_ms")}};
         const auto defaults=office::processingDefaults();for(auto& [key,value]:defaults.items()) settings[key]=config.at(key);
         return {{"revision",revision},{"online",online},{"settings",settings},
-                {"layout",layout},{"status",report()},{"colors",colours},{"preview_png",image},{"preview_error",previewError},
+                {"layout",layout},{"status",report()},{"colors",colours},{"effective_regions",effective},{"preview_png",image},{"preview_error",previewError},
                 {"test_mode",calibration?"calibration":identifyDevice.empty()?"none":"identify"}};
     }
     Json command(const Json& request) {

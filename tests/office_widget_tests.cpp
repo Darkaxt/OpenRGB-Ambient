@@ -9,7 +9,7 @@ void mouse(QWidget& widget,QEvent::Type type,QPointF point,Qt::MouseButton butto
 int main(int argc,char** argv) {
     QApplication app(argc,argv);
     try {
-        Json baseline=Json::array({{{"regions",Json::array({Json::array({.2,.3,.4,.7}),Json::array({.4,.3,.6,.7})})},
+        Json baseline=Json::array({{{"regions",office::encode(std::vector<Region>{{.2f,.3f,.4f,.7f},{.4f,.3f,.6f,.7f}})},
             {"groups",Json::array({{{"first",0},{"count",2}}})}}});
         Json layout=baseline;MapCanvas canvas;canvas.layout=&layout;canvas.resize(900,500);canvas.show();app.processEvents();
         unsigned edits=0;canvas.edited=[&]{++edits;};

@@ -59,6 +59,14 @@ int main() {
         auto gray=state.colors[1];if(RGBGetRValue(gray)!=RGBGetGValue(gray) || RGBGetGValue(gray)!=RGBGetBValue(gray)) throw std::runtime_error("Saturation control did not produce gray");
         options["saturation"]=1;state.configure(options);state.sampleRetained();
         if(state.colors!=unblurred || state.frames!=4) throw std::runtime_error("Static-frame settings failed to restore exact identity without inventing capture frames");
+        for(unsigned y=0;y<64;++y) for(unsigned x=64;x<128;++x) pixels[y*128+x]=(y<16 || y>=48)?0xff000000:0xffff0000;
+        state.context->UpdateSubresource(texture.get(),0,nullptr,pixels.data(),128*4,0);
+        state.regions=state.makeRegions(std::vector<Sample>(4,Sample{.1f,0,.9f,.1f}));state.processTexture(texture.get());
+        auto bar=RGBGetRValue(state.colors[0]);options["black_bar_detect"]=true;state.configure(options);state.sampleRetained();
+        if(RGBGetRValue(state.colors[0])<=bar+20) throw std::runtime_error("Black bars were not excluded from the actual sample");
+        options["black_bar_detect"]=false;options["strategy"]="fixed";options["depth"]=50;state.configure(options);state.sampleRetained();
+        if(RGBGetRValue(state.colors[0])<=bar+20) throw std::runtime_error("Fixed sampling depth did not reach the image content");
+        for(auto algorithm:{"adaptive","percentile","dominant"}) {options["strategy"]=algorithm;state.configure(options);state.sampleRetained();}
         std::cout<<"PASS: production D3D11 shader, monitor isolation, RGB ordering, valid black, frame accounting\n";
         return 0;
     } catch(hresult_error const& error) { std::cerr<<to_string(error.message())<<'\n'; }

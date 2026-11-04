@@ -160,7 +160,7 @@ class MapCanvas : public QWidget {
     }
 public:
     Json* layout=nullptr;
-    Json colours;
+    Json colours,effective;
     QImage preview;
     int device=0,group=0,led=-1;
     bool showAll=false,showGrid=true,snap=false;
@@ -207,6 +207,10 @@ public:
                 auto r=regions[i];QRectF box(image.left()+r[0].get<double>()*image.width(),image.top()+r[1].get<double>()*image.height(),
                     (r[2].get<double>()-r[0].get<double>())*image.width(),(r[3].get<double>()-r[1].get<double>())*image.height());
                 bool active=static_cast<int>(d)==device && std::find(selectedIds.begin(),selectedIds.end(),i)!=selectedIds.end();
+                if(active && d<effective.size() && i<effective[d].size()) {
+                    auto actual=effective[d][i];QRectF sample(image.left()+actual[0].get<double>()*image.width(),image.top()+actual[1].get<double>()*image.height(),(actual[2].get<double>()-actual[0].get<double>())*image.width(),(actual[3].get<double>()-actual[1].get<double>())*image.height());
+                    p.setPen(QPen(QColor("#ffd26e"),1,Qt::DashLine));p.drawRect(sample);
+                }
                 QColor fill=cyan;fill.setAlpha(active?50:12);p.fillRect(box,fill);
                 p.setPen(QPen(active?cyan:QColor(200,210,225,70),active?1.7:0.5));p.drawRect(box);
                 if(d<colours.size() && i<colours[d].size()) {auto c=colours[d][i];p.fillRect(QRectF(box.left()+1,box.top()+1,std::min(7.,box.width()),std::min(7.,box.height())),QColor(c[0].get<int>(),c[1].get<int>(),c[2].get<int>()));}
@@ -258,7 +262,9 @@ public:
     void keyPressEvent(QKeyEvent* e) override {
         if(!layout || layout->empty()) return;
         if(e->matches(QKeySequence::Undo)) {undo();return;}if(e->matches(QKeySequence::Redo)) {redo();return;}
-        if(e->key()==Qt::Key_Escape && !dragRegions.empty()) {setSelected(dragRegions);dragRegions.clear();handle=0;return;}
+        if(e->key()==Qt::Key_Escape && !dragRegions.empty()) {
+            *layout=undoHistory.back();undoHistory.pop_back();dragRegions.clear();handle=0;update();if(edited) edited();return;
+        }
         float step=e->modifiers()&Qt::ShiftModifier?.001f:.005f,dx=0,dy=0;
         if(e->key()==Qt::Key_Left) dx=-step;else if(e->key()==Qt::Key_Right) dx=step;
         else if(e->key()==Qt::Key_Up) dy=-step;else if(e->key()==Qt::Key_Down) dy=step;else {QWidget::keyPressEvent(e);return;}
@@ -365,6 +371,7 @@ class Panel : public QMainWindow {
             .arg(s.at("callback_to_native_submit_ms").get<double>(),0,'f',2).arg(text(s.at("error"))));
         diagnostics->setPlainText(QString::fromStdString(s.dump(2)));
         map->colours=snapshot.at("colors");
+        map->effective=snapshot.value("effective_regions",Json::array());
         if(snapshot.contains("online")) for(size_t d=0;d<onlineLabels.size();++d) {
             bool online=snapshot.at("online").at(d);onlineLabels[d]->setText(online?"Connected":"Offline · map retained");
             onlineLabels[d]->setStyleSheet(online?"color:#22d3a5":"color:#ff9f1c");
@@ -384,7 +391,7 @@ class Panel : public QMainWindow {
     }
     void poll() {
         if(pending || !client.ready()) return;
-        pending=true;client.send({{"command","snapshot"},{"preview",true}},[this](const Json& r){response(r,[this](const Json& s){load(s);});});
+        pending=true;client.send({{"command","snapshot"},{"preview",pages->currentIndex()==1 || pages->currentIndex()==4 || !exportPath.isEmpty()}},[this](const Json& r){response(r,[this](const Json& s){load(s);});});
     }
     void action(const Json& request) {client.send(request,[this](const Json& r){response(r);poll();});}
     void buildTree() {
@@ -509,6 +516,7 @@ public:
             connect(button,&QPushButton::clicked,this,[this,page]{pages->setCurrentIndex(page);});
         }
         connect(pages,&QStackedWidget::currentChanged,this,[navigationButtons](int page){if(auto button=navigationButtons->button(page)) button->setChecked(true);});
+        connect(pages,&QStackedWidget::currentChanged,this,[this](int page){refresh.setInterval(page==1 || page==4?200:1000);poll();});
         navigationButtons->button(0)->setChecked(true);rail->addStretch();
         auto main=new QVBoxLayout;main->setContentsMargins(16,16,0,0);auto title=new QLabel("Office Ambilight");title->setObjectName("title");main->addWidget(title);main->addWidget(connection);main->addWidget(pages,1);
         auto footer=new QHBoxLayout;footer->addWidget(dirtyLabel);footer->addStretch();auto reload=new QPushButton("Reload saved map");footer->addWidget(reload);footer->addWidget(save);main->addLayout(footer);
@@ -540,7 +548,7 @@ public:
         auto undo=new QPushButton("Undo"),redo=new QPushButton("Redo"),fit=new QPushButton("Fit view");toolbar->addWidget(undo);toolbar->addWidget(redo);toolbar->addWidget(fit);mapLayout->addLayout(toolbar);mapLayout->addWidget(map,1);
         connect(gridToggle,&QCheckBox::toggled,map,[this](bool on){map->showGrid=on;map->update();});connect(snapToggle,&QCheckBox::toggled,map,[this](bool on){map->snap=on;});
         connect(undo,&QPushButton::clicked,map,[this]{map->undo();});connect(redo,&QPushButton::clicked,map,[this]{map->redo();});connect(fit,&QPushButton::clicked,map,[this]{map->fit();});
-        auto note=new QLabel("Drag to move · corners / edges resize · wheel zooms · middle drag pans · Esc cancels · Ctrl+Z undoes");note->setWordWrap(true);mapLayout->addWidget(note);topology->addWidget(mapPage);
+        auto note=new QLabel("Cyan: draft map · dashed amber: live sampling\nDrag to move · corners / edges resize · wheel zooms · middle drag pans · Esc cancels · Ctrl+Z undoes");note->setWordWrap(true);mapLayout->addWidget(note);topology->addWidget(mapPage);
         auto props=new QWidget;props->setMinimumWidth(215);props->setMaximumWidth(285);auto propLayout=new QVBoxLayout(props);auto fields=new QFormLayout;
         fields->setRowWrapPolicy(QFormLayout::WrapAllRows);
         led->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);led->setMinimumContentsLength(10);
