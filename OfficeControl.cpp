@@ -379,7 +379,7 @@ public:
         auto navigationButtons=new QButtonGroup(this);navigationButtons->setExclusive(true);
         int pageIndex=0;for(auto name:{"Control","Topology","Devices","Status"}) {
             auto button=new QPushButton(name);button->setCheckable(true);
-            button->setStyleSheet("padding:8px 2px; QPushButton:checked{border:1px solid #14f5ff;color:#14f5ff;background:#153d49;}");
+            button->setStyleSheet("QPushButton{padding:8px 2px;} QPushButton:checked{border:1px solid #14f5ff;color:#14f5ff;background:#153d49;}");
             button->setMinimumHeight(56);rail->addWidget(button);int page=pageIndex++;navigationButtons->addButton(button,page);
             connect(button,&QPushButton::clicked,this,[this,page]{pages->setCurrentIndex(page);});
         }
