@@ -74,6 +74,9 @@ struct OfficeLifecycleTest {
             laptop("Lenovo Legion 7 Gen 8",109),desk("Secretlab",48,"NL72S2"),mouse("G502 X PLUS",8);
         Api api;api.controllers={&strip,&bars,&keys,&laptop,&desk,&mouse};
         OfficeAmbience::Impl owner(&api,path,false);
+        // Output tests below inject a fresh colour row, not an OS capture source.
+        // Test the missing-monitor rest policy separately after those assertions.
+        owner.dirty=false;
         owner.standbyPreview=true;owner.tick();
         require(!owner.report()["has_valid_frame"].get<bool>(),"Standby output must not claim a captured wallpaper frame");
         owner.standbyPreview=false;for(auto* c:{&strip,&bars,&keys,&laptop,&desk,&mouse}) c->writes=0;
@@ -130,6 +133,7 @@ struct OfficeLifecycleTest {
         OfficeAmbience::Impl::winEvent(fakeHook,EVENT_SYSTEM_DESKTOPSWITCH,nullptr,0,0,0,0);
         require(owner.dirty && owner.invalidate,"Desktop switch invalidates a stale capture");
         OfficeAmbience::Impl::hooks.erase(fakeHook);DestroyWindow(events);UnregisterClassW(eventClass.lpszClassName,eventClass.hInstance);
+        owner.dirty=false;
         owner.latest.assign(314,ToRGBColor(255,0,0));
         for(auto* c:{&strip,&bars,&keys,&laptop,&desk,&mouse}) c->writes=0;
         owner.tick();
@@ -159,6 +163,8 @@ struct OfficeLifecycleTest {
         require(restarted.devices.size()==6 && restarted.samples.size()==314 && restarted.report()["online_devices"]==5,"Persisted map boots with a missing device");
         owner.resourcesUpdated(RESOURCEMANAGER_UPDATE_REASON_DETECTION_STARTED);
         require(owner.report()["online_devices"]==0,"Rescan releases all borrowed pointers before native deletion");
+        owner.dirty=true;owner.tick();
+        require(owner.report()["rest_reason"]=="monitor-disconnected" && owner.latest.empty(),"Missing LG rests instead of replaying stale colours");
     }
 };
 int main(int argc,char** argv) {
