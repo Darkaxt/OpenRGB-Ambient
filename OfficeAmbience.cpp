@@ -48,6 +48,11 @@ struct Apartment {
     Apartment() { if(FAILED(result) && result!=RPC_E_CHANGED_MODE) check_hresult(result); }
     ~Apartment() { if(SUCCEEDED(result)) RoUninitialize(); }
 };
+struct DpiContext {
+    DPI_AWARENESS_CONTEXT previous=SetThreadDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+    DpiContext() { check_bool(previous!=nullptr); }
+    ~DpiContext() { SetThreadDpiAwarenessContext(previous); }
+};
 struct Sample { float left,top,right,bottom; };
 struct Monitor { HMONITOR handle{}; RECT bounds{}; };
 
@@ -365,6 +370,7 @@ struct OfficeAmbience::Impl {
     HWINEVENTHOOK systemHook{},objectHook{};
     static inline std::map<HWINEVENTHOOK,Impl*> hooks;
     Apartment apartment;
+    DpiContext dpi;
 
     static void CALLBACK winEvent(HWINEVENTHOOK hook,DWORD,HWND,LONG object,LONG,DWORD,DWORD) {
         if(object!=OBJID_WINDOW) return;
