@@ -30,6 +30,7 @@
 #include <QScrollArea>
 #include <QCommandLineParser>
 #include <QSaveFile>
+#include <QDebug>
 #include <functional>
 #include <map>
 #include <array>
@@ -193,7 +194,7 @@ class Panel : public QMainWindow {
 
     void changed() {if(updating) return;dirty=true;dirtyLabel->setText("Unsaved changes");save->setEnabled(client.ready());}
     QWidget* groupBox(const QString& title,QLayout* inside) {auto group=new QGroupBox(title);group->setLayout(inside);return group;}
-    void failure(const QString& message) {connection->setText(message);connection->setStyleSheet("color:#ff9f1c");}
+    void failure(const QString& message) {qWarning().noquote()<<message;connection->setText(message);connection->setStyleSheet("color:#ff9f1c");}
     void response(const Json& value,std::function<void(const Json&)> then={}) {
         pending=false;
         if(!value.value("ok",false)) {failure(text(value.at("error")));return;}
@@ -309,7 +310,7 @@ class Panel : public QMainWindow {
         QCoreApplication::quit();
     }
 public:
-    Panel(QString state,QString exportPath):state(std::move(state)),exportPath(std::move(exportPath)) {
+    Panel(QString stateDirectory,QString exportDirectory):state(std::move(stateDirectory)),exportPath(std::move(exportDirectory)) {
         setWindowTitle("Office Ambilight · OpenRGB");resize(1440,900);setMinimumSize(1000,700);
         setStyleSheet("QWidget{background:#040c14;color:#cdd6e0;font-family:'Segoe UI';font-size:14px;} QMainWindow{background:#020a10;} QGroupBox{background:#091722;border:1px solid #23424c;border-radius:12px;margin-top:16px;padding:16px;} QGroupBox::title{color:#14f5ff;subcontrol-origin:margin;left:16px;} QPushButton{background:#102732;border:1px solid #31535e;border-radius:6px;padding:10px;} QPushButton:hover{border-color:#14f5ff;} QPushButton:focus{border:2px solid #14f5ff;} QPushButton:disabled{color:#677783;} QLineEdit,QSpinBox,QDoubleSpinBox,QComboBox{background:#10202c;border:1px solid #31535e;border-radius:5px;padding:7px;} QTreeWidget,QPlainTextEdit{background:#020a10;border:1px solid #23424c;border-radius:6px;} QTreeWidget::item{padding:7px;} QTreeWidget::item:selected{background:#153d49;color:#14f5ff;} QLabel#title{font-size:24px;font-weight:600;color:#eef7ff;} QSplitter::handle{background:#18313c;} QCheckBox{spacing:8px;} QCheckBox::indicator{width:20px;height:20px;}");
         auto central=new QWidget;auto outer=new QHBoxLayout(central);outer->setContentsMargins(0,0,12,12);
@@ -351,7 +352,10 @@ public:
         map->edited=[this]{changed();showGeometry();};
         map->picked=[this](int index){for(int i=1;i<led->count();++i) if(led->itemData(i).toInt()==index) {led->setCurrentIndex(i);break;}};
         client.error=[this](QString message){pending=false;save->setEnabled(false);failure(message);if(!this->exportPath.isEmpty()) QCoreApplication::exit(2);};client.connected=[this]{poll();};
-        connect(&refresh,&QTimer::timeout,this,[this]{poll();});refresh.start(1000);client.open(state);
+        connect(&refresh,&QTimer::timeout,this,[this]{poll();});refresh.start(1000);
+        // Opening after construction also lets a real connection failure exit
+        // diagnostic mode through the running application event loop.
+        QMetaObject::invokeMethod(this,[this]{client.open(state);},Qt::QueuedConnection);
     }
     void closeEvent(QCloseEvent* event) override {
         if(dirty && QMessageBox::question(this,"Unsaved map","Close without saving your changes?")!=QMessageBox::Yes) {event->ignore();return;}
