@@ -232,6 +232,7 @@ struct CaptureState {
     RECT host{},monitor{};
     bool wantPreview=false;
     QByteArray previewPng;
+    std::string previewError;
     com_ptr<ID3D11Texture2D> preview;
 
     com_ptr<ID3D11Buffer> makeRegions(const std::vector<Sample>& samples) {
@@ -268,6 +269,27 @@ struct CaptureState {
         com_ptr<ID3D11Texture2D> source;
         check_hresult(access->GetInterface(__uuidof(ID3D11Texture2D),source.put_void()));
         processTexture(source.get());
+    }
+    void capturePreview() {
+        if(!input) return; // Keep the request until the first real frame arrives.
+        try {
+            D3D11_TEXTURE2D_DESC previewDesc{};input->GetDesc(&previewDesc);
+            unsigned level=0;
+            while((previewDesc.Width>>(level+1))>=160 && (previewDesc.Height>>(level+1))>=60) ++level;
+            previewDesc.Width=std::max(1u,previewDesc.Width>>level);previewDesc.Height=std::max(1u,previewDesc.Height>>level);
+            previewDesc.MipLevels=1;previewDesc.Usage=D3D11_USAGE_STAGING;previewDesc.BindFlags=previewDesc.MiscFlags=0;previewDesc.CPUAccessFlags=D3D11_CPU_ACCESS_READ;
+            if(!preview) check_hresult(device->CreateTexture2D(&previewDesc,nullptr,preview.put()));
+            context->CopySubresourceRegion(preview.get(),0,0,0,0,input.get(),level,nullptr);
+            D3D11_MAPPED_SUBRESOURCE mapped{};
+            check_hresult(context->Map(preview.get(),0,D3D11_MAP_READ,0,&mapped));
+            QImage image(static_cast<const uchar*>(mapped.pData),previewDesc.Width,previewDesc.Height,mapped.RowPitch,QImage::Format_ARGB32);
+            QByteArray encoded;QBuffer buffer(&encoded);buffer.open(QIODevice::WriteOnly);bool saved=image.save(&buffer,"PNG");
+            context->Unmap(preview.get(),0);
+            if(!saved) throw std::runtime_error("Cannot encode the native preview");
+            previewPng=std::move(encoded);previewError.clear();
+        } catch(hresult_error const& e) {previewError=to_string(e.message());preview=nullptr;}
+          catch(std::exception const& e) {previewError=e.what();}
+        wantPreview=false;
     }
     void processTexture(ID3D11Texture2D* source) {
         auto began=Clock::now();
@@ -308,20 +330,7 @@ struct CaptureState {
         context->Unmap(readback.get(),0);
         // Preview is demand-driven and GPU downscaled. It is never a second
         // capture source and does not add full-resolution CPU frame readbacks.
-        if(wantPreview) try {
-            D3D11_TEXTURE2D_DESC previewDesc{};input->GetDesc(&previewDesc);
-            unsigned level=0;
-            while((previewDesc.Width>>(level+1))>=160 && (previewDesc.Height>>(level+1))>=60) ++level;
-            previewDesc.Width=std::max(1u,previewDesc.Width>>level);previewDesc.Height=std::max(1u,previewDesc.Height>>level);
-            previewDesc.MipLevels=1;previewDesc.Usage=D3D11_USAGE_STAGING;previewDesc.BindFlags=previewDesc.MiscFlags=0;previewDesc.CPUAccessFlags=D3D11_CPU_ACCESS_READ;
-            if(!preview) check_hresult(device->CreateTexture2D(&previewDesc,nullptr,preview.put()));
-            context->CopySubresourceRegion(preview.get(),0,0,0,0,input.get(),level,nullptr);
-            check_hresult(context->Map(preview.get(),0,D3D11_MAP_READ,0,&mapped));
-            QImage image(static_cast<const uchar*>(mapped.pData),previewDesc.Width,previewDesc.Height,mapped.RowPitch,QImage::Format_ARGB32);
-            QByteArray encoded;QBuffer buffer(&encoded);buffer.open(QIODevice::WriteOnly);bool saved=image.save(&buffer,"PNG");
-            context->Unmap(preview.get(),0);wantPreview=false;
-            if(saved) previewPng=std::move(encoded);
-        } catch(hresult_error const&) {wantPreview=false;preview=nullptr;}
+        if(wantPreview) capturePreview();
         received=Clock::now(); ++frames;
         error.clear();
         if(frames==1) firstReceived=received;
@@ -471,14 +480,14 @@ struct OfficeAmbience::Impl {
         if(!std::isfinite(smooth) || smooth<0 || smooth>2000) throw std::runtime_error("Smoothing must be 0-2000 milliseconds");
     }
     Json snapshot(bool preview=false) {
-        if(preview && capture) {std::lock_guard lock(capture->state->mutex);capture->state->wantPreview=true;}
+        if(preview && capture) {std::lock_guard lock(capture->state->mutex);capture->state->wantPreview=true;capture->state->capturePreview();}
         auto colours=Json::array();
         for(auto& d:devices) {auto row=Json::array();for(auto c:d.colors) row.push_back(Json::array({RGBGetRValue(c),RGBGetGValue(c),RGBGetBValue(c)}));colours.push_back(row);}
-        std::string image;
-        if(capture) {std::lock_guard lock(capture->state->mutex);image=capture->state->previewPng.toBase64().toStdString();}
+        std::string image,previewError;
+        if(capture) {std::lock_guard lock(capture->state->mutex);image=capture->state->previewPng.toBase64().toStdString();previewError=capture->state->previewError;}
         return {{"revision",revision},{"settings",{{"monitor",config.at("monitor")},{"enabled",config.at("enabled")},
                 {"fps",config.at("fps")},{"smoothing_ms",config.at("smoothing_ms")}}},
-                {"layout",layout},{"status",report()},{"colors",colours},{"preview_png",image},
+                {"layout",layout},{"status",report()},{"colors",colours},{"preview_png",image},{"preview_error",previewError},
                 {"test_mode",calibration?"calibration":identifyDevice.empty()?"none":"identify"}};
     }
     Json command(const Json& request) {

@@ -25,6 +25,11 @@ int main() {
         state.processTexture(texture.get());
         std::vector<RGBColor> expected={ToRGBColor(255,0,0),ToRGBColor(0,255,0),ToRGBColor(0,0,255),ToRGBColor(255,255,0)};
         if(state.colors!=expected) throw std::runtime_error("GPU region average or selected-monitor crop is incorrect");
+        // A static wallpaper may produce no further WGC callbacks. Opening the
+        // editor must still obtain a preview from the retained GPU texture.
+        state.wantPreview=true;state.capturePreview();
+        if(state.previewPng.isEmpty() || state.frames!=1 || state.wantPreview)
+            throw std::runtime_error("Static retained frame preview requires another capture callback");
         // The panel's save path must update the actual constant buffer, with
         // unchanged hardware indexes, rather than merely redrawing an editor.
         state.regions=state.makeRegions({around(.75f,.75f,.2f,.2f),around(.25f,.75f,.2f,.2f),

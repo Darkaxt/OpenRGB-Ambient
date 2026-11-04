@@ -218,6 +218,10 @@ class Panel : public QMainWindow {
         map->colours=snapshot.at("colors");
         auto png=QByteArray::fromBase64(QByteArray::fromStdString(snapshot.value("preview_png",std::string())));
         if(!png.isEmpty()) map->preview.loadFromData(png,"PNG");map->update();
+        if(!snapshot.value("preview_error",std::string()).empty()) {
+            failure(text(snapshot.at("preview_error")));
+            if(!exportPath.isEmpty()) QCoreApplication::exit(1);
+        }
         stopTest->setEnabled(snapshot.at("test_mode")!="none");
         if(!exportPath.isEmpty() && !exported && !map->preview.isNull()) exportViews();
     }
@@ -311,7 +315,7 @@ public:
         auto central=new QWidget;auto outer=new QHBoxLayout(central);outer->setContentsMargins(0,0,12,12);
         auto navigation=new QWidget;navigation->setFixedWidth(80);auto rail=new QVBoxLayout(navigation);rail->setContentsMargins(5,16,5,8);
         auto logo=new QLabel("RGB");logo->setAlignment(Qt::AlignCenter);logo->setStyleSheet("color:#14f5ff;font-weight:600;font-size:18px;padding:16px 0");rail->addWidget(logo);
-        int pageIndex=0;for(auto name:{"Control","Topology","Devices","Status"}) {auto button=new QPushButton(name);button->setMinimumHeight(56);rail->addWidget(button);int page=pageIndex++;connect(button,&QPushButton::clicked,this,[this,page]{pages->setCurrentIndex(page);});}rail->addStretch();
+        int pageIndex=0;for(auto name:{"Control","Topology","Devices","Status"}) {auto button=new QPushButton(name);button->setStyleSheet("padding:8px 2px");button->setMinimumHeight(56);rail->addWidget(button);int page=pageIndex++;connect(button,&QPushButton::clicked,this,[this,page]{pages->setCurrentIndex(page);});}rail->addStretch();
         auto main=new QVBoxLayout;main->setContentsMargins(16,16,0,0);auto title=new QLabel("Office Ambilight");title->setObjectName("title");main->addWidget(title);main->addWidget(connection);main->addWidget(pages,1);
         auto footer=new QHBoxLayout;footer->addWidget(dirtyLabel);footer->addStretch();auto reload=new QPushButton("Reload saved map");footer->addWidget(reload);footer->addWidget(save);main->addLayout(footer);
         outer->addWidget(navigation);outer->addLayout(main,1);setCentralWidget(central);
@@ -346,7 +350,7 @@ public:
         connect(recover,&QPushButton::clicked,this,[this]{action({{"command","recover"}});});
         map->edited=[this]{changed();showGeometry();};
         map->picked=[this](int index){for(int i=1;i<led->count();++i) if(led->itemData(i).toInt()==index) {led->setCurrentIndex(i);break;}};
-        client.error=[this](QString message){pending=false;save->setEnabled(false);failure(message);};client.connected=[this]{poll();};
+        client.error=[this](QString message){pending=false;save->setEnabled(false);failure(message);if(!this->exportPath.isEmpty()) QCoreApplication::exit(2);};client.connected=[this]{poll();};
         connect(&refresh,&QTimer::timeout,this,[this]{poll();});refresh.start(1000);client.open(state);
     }
     void closeEvent(QCloseEvent* event) override {
