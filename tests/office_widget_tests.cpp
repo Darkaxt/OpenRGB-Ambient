@@ -126,10 +126,24 @@ void contextOutlines(QApplication& app) {
     }
     require(layout==original,"Context rendering changed the saved topology");
 }
+void trayMenuBackground() {
+    QWidget parent;parent.setStyleSheet(officeui::stylesheet());QMenu menu(&parent);
+    auto first=menu.addAction("Open Office Ambilight");menu.addSeparator();menu.addAction("Exit panel");
+    menu.ensurePolished();menu.resize(menu.sizeHint());menu.setActiveAction(first);
+    for(double scale:{1.,1.5,2.}) {
+        QImage image(QSize(qRound(menu.width()*scale),qRound(menu.height()*scale)),QImage::Format_ARGB32_Premultiplied);
+        image.setDevicePixelRatio(scale);image.fill(Qt::transparent);menu.render(&image);
+        auto background=image.pixelColor(qRound(5*scale),qRound((menu.height()-5)*scale));
+        require(background.alpha()==255 && background.lightness()<40,"Tray menu must paint an opaque dark background despite the transparent QWidget theme");
+        auto row=menu.actionGeometry(first);auto highlight=image.pixelColor(qRound((row.left()+4)*scale),qRound(row.center().y()*scale));
+        require(highlight.alpha()==255 && highlight!=background,"Tray menu selection must remain visible on its own background");
+    }
+}
 int main(int argc,char** argv) {
     QApplication app(argc,argv);
     try {
         officeui::loadFonts();
+        trayMenuBackground();
         invertedGrid(app);
         contextOutlines(app);
         require(QFontInfo(officeui::body()).family()=="Office Body","Native body font fell back instead of using the recovered asset");
