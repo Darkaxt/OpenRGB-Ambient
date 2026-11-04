@@ -4,6 +4,7 @@
 #include <iostream>
 #include <QFontInfo>
 #include <QRawFont>
+#include <QTest>
 void require(bool condition,const char* message) {if(!condition) throw std::runtime_error(message);}
 void mouse(QWidget& widget,QEvent::Type type,QPointF point,Qt::MouseButton button,Qt::MouseButtons buttons,Qt::KeyboardModifiers modifiers=Qt::NoModifier) {
     QMouseEvent event(type,point,point,button,buttons,modifiers);QApplication::sendEvent(&widget,&event);
@@ -26,8 +27,10 @@ void multiSelection(QApplication& app) {
     require(tree && canvas && view,"Production topology controls missing");
     auto click=[&](QTreeWidgetItem* row,Qt::KeyboardModifiers modifiers=Qt::NoModifier) {
         tree->scrollToItem(row);app.processEvents();auto box=tree->visualItemRect(row);auto p=QPointF(box.left()+75,box.center().y());
-        mouse(*tree->viewport(),QEvent::MouseButtonPress,p,Qt::LeftButton,Qt::LeftButton,modifiers);
-        mouse(*tree->viewport(),QEvent::MouseButtonRelease,p,Qt::LeftButton,Qt::NoButton,modifiers);
+        // QTreeView currentChanged also consults QGuiApplication's modifier
+        // state. QPA injection updates it; a direct sendEvent does not, and
+        // would falsely reset the Shift range anchor to the clicked row.
+        QTest::mouseClick(panel.windowHandle(),Qt::LeftButton,modifiers,tree->viewport()->mapTo(&panel,p.toPoint()));
     };
     auto laptop=tree->topLevelItem(0),desk=tree->topLevelItem(1);
     click(laptop);require(canvas->targets().size()==3,"Device row did not include all laptop zones");
