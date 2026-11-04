@@ -1,4 +1,5 @@
 #include "../OfficeLayout.h"
+#include "../OfficeProcessing.h"
 #include <iostream>
 using namespace office;
 int main() {
@@ -18,6 +19,12 @@ int main() {
         auto identity=transform(points,{.1f,.2f,.4f,.3f},{.1f,.2f,.4f,.3f},0,false);
         for(size_t i=0;i<points.size();++i) if(std::abs(identity[i].left-points[i].left)>.0001f)
             throw std::runtime_error("Opening/saving the editor must not move current samples");
+        Json settings=processingDefaults();settings["smoothing_ms"]=140;validateProcessing(settings);
+        if(smoothingWeight(settings,67,256)!=1) throw std::runtime_error("Scene-cut bypass failed");
+        settings["smoothing_mode"]="ema";auto a=smoothingWeight(settings,40,0),b=smoothingWeight(settings,80,0);
+        if(std::abs((1-a)*(1-a)-(1-b))>.0001) throw std::runtime_error("EMA changes with output FPS");
+        settings["adaptive_min"]=30;rejected=false;try {validateProcessing(settings);}catch(std::exception const&){rejected=true;}
+        if(!rejected) throw std::runtime_error("Inverted adaptive range accepted");
         std::cout<<"PASS: real mapping transform, identity, hardware order and bounds contracts\n";
         return 0;
     } catch(std::exception const& e) { std::cerr<<e.what()<<'\n'; return 1; }

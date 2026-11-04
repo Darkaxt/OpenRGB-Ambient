@@ -1,6 +1,7 @@
 // Native control panel for the office plugin. Recovered EDAmbilight layout and
 // interaction contract: EDAMBILIGHT-GUI-REVIEW.md; no second RGB/capture writer.
 #include "OfficeLayout.h"
+#include "OfficeProcessing.h"
 #include <QApplication>
 #include <QMainWindow>
 #include <QStackedWidget>
@@ -34,6 +35,13 @@
 #include <QElapsedTimer>
 #include <QFontDatabase>
 #include <QButtonGroup>
+#include <QToolButton>
+#include <QSlider>
+#include <QGridLayout>
+#include <QWheelEvent>
+#include <QDesktopServices>
+#include <QUrl>
+#include <QShortcut>
 #include <functional>
 #include <map>
 #include <array>
@@ -43,6 +51,31 @@ using office::Region;
 namespace {
 QString text(const Json& v) {return QString::fromStdString(v.get<std::string>());}
 QColor cyan("#14f5ff");
+
+class ChevronButton : public QToolButton {
+    bool up;
+public:
+    ChevronButton(bool direction,QWidget* parent):QToolButton(parent),up(direction) {
+        setAutoRepeat(true);setFocusPolicy(Qt::NoFocus);setAccessibleName(up?"Increase value":"Decrease value");
+    }
+    void paintEvent(QPaintEvent*) override {
+        QPainter p(this);p.setRenderHint(QPainter::Antialiasing);p.fillRect(rect(),underMouse()?QColor("#19424c"):QColor("#10202c"));
+        p.setPen(QPen(isEnabled()?cyan:QColor("#677783"),1.8,Qt::SolidLine,Qt::RoundCap,Qt::RoundJoin));
+        auto c=rect().center();QPolygonF arrow;arrow<<QPointF(c.x()-4,c.y()+(up?2:-2))<<QPointF(c.x(),c.y()+(up?-2:2))<<QPointF(c.x()+4,c.y()+(up?2:-2));p.drawPolyline(arrow);
+    }
+};
+template<class Base> class Stepper : public Base {
+    ChevronButton *up=new ChevronButton(true,this),*down=new ChevronButton(false,this);
+public:
+    Stepper() {
+        this->setButtonSymbols(QAbstractSpinBox::NoButtons);this->setMinimumHeight(40);
+        this->setStyleSheet("padding-right:32px;");
+        QObject::connect(up,&QToolButton::clicked,this,[this]{this->stepUp();});
+        QObject::connect(down,&QToolButton::clicked,this,[this]{this->stepDown();});
+    }
+protected:
+    void resizeEvent(QResizeEvent* e) override {Base::resizeEvent(e);int half=this->height()/2;up->setGeometry(this->width()-30,1,28,half-1);down->setGeometry(this->width()-30,half,28,this->height()-half-1);}
+};
 
 class Client : public QObject {
     QLocalSocket socket;
@@ -99,21 +132,48 @@ public:
 
 class MapCanvas : public QWidget {
     QPointF dragStart;
+    QPointF panStart,pan;
+    double zoom=1;
+    unsigned handle=0;
+    bool panning=false;
     std::vector<Region> dragRegions;
+    std::vector<Json> undoHistory,redoHistory;
+    void checkpoint() {undoHistory.push_back(*layout);redoHistory.clear();}
+    QRectF screenBounds() const {
+        auto b=office::bounds(selected());auto image=imageRect();
+        return {image.left()+b.left*image.width(),image.top()+b.top*image.height(),(b.right-b.left)*image.width(),(b.bottom-b.top)*image.height()};
+    }
+    unsigned hitHandle(QPointF point) const {
+        if(selected().empty()) return 0;auto b=screenBounds();
+        if(!b.adjusted(-8,-8,8,8).contains(point)) return 0;
+        unsigned h=0;if(std::abs(point.x()-b.left())<=8) h|=1;else if(std::abs(point.x()-b.right())<=8) h|=2;
+        if(std::abs(point.y()-b.top())<=8) h|=4;else if(std::abs(point.y()-b.bottom())<=8) h|=8;return h;
+    }
+    void pointerCursor(QPointF p) {
+        auto h=hitHandle(p);setCursor(h==5 || h==10?Qt::SizeFDiagCursor:h==6 || h==9?Qt::SizeBDiagCursor:h&3?Qt::SizeHorCursor:h&12?Qt::SizeVerCursor:screenBounds().contains(p)?Qt::SizeAllCursor:Qt::ArrowCursor);
+    }
     QRectF imageRect() const {
         auto area=rect().adjusted(12,12,-12,-12);double width=area.width(),height=width*2160/5120;
         if(height>area.height()) {height=area.height();width=height*5120/2160;}
-        return {area.center().x()-width/2,area.center().y()-height/2,width,height};
+        width*=zoom;height*=zoom;
+        return {area.center().x()-width/2+pan.x(),area.center().y()-height/2+pan.y(),width,height};
     }
 public:
     Json* layout=nullptr;
     Json colours;
     QImage preview;
     int device=0,group=0,led=-1;
-    bool showAll=false;
+    bool showAll=false,showGrid=true,snap=false;
+    float grid=.01f,blur=0;
     std::function<void()> edited;
     std::function<void(int)> picked;
-    MapCanvas() {setMinimumSize(280,210);setFocusPolicy(Qt::StrongFocus);setAccessibleName("Actual LG sampling map");}
+    MapCanvas() {setMinimumSize(280,210);setMouseTracking(true);setFocusPolicy(Qt::StrongFocus);setAccessibleName("Actual LG sampling map");}
+    QRectF imageGeometry() const {return imageRect();}
+    QRectF selectionGeometry() const {return screenBounds();}
+    void resetHistory() {undoHistory.clear();redoHistory.clear();}
+    void undo() {if(undoHistory.empty()) return;redoHistory.push_back(*layout);*layout=undoHistory.back();undoHistory.pop_back();update();if(edited) edited();}
+    void redo() {if(redoHistory.empty()) return;undoHistory.push_back(*layout);*layout=redoHistory.back();redoHistory.pop_back();update();if(edited) edited();}
+    void fit() {zoom=1;pan={};update();}
     std::vector<unsigned> indices() const {
         if(!layout || layout->empty()) return {};
         const auto& g=layout->at(device).at("groups").at(group);
@@ -125,7 +185,8 @@ public:
         std::vector<Region> out;if(!layout) return out;
         for(auto i:indices()) {auto r=layout->at(device).at("regions").at(i);out.push_back({r[0],r[1],r[2],r[3]});}return out;
     }
-    void setSelected(const std::vector<Region>& values) {
+    void setSelected(const std::vector<Region>& values,bool remember=false) {
+        if(remember) checkpoint();
         auto ids=indices();for(size_t i=0;i<ids.size();++i) (*layout)[device]["regions"][ids[i]]=office::encode(values[i]);
         update();if(edited) edited();
     }
@@ -134,9 +195,10 @@ public:
         p.fillRect(rect(),QColor("#020a10"));
         if(!preview.isNull()) p.drawImage(image,preview);
         else {p.fillRect(image,QColor("#102333"));p.setPen(QColor("#cdd6e0"));p.drawText(image,Qt::AlignCenter,"Waiting for a live LG preview");}
+        p.save();p.setClipRect(image.intersected(rect()));
         p.setPen(QPen(QColor(255,255,255,22),1));
-        for(int i=1;i<10;++i) {p.drawLine(QPointF(image.left()+image.width()*i/10,image.top()),QPointF(image.left()+image.width()*i/10,image.bottom()));p.drawLine(QPointF(image.left(),image.top()+image.height()*i/10),QPointF(image.right(),image.top()+image.height()*i/10));}
-        if(!layout || layout->empty()) return;
+        if(showGrid) for(float at=grid;at<1;at+=grid) {p.drawLine(QPointF(image.left()+image.width()*at,image.top()),QPointF(image.left()+image.width()*at,image.bottom()));p.drawLine(QPointF(image.left(),image.top()+image.height()*at),QPointF(image.right(),image.top()+image.height()*at));}
+        if(!layout || layout->empty()) {p.restore();return;}
         auto selectedIds=indices();
         for(size_t d=0;d<layout->size();++d) {
             if(!showAll && static_cast<int>(d)!=device) continue;
@@ -151,33 +213,57 @@ public:
                 if(active && (led>=0 || selectedIds.size()<=10) && box.width()>18 && box.height()>16) {p.setPen(Qt::white);p.drawText(box,Qt::AlignCenter,QString::number(i));}
             }
         }
-        p.setPen(cyan);p.drawRect(image);
+        p.restore();p.setPen(cyan);p.drawRect(image);
+        if(!selectedIds.empty()) {
+            auto b=screenBounds();p.setPen(QPen(cyan,2));p.setBrush(Qt::NoBrush);p.drawRect(b);
+            if(blur>0) {p.setPen(QPen(QColor(255,210,110,190),1,Qt::DashLine));p.drawRect(b.adjusted(-blur*image.height(),-blur*image.height(),blur*image.height(),blur*image.height()).intersected(image));}
+            p.setPen(QPen(QColor("#00141c"),1));p.setBrush(cyan);
+            for(auto x:{b.left(),b.center().x(),b.right()}) for(auto y:{b.top(),b.center().y(),b.bottom()})
+                if(x!=b.center().x() || y!=b.center().y()) p.drawRect(QRectF(x-4,y-4,8,8));
+            auto values=selected();if(values.size()>1) {
+                auto point=[&](Region r){return QPointF(image.left()+(r.left+r.right)*.5*image.width(),image.top()+(r.top+r.bottom)*.5*image.height());};
+                auto a=point(values.front()),z=point(values.back());QLineF line(a,z);
+                p.setPen(QPen(Qt::white,2));p.drawLine(line);
+                if(line.length()>16) {double angle=std::atan2(z.y()-a.y(),z.x()-a.x());QPointF u(std::cos(angle),std::sin(angle)),v(-u.y(),u.x());p.drawLine(z,z-u*12+v*6);p.drawLine(z,z-u*12-v*6);}
+            }
+        }
     }
     void mousePressEvent(QMouseEvent* e) override {
+        if(e->button()==Qt::MiddleButton) {panning=true;panStart=e->position()-pan;setCursor(Qt::ClosedHandCursor);return;}
         if(e->button()!=Qt::LeftButton || !layout || layout->empty()) return;
-        auto area=imageRect();auto point=e->position();if(!area.contains(point)) return;
+        auto area=imageRect();auto point=e->position();handle=hitHandle(point);if(!handle && !area.contains(point)) return;
         QPointF normalized((point.x()-area.left())/area.width(),(point.y()-area.top())/area.height());
         auto selectedValues=selected();auto box=office::bounds(selectedValues);
-        if(!QRectF(QPointF(box.left,box.top),QPointF(box.right,box.bottom)).contains(normalized)) {
+        if(!handle && !QRectF(QPointF(box.left,box.top),QPointF(box.right,box.bottom)).contains(normalized)) {
             const auto& regions=(*layout)[device]["regions"];
             for(size_t i=0;i<regions.size();++i) {auto r=regions[i];if(normalized.x()>=r[0].get<double>() && normalized.x()<=r[2].get<double>() && normalized.y()>=r[1].get<double>() && normalized.y()<=r[3].get<double>()) {if(picked) picked(static_cast<int>(i));break;}}
         }
-        dragStart=normalized;dragRegions=selected();setFocus();
+        dragStart=normalized;dragRegions=selected();checkpoint();setFocus();
     }
     void mouseMoveEvent(QMouseEvent* e) override {
-        if(!(e->buttons()&Qt::LeftButton) || dragRegions.empty()) return;
+        if(panning) {pan=e->position()-panStart;update();return;}
+        if(!(e->buttons()&Qt::LeftButton) || dragRegions.empty()) {if(layout && !layout->empty()) pointerCursor(e->position());return;}
         auto area=imageRect();double dx=(e->position().x()-area.left())/area.width()-dragStart.x(),dy=(e->position().y()-area.top())/area.height()-dragStart.y();
-        auto b=office::bounds(dragRegions);dx=std::clamp(dx,-double(b.left),1.-b.right);dy=std::clamp(dy,-double(b.top),1.-b.bottom);
+        auto b=office::bounds(dragRegions);
+        if(handle) {auto to=office::resizeBounds(b,handle,static_cast<float>(dx),static_cast<float>(dy),.001f,snap?grid:0);setSelected(office::transform(dragRegions,b,to,0,false));return;}
+        if(snap) {dx=std::round((b.left+dx)/grid)*grid-b.left;dy=std::round((b.top+dy)/grid)*grid-b.top;}
+        dx=std::clamp(dx,-double(b.left),1.-b.right);dy=std::clamp(dy,-double(b.top),1.-b.bottom);
         auto values=dragRegions;for(auto& r:values) {r.left+=static_cast<float>(dx);r.right+=static_cast<float>(dx);r.top+=static_cast<float>(dy);r.bottom+=static_cast<float>(dy);}setSelected(values);
     }
-    void mouseReleaseEvent(QMouseEvent*) override {dragRegions.clear();}
+    void mouseReleaseEvent(QMouseEvent* e) override {panning=false;dragRegions.clear();handle=0;if(layout && !layout->empty()) pointerCursor(e->position());}
+    void wheelEvent(QWheelEvent* e) override {
+        double next=std::clamp(zoom*std::pow(1.2,e->angleDelta().y()/120.0),1.,8.);
+        auto anchor=e->position()-QPointF(rect().center());pan=anchor-(anchor-pan)*(next/zoom);zoom=next;update();e->accept();
+    }
     void keyPressEvent(QKeyEvent* e) override {
         if(!layout || layout->empty()) return;
+        if(e->matches(QKeySequence::Undo)) {undo();return;}if(e->matches(QKeySequence::Redo)) {redo();return;}
+        if(e->key()==Qt::Key_Escape && !dragRegions.empty()) {setSelected(dragRegions);dragRegions.clear();handle=0;return;}
         float step=e->modifiers()&Qt::ShiftModifier?.001f:.005f,dx=0,dy=0;
         if(e->key()==Qt::Key_Left) dx=-step;else if(e->key()==Qt::Key_Right) dx=step;
         else if(e->key()==Qt::Key_Up) dy=-step;else if(e->key()==Qt::Key_Down) dy=step;else {QWidget::keyPressEvent(e);return;}
         auto values=selected();auto b=office::bounds(values);dx=std::clamp(dx,-b.left,1-b.right);dy=std::clamp(dy,-b.top,1-b.bottom);
-        for(auto& r:values) {r.left+=dx;r.right+=dx;r.top+=dy;r.bottom+=dy;}setSelected(values);
+        for(auto& r:values) {r.left+=dx;r.right+=dx;r.top+=dy;r.bottom+=dy;}setSelected(values,true);
     }
 };
 
@@ -201,8 +287,12 @@ class Panel : public QMainWindow {
     QLabel* dirtyLabel=new QLabel;
     QPushButton* save=new QPushButton("Save changes");
     QCheckBox* enabled=new QCheckBox("Ambience enabled");
-    QSpinBox* fps=new QSpinBox;
-    QSpinBox* smooth=new QSpinBox;
+    QSpinBox* fps=new Stepper<QSpinBox>;
+    QSpinBox* smooth=new Stepper<QSpinBox>;
+    std::map<std::string,QDoubleSpinBox*> numbers;
+    std::map<std::string,QComboBox*> choices;
+    QCheckBox* blackBars=new QCheckBox("Detect black bars");
+    QLabel* deviceSummary=new QLabel;
     QTreeWidget* tree=new QTreeWidget;
     MapCanvas* map=new MapCanvas;
     QLineEdit* zoneName=new QLineEdit;
@@ -215,6 +305,32 @@ class Panel : public QMainWindow {
 
     void changed() {if(updating) return;dirty=true;dirtyLabel->setText("Unsaved changes");save->setEnabled(client.ready());}
     QWidget* groupBox(const QString& title,QLayout* inside) {auto group=new QGroupBox(title);group->setLayout(inside);return group;}
+    QWidget* number(const std::string& key,double minimum,double maximum,double step,const QString& suffix={}) {
+        auto row=new QWidget;auto line=new QHBoxLayout(row);line->setContentsMargins(0,0,0,0);
+        auto slider=new QSlider(Qt::Horizontal);auto spin=new Stepper<QDoubleSpinBox>;
+        spin->setRange(minimum,maximum);spin->setSingleStep(step);spin->setDecimals(step>=1?0:2);spin->setSuffix(suffix);spin->setFixedWidth(112);
+        spin->setAccessibleName(QString::fromStdString(key));slider->setAccessibleName(QString::fromStdString(key)+" slider");
+        slider->setRange(0,qRound((maximum-minimum)/step));
+        connect(spin,&QDoubleSpinBox::valueChanged,slider,[=](double n){slider->setValue(qRound((n-minimum)/step));});
+        connect(slider,&QSlider::valueChanged,spin,[=](int n){spin->setValue(minimum+n*step);});
+        connect(spin,&QDoubleSpinBox::valueChanged,this,[this,key](double n){if(key=="blur") {map->blur=n/100;map->update();}changed();});
+        numbers[key]=spin;line->addWidget(slider,1);line->addWidget(spin);return row;
+    }
+    QComboBox* choice(const std::string& key,std::initializer_list<std::pair<const char*,const char*>> entries) {
+        auto combo=new QComboBox;for(auto [label,value]:entries) combo->addItem(label,value);
+        combo->setAccessibleName(QString::fromStdString(key));choices[key]=combo;
+        connect(combo,&QComboBox::currentIndexChanged,this,[this]{changed();});return combo;
+    }
+    void preset(const QString& name) {
+        Json c=office::processingDefaults();c["fps"]=15;c["smoothing_ms"]=140;
+        if(name!="Reset") {c["strategy"]="adaptive";c["smoothing_mode"]="ema";c["scene_cut"]=60;c["black_bar_detect"]=true;c["saturation"]=1.4;
+            if(name=="Cinema") {c["ema_alpha"]=.2;c["scene_cut"]=80;c["blur"]=2;}
+            if(name=="Gaming") {c["fps"]=30;c["ema_alpha"]=.7;c["scene_cut"]=40;}
+            if(name=="Calm") {c["ema_alpha"]=.1;c["scene_cut"]=255;c["blur"]=4;c["brightness"]=.6;}}
+        for(auto& [key,box]:numbers) box->setValue(c.at(key).get<double>());
+        for(auto& [key,combo]:choices) combo->setCurrentIndex(combo->findData(text(c.at(key))));
+        blackBars->setChecked(c.at("black_bar_detect"));fps->setValue(c.at("fps"));smooth->setValue(c.at("smoothing_ms"));changed();
+    }
     void trace(const QString& message) {
         if(exportPath.isEmpty()) return;
         QFile log(exportPath+".events.jsonl");
@@ -234,10 +350,15 @@ class Panel : public QMainWindow {
             int selectedDevice=map->device,selectedGroup=map->group;
             updating=true;revision=snapshot.at("revision");settings=snapshot.at("settings");layout=snapshot.at("layout");
             enabled->setChecked(settings.at("enabled"));fps->setValue(settings.at("fps"));smooth->setValue(static_cast<int>(settings.at("smoothing_ms").get<double>()));
+            for(auto& [key,box]:numbers) box->setValue(settings.value(key,office::processingDefaults().at(key)).get<double>());
+            for(auto& [key,combo]:choices) combo->setCurrentIndex(combo->findData(text(settings.value(key,office::processingDefaults().at(key)))));
+            blackBars->setChecked(settings.value("black_bar_detect",false));
+            map->blur=settings.value("blur",0.f)/100;map->resetHistory();
             map->layout=&layout;map->device=map->group=0;map->led=-1;buildTree();buildDevices();
             dirty=false;dirtyLabel->setText("Saved");save->setEnabled(false);updating=false;select(selectedDevice,selectedGroup);
         }
         auto s=snapshot.at("status");
+        deviceSummary->setText(QString("%1 / %2 devices online  ·  %3 mapped LEDs").arg(s.at("online_devices").get<int>()).arg(layout.size()).arg(s.at("leds").get<int>()));
         status->setText(QString("%1\n%2 FPS output · %3 captured frames\nGPU sampling %4 ms · new-frame submission %5 ms\n%6")
             .arg(text(s.at("mode")).toUpper()).arg(s.at("output_fps").get<double>(),0,'f',1)
             .arg(s.at("input_frames").get<uint64_t>()).arg(s.at("gpu_processing_ms").get<double>(),0,'f',2)
@@ -319,12 +440,15 @@ class Panel : public QMainWindow {
             float left=std::clamp(cx-width/2,0.f,1-width),top=std::clamp(cy-height/2,0.f,1-height);
             to={left,top,left+width,top+height};
         }
-        try {map->setSelected(office::transform(values,from,to,rotation,reverse));}
+        try {map->setSelected(office::transform(values,from,to,rotation,reverse),true);}
         catch(std::exception const& e) {failure(e.what());showGeometry();}
     }
     void saveChanges() {
         if(pending || !revision) return;
         settings["enabled"]=enabled->isChecked();settings["fps"]=fps->value();settings["smoothing_ms"]=smooth->value();
+        for(auto& [key,box]:numbers) settings[key]=box->value();
+        for(auto& [key,combo]:choices) settings[key]=combo->currentData().toString().toStdString();
+        settings["black_bar_detect"]=blackBars->isChecked();
         pending=true;save->setEnabled(false);
         client.send({{"command","save"},{"revision",revision},{"settings",settings},{"layout",layout}},[this](const Json& r){
             response(r,[this](const Json& s){load(s,true);});if(dirty) save->setEnabled(true);
@@ -373,8 +497,9 @@ public:
         clock.start();client.trace=[this](QString event){trace(event);};trace("panel-constructing");
         setWindowTitle("Office Ambilight · OpenRGB");resize(1440,900);setMinimumSize(1000,700);
         setStyleSheet("QWidget{background:#040c14;color:#cdd6e0;font-family:'Segoe UI';font-size:14px;} QMainWindow{background:#020a10;} QGroupBox{background:#091722;border:1px solid #23424c;border-radius:12px;margin-top:16px;padding:16px;} QGroupBox::title{color:#14f5ff;subcontrol-origin:margin;left:16px;} QPushButton{background:#102732;border:1px solid #31535e;border-radius:6px;padding:10px;} QPushButton:hover{border-color:#14f5ff;} QPushButton:focus{border:2px solid #14f5ff;} QPushButton:disabled{color:#677783;} QLineEdit,QSpinBox,QDoubleSpinBox,QComboBox{background:#10202c;border:1px solid #31535e;border-radius:5px;padding:7px;} QTreeWidget,QPlainTextEdit{background:#020a10;border:1px solid #23424c;border-radius:6px;} QTreeWidget::item{padding:7px;} QTreeWidget::item:selected{background:#153d49;color:#14f5ff;} QLabel#title{font-size:24px;font-weight:600;color:#eef7ff;} QSplitter::handle{background:#18313c;} QCheckBox{spacing:8px;} QCheckBox::indicator{width:20px;height:20px;}");
+        setStyleSheet(styleSheet()+"QLabel,QCheckBox{background:transparent;} QGroupBox::title{font-weight:600;} QSlider{background:transparent;min-height:28px;} QSlider::groove:horizontal{height:4px;background:#29404b;border-radius:2px;} QSlider::sub-page:horizontal{background:#14f5ff;} QSlider::handle:horizontal{background:#14f5ff;border:2px solid #00303a;width:14px;margin:-6px 0;border-radius:8px;} QScrollArea{border:0;} QComboBox{min-height:26px;padding-right:26px;} QComboBox::drop-down{width:28px;border-left:1px solid #31535e;} QToolButton{padding:0;border:0;} QScrollBar:vertical{background:#07131e;width:10px;} QScrollBar::handle:vertical{background:#31535e;min-height:24px;} ");
         auto central=new QWidget;auto outer=new QHBoxLayout(central);outer->setContentsMargins(0,0,12,12);
-        auto navigation=new QWidget;navigation->setFixedWidth(80);auto rail=new QVBoxLayout(navigation);rail->setContentsMargins(5,16,5,8);
+        auto navigation=new QWidget;navigation->setFixedWidth(88);auto rail=new QVBoxLayout(navigation);rail->setContentsMargins(5,16,5,8);
         auto logo=new QLabel("RGB");logo->setAlignment(Qt::AlignCenter);logo->setStyleSheet("color:#14f5ff;font-weight:600;font-size:18px;padding:16px 0");rail->addWidget(logo);
         auto navigationButtons=new QButtonGroup(this);navigationButtons->setExclusive(true);
         int pageIndex=0;for(auto name:{"Control","Topology","Devices","Status"}) {
@@ -389,23 +514,48 @@ public:
         auto footer=new QHBoxLayout;footer->addWidget(dirtyLabel);footer->addStretch();auto reload=new QPushButton("Reload saved map");footer->addWidget(reload);footer->addWidget(save);main->addLayout(footer);
         outer->addWidget(navigation);outer->addLayout(main,1);setCentralWidget(central);
 
-        auto controlPage=new QWidget;auto controls=new QVBoxLayout(controlPage);auto form=new QFormLayout;
-        fps->setRange(1,30);fps->setSuffix(" FPS");smooth->setRange(0,2000);smooth->setSingleStep(20);smooth->setSuffix(" ms");
-        form->addRow(enabled);form->addRow("Output target",fps);form->addRow("Colour adaptation",smooth);
-        controls->addWidget(groupBox("Output",form));auto source=new QLabel("LG wallpaper behind ordinary windows. Maximized/fullscreen LG apps take priority.\nOther monitors do not change the source.");source->setWordWrap(true);controls->addWidget(source);
-        auto live=new QVBoxLayout;status->setWordWrap(true);status->setMinimumHeight(130);live->addWidget(status);controls->addWidget(groupBox("Live capture",live));
-        auto test=new QHBoxLayout;auto calibrate=new QPushButton("Show spatial calibration");test->addWidget(calibrate);test->addWidget(stopTest);controls->addLayout(test);controls->addStretch();pages->addWidget(controlPage);
+        auto controlPage=new QWidget;auto controls=new QVBoxLayout(controlPage);auto dashboard=new QGridLayout;dashboard->setSpacing(14);
+        fps->setRange(1,60);fps->setSuffix(" FPS");smooth->setRange(0,2000);smooth->setSingleStep(20);smooth->setSuffix(" ms");
+        auto stateCard=new QVBoxLayout;stateCard->addWidget(enabled);status->setWordWrap(true);stateCard->addWidget(status);dashboard->addWidget(groupBox("Status",stateCard),0,0);
+        auto rateCard=new QVBoxLayout;rateCard->addWidget(fps);auto rateSlider=new QSlider(Qt::Horizontal);rateSlider->setRange(1,60);rateCard->addWidget(rateSlider);
+        connect(rateSlider,&QSlider::valueChanged,fps,&QSpinBox::setValue);connect(fps,&QSpinBox::valueChanged,rateSlider,&QSlider::setValue);dashboard->addWidget(groupBox("FPS target",rateCard),0,1);
+        auto sourceCard=new QVBoxLayout;auto source=new QLabel("Windows Graphics Capture\n\nLG wallpaper behind ordinary windows. Maximized / fullscreen LG apps take priority.");source->setWordWrap(true);sourceCard->addWidget(source);dashboard->addWidget(groupBox("Capture engine",sourceCard),0,2);
+        auto algorithm=new QVBoxLayout;algorithm->addWidget(choice("strategy",{{"Mapped area · mean","mapped"},{"Fixed depth + smoothing","fixed"},{"Adaptive depth + smoothing","adaptive"},{"80th percentile","percentile"},{"Dominant · median colour","dominant"}}));algorithm->addWidget(blackBars);dashboard->addWidget(groupBox("Algorithm",algorithm),1,0);
+        auto depth=new QFormLayout;depth->setRowWrapPolicy(QFormLayout::WrapAllRows);depth->addRow("Fixed depth",number("depth",.1,50,.1," %"));depth->addRow("Minimum depth",number("adaptive_min",.1,50,.1," %"));depth->addRow("Maximum depth",number("adaptive_max",.1,50,.1," %"));dashboard->addWidget(groupBox("Sampling area",depth),1,1);
+        auto temporal=new QFormLayout;temporal->setRowWrapPolicy(QFormLayout::WrapAllRows);temporal->addRow(choice("smoothing_mode",{{"Time-based adaptation","time"},{"EMA · frame-rate independent","ema"}}));temporal->addRow("Adaptation",smooth);temporal->addRow("EMA alpha",number("ema_alpha",.05,1,.01));temporal->addRow("Scene-cut threshold",number("scene_cut",0,255,1));dashboard->addWidget(groupBox("Temporal smoothing",temporal),1,2);
+        auto outputCard=new QFormLayout;outputCard->setRowWrapPolicy(QFormLayout::WrapAllRows);outputCard->addRow("Saturation",number("saturation",0,2.5,.05));outputCard->addRow("Brightness",number("brightness",0,2,.05));outputCard->addRow("Minimum luminance",number("min_luminance",0,255,1));dashboard->addWidget(groupBox("Output",outputCard),2,0);
+        auto blurCard=new QVBoxLayout;blurCard->addWidget(number("blur",0,10,.1," %"));auto blurHint=new QLabel("Spatial diffusion before LED sampling. The dashed outline in Topology shows the extra footprint.");blurHint->setWordWrap(true);blurCard->addWidget(blurHint);dashboard->addWidget(groupBox("Spatial blur",blurCard),2,1);
+        auto standby=new QFormLayout;standby->setRowWrapPolicy(QFormLayout::WrapAllRows);standby->addRow(choice("standby",{{"Hold last image","hold"},{"Slow fade","fade"},{"Dim glow","dim"},{"Pulse","pulse"},{"Rotating colours","rotate"},{"Aurora","aurora"},{"Ember","ember"},{"Off","off"}}));standby->addRow("Standby brightness",number("standby_brightness",0,1,.01));dashboard->addWidget(groupBox("Screen standby",standby),2,2);
+        controls->addLayout(dashboard);auto presets=new QHBoxLayout;presets->addWidget(new QLabel("Presets"));
+        for(auto name:{"Balanced","Cinema","Gaming","Calm","Reset"}) {auto button=new QPushButton(name);presets->addWidget(button);connect(button,&QPushButton::clicked,this,[this,name]{preset(name);});}
+        controls->addLayout(presets);controls->addWidget(deviceSummary);
+        auto advanced=new QCheckBox("Show advanced controls");advanced->setChecked(true);controls->addWidget(advanced);
+        connect(advanced,&QCheckBox::toggled,this,[=](bool on){dashboard->itemAtPosition(1,1)->widget()->setVisible(on);dashboard->itemAtPosition(2,2)->widget()->setVisible(on);});
+        auto test=new QHBoxLayout;auto calibrate=new QPushButton("Spatial calibration");test->addWidget(calibrate);test->addWidget(stopTest);controls->addLayout(test);controls->addStretch();
+        auto controlScroll=new QScrollArea;controlScroll->setWidgetResizable(true);controlScroll->setWidget(controlPage);pages->addWidget(controlScroll);
 
         auto topology=new QSplitter;tree->setHeaderLabel("Devices and zones");tree->setMinimumWidth(210);topology->addWidget(tree);
-        auto mapPage=new QWidget;auto mapLayout=new QVBoxLayout(mapPage);auto all=new QCheckBox("Show all devices");mapLayout->addWidget(all);mapLayout->addWidget(map,1);
-        auto note=new QLabel("Drag a selected region. Arrow keys move 0.5%; Shift moves 0.1%. Coloured marks show live LED output.");note->setWordWrap(true);mapLayout->addWidget(note);topology->addWidget(mapPage);
+        auto mapPage=new QWidget;auto mapLayout=new QVBoxLayout(mapPage);auto toolbar=new QHBoxLayout;auto all=new QCheckBox("All devices");toolbar->addWidget(all);
+        auto gridToggle=new QCheckBox("Grid");gridToggle->setChecked(true);toolbar->addWidget(gridToggle);auto snapToggle=new QCheckBox("Snap");toolbar->addWidget(snapToggle);
+        auto undo=new QPushButton("Undo"),redo=new QPushButton("Redo"),fit=new QPushButton("Fit view");toolbar->addWidget(undo);toolbar->addWidget(redo);toolbar->addWidget(fit);mapLayout->addLayout(toolbar);mapLayout->addWidget(map,1);
+        connect(gridToggle,&QCheckBox::toggled,map,[this](bool on){map->showGrid=on;map->update();});connect(snapToggle,&QCheckBox::toggled,map,[this](bool on){map->snap=on;});
+        connect(undo,&QPushButton::clicked,map,[this]{map->undo();});connect(redo,&QPushButton::clicked,map,[this]{map->redo();});connect(fit,&QPushButton::clicked,map,[this]{map->fit();});
+        auto note=new QLabel("Drag to move · corners / edges resize · wheel zooms · middle drag pans · Esc cancels · Ctrl+Z undoes");note->setWordWrap(true);mapLayout->addWidget(note);topology->addWidget(mapPage);
         auto props=new QWidget;props->setMinimumWidth(215);props->setMaximumWidth(285);auto propLayout=new QVBoxLayout(props);auto fields=new QFormLayout;
         fields->setRowWrapPolicy(QFormLayout::WrapAllRows);
         led->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);led->setMinimumContentsLength(10);
         led->setSizePolicy(QSizePolicy::Ignored,QSizePolicy::Fixed);
         fields->addRow("Zone name",zoneName);fields->addRow("Selection",led);
-        size_t i=0;for(auto label:{"X (%)","Y (%)","Width (%)","Height (%)"}) {auto box=new QDoubleSpinBox;box->setDecimals(3);box->setRange(i<2?0:.001,100);box->setSingleStep(.5);geometry[i++]=box;fields->addRow(label,box);connect(box,&QDoubleSpinBox::editingFinished,this,[this]{applyGeometry();});}
-        propLayout->addWidget(groupBox("Sampling area",fields));auto rotate=new QPushButton("Rotate 90°");auto reverse=new QPushButton("Reverse LED order");propLayout->addWidget(rotate);propLayout->addWidget(reverse);propLayout->addStretch();topology->addWidget(props);topology->setStretchFactor(1,1);topology->setSizes({230,820,250});pages->addWidget(topology);
+        size_t i=0;for(auto label:{"X (%)","Y (%)","Width (%)","Height (%)"}) {auto box=new Stepper<QDoubleSpinBox>;box->setDecimals(3);box->setRange(i<2?0:.001,100);box->setSingleStep(.5);geometry[i++]=box;fields->addRow(label,box);connect(box,&QDoubleSpinBox::editingFinished,this,[this]{applyGeometry();});}
+        propLayout->addWidget(groupBox("Sampling area",fields));auto rotate=new QPushButton("Rotate 90°");auto reverse=new QPushButton("Reverse LED order");propLayout->addWidget(rotate);propLayout->addWidget(reverse);
+        auto edgeChoice=new QComboBox;edgeChoice->addItems({"Map to edge…","Top","Right","Bottom","Left","Fill image"});propLayout->addWidget(edgeChoice);
+        connect(edgeChoice,&QComboBox::activated,this,[this,edgeChoice](int edge){if(!edge || layout.empty()) return;auto values=map->selected();size_t count=values.size();float depth=numbers.at("depth")->value()/100;std::vector<Region> result;
+            for(size_t i=0;i<count;++i) {float a=float(i)/count,b=float(i+1)/count;
+                result.push_back(edge==1?Region{a,0,b,depth}:edge==2?Region{1-depth,a,1,b}:edge==3?Region{1-b,1-depth,1-a,1}:edge==4?Region{0,1-b,depth,1-a}:Region{a,0,b,1});}
+            map->setSelected(result,true);edgeChoice->setCurrentIndex(0);});
+        auto gridSize=new Stepper<QDoubleSpinBox>;gridSize->setRange(.5,20);gridSize->setValue(1);gridSize->setSuffix(" % grid");propLayout->addWidget(gridSize);connect(gridSize,&QDoubleSpinBox::valueChanged,map,[this](double n){map->grid=n/100;map->update();});
+        auto identifyZone=new QPushButton("Identify device");propLayout->addWidget(identifyZone);connect(identifyZone,&QPushButton::clicked,this,[this]{if(!layout.empty()) action({{"command","identify"},{"device",layout[map->device]["id"]}});});
+        propLayout->addStretch();auto propScroll=new QScrollArea;propScroll->setWidgetResizable(true);propScroll->setWidget(props);propScroll->setMinimumWidth(235);topology->addWidget(propScroll);topology->setStretchFactor(1,1);topology->setSizes({240,820,270});pages->addWidget(topology);
 
         auto scroll=new QScrollArea;scroll->setWidgetResizable(true);scroll->setWidget(devicePage);pages->addWidget(scroll);
         auto diagPage=new QWidget;auto diag=new QVBoxLayout(diagPage);diagnostics->setReadOnly(true);diag->addWidget(diagnostics,1);auto recover=new QPushButton("Recover capture");diag->addWidget(recover);pages->addWidget(diagPage);
@@ -413,6 +563,7 @@ public:
         connect(save,&QPushButton::clicked,this,[this]{saveChanges();});
         connect(reload,&QPushButton::clicked,this,[this]{if(dirty && QMessageBox::question(this,"Reload saved map","Discard unsaved mapping changes?")!=QMessageBox::Yes) return;dirty=false;revision=0;if(!client.ready()) client.open(this->state);else poll();});
         connect(enabled,&QCheckBox::toggled,this,[this]{changed();});connect(fps,&QSpinBox::valueChanged,this,[this]{changed();});connect(smooth,&QSpinBox::valueChanged,this,[this]{changed();});
+        connect(blackBars,&QCheckBox::toggled,this,[this]{changed();});
         connect(tree,&QTreeWidget::currentItemChanged,this,[this](QTreeWidgetItem* item,QTreeWidgetItem*){if(updating || !item) return;int g=item->data(0,Qt::UserRole+1).toInt();select(item->data(0,Qt::UserRole).toInt(),std::max(0,g));});
         connect(led,&QComboBox::currentIndexChanged,this,[this]{if(updating) return;map->led=led->currentData().toInt();showGeometry();map->update();});
         connect(zoneName,&QLineEdit::editingFinished,this,[this]{if(updating || layout.empty()) return;layout[map->device]["groups"][map->group]["name"]=zoneName->text().toStdString();changed();});
@@ -435,6 +586,7 @@ public:
 };
 }
 
+#ifndef OFFICE_WIDGET_TEST
 int main(int argc,char** argv) {
     QApplication app(argc,argv);app.setApplicationName("Office Ambilight");
 #ifdef Q_OS_WIN
@@ -450,3 +602,4 @@ int main(int argc,char** argv) {
     if(parser.isSet("exercise-editor") && !parser.isSet("export-views")) parser.showHelp(1);
     Panel panel(parser.value("state"),parser.value("export-views"),parser.isSet("exercise-editor"));panel.show();return app.exec();
 }
+#endif

@@ -30,6 +30,16 @@ inline Region bounds(const std::vector<Region>& values) {
     for(auto p:values) { r.left=std::min(r.left,p.left);r.top=std::min(r.top,p.top);r.right=std::max(r.right,p.right);r.bottom=std::max(r.bottom,p.bottom); }
     return r;
 }
+// Handle bits: left=1, right=2, top=4, bottom=8. Anchor the opposite side;
+// never cross it or leave the selected monitor, even with a far-away pointer.
+inline Region resizeBounds(Region b,unsigned handle,float dx,float dy,float minimum=.002f,float snap=0) {
+    auto quantize=[&](float v){return snap>0?std::round(v/snap)*snap:v;};
+    if(handle&1) b.left=std::clamp(quantize(b.left+dx),0.f,b.right-minimum);
+    if(handle&2) b.right=std::clamp(quantize(b.right+dx),b.left+minimum,1.f);
+    if(handle&4) b.top=std::clamp(quantize(b.top+dy),0.f,b.bottom-minimum);
+    if(handle&8) b.bottom=std::clamp(quantize(b.bottom+dy),b.top+minimum,1.f);
+    return b;
+}
 // Transform rectangles, with screen Y down, using the same geometry for drawing,
 // hit testing and the GPU. Vector position always remains the hardware LED index.
 inline std::vector<Region> transform(const std::vector<Region>& input,Region from,Region to,int rotation,bool reverse) {

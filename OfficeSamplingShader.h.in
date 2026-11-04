@@ -1,0 +1,2 @@
+#pragma once
+constexpr const char* shader=R"OFFICESHADER(@OFFICE_SAMPLING_SHADER@)OFFICESHADER";

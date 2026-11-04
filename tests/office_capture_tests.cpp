@@ -44,6 +44,21 @@ int main() {
         state.processTexture(texture.get());
         for(auto color:state.colors) if(color) throw std::runtime_error("Valid black frame was discarded");
         if(state.frames!=3) throw std::runtime_error("Frame accounting failed");
+        // Controls exercise the same GPU path used by the actual lighting.
+        std::fill(pixels.begin(),pixels.end(),0xff000000);
+        for(unsigned y=0;y<64;++y) for(unsigned x=64;x<96;++x) pixels[y*128+x]=0xffff0000;
+        state.context->UpdateSubresource(texture.get(),0,nullptr,pixels.data(),128*4,0);
+        state.regions=state.makeRegions({around(.55f,.5f,.02f,.02f),around(.2f,.5f,.02f,.02f),around(.8f,.5f,.02f,.02f),around(.2f,.5f,.02f,.02f)});
+        auto options=office::processingDefaults();
+        state.configure(options);state.processTexture(texture.get());auto unblurred=state.colors;
+        options["blur"]=10.0;state.configure(options);state.sampleRetained();
+        if(RGBGetRValue(state.colors[0])<=RGBGetRValue(unblurred[0])) throw std::runtime_error("Blur did not spread adjacent colour into the actual LED sample");
+        options["blur"]=0;options["brightness"]=0;state.configure(options);state.sampleRetained();
+        for(auto c:state.colors) if(c) throw std::runtime_error("Brightness control is not wired to GPU output");
+        options["brightness"]=1;options["saturation"]=0;state.configure(options);state.sampleRetained();
+        auto gray=state.colors[1];if(RGBGetRValue(gray)!=RGBGetGValue(gray) || RGBGetGValue(gray)!=RGBGetBValue(gray)) throw std::runtime_error("Saturation control did not produce gray");
+        options["saturation"]=1;state.configure(options);state.sampleRetained();
+        if(state.colors!=unblurred || state.frames!=4) throw std::runtime_error("Static-frame settings failed to restore exact identity without inventing capture frames");
         std::cout<<"PASS: production D3D11 shader, monitor isolation, RGB ordering, valid black, frame accounting\n";
         return 0;
     } catch(hresult_error const& error) { std::cerr<<to_string(error.message())<<'\n'; }

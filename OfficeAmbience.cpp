@@ -19,6 +19,8 @@
 #include "OfficeAmbience.h"
 #include "ColorPostProcessor.h"
 #include "OfficeControlServer.h"
+#include "OfficeProcessing.h"
+#include "OfficeSamplingShader.h"
 #include <OpenRGBPluginInterface.h>
 #include <ResourceManagerCallback.h>
 #include <QTimer>
@@ -204,25 +206,6 @@ std::vector<Sample> deviceSamples(RGBControllerInterface* controller) {
 
 // Input textures stay on the GPU. One output pixel represents one physical LED;
 // the only CPU readback is this small row of final region-average RGB values.
-constexpr const char* shader=R"(
-Texture2D image : register(t0);
-SamplerState linearSampler : register(s0);
-cbuffer Regions : register(b0) { float4 region[384]; };
-struct Vertex { float4 position : SV_POSITION; };
-Vertex vs(uint index : SV_VertexID) {
-    Vertex o; float2 uv=float2((index<<1)&2,index&2);
-    o.position=float4(uv*float2(2,-2)+float2(-1,1),0,1); return o;
-}
-float4 ps(Vertex input) : SV_TARGET {
-    float4 r=region[(uint)input.position.x]; float3 color=0;
-    [unroll] for(uint y=0;y<4;++y) [unroll] for(uint x=0;x<4;++x) {
-        float2 uv=lerp(r.xy,r.zw,(float2(x,y)+.5)/4);
-        uint width,height; image.GetDimensions(width,height);
-        float lod=max(0,log2(max((r.z-r.x)*width,(r.w-r.y)*height)/4));
-        color+=image.SampleLevel(linearSampler,uv,lod).rgb;
-    }
-    return float4(color/16,1);
-})";
 
 struct CaptureState {
     std::mutex mutex;
@@ -240,6 +223,8 @@ struct CaptureState {
     com_ptr<ID3D11RenderTargetView> target;
     com_ptr<ID3D11VertexShader> vertex;
     com_ptr<ID3D11PixelShader> pixel;
+    com_ptr<ID3D11PixelShader> previewPixel;
+    com_ptr<ID3D11Buffer> options;
     com_ptr<ID3D11Buffer> regions;
     com_ptr<ID3D11SamplerState> sampler;
     unsigned sourceW=0,sourceH=0;
@@ -248,6 +233,16 @@ struct CaptureState {
     QByteArray previewPng;
     std::string previewError;
     com_ptr<ID3D11Texture2D> preview;
+    com_ptr<ID3D11Texture2D> previewTarget;
+    com_ptr<ID3D11RenderTargetView> previewView;
+
+    com_ptr<ID3D11Buffer> makeOptions(const Json& config) {
+        auto values=office::shaderOptions(config);
+        D3D11_BUFFER_DESC desc{};desc.ByteWidth=sizeof(values);desc.Usage=D3D11_USAGE_IMMUTABLE;desc.BindFlags=D3D11_BIND_CONSTANT_BUFFER;
+        D3D11_SUBRESOURCE_DATA data{};data.pSysMem=values.data();
+        com_ptr<ID3D11Buffer> next;check_hresult(device->CreateBuffer(&desc,&data,next.put()));return next;
+    }
+    void configure(const Json& config) {options=makeOptions(config);}
 
     com_ptr<ID3D11Buffer> makeRegions(const std::vector<Sample>& samples) {
         std::array<Sample,maxSamples> data{};std::copy(samples.begin(),samples.end(),data.begin());
@@ -260,11 +255,19 @@ struct CaptureState {
         check_hresult(D3D11CreateDevice(nullptr,driver,nullptr,D3D11_CREATE_DEVICE_BGRA_SUPPORT,
             nullptr,0,D3D11_SDK_VERSION,device.put(),nullptr,context.put()));
         com_ptr<ID3DBlob> vs,ps,errors;
-        check_hresult(D3DCompile(shader,strlen(shader),nullptr,nullptr,nullptr,"vs","vs_5_0",D3DCOMPILE_OPTIMIZATION_LEVEL3,0,vs.put(),errors.put()));
+        auto compile=[&](const char* entry,const char* profile,com_ptr<ID3DBlob>& result) {
+            errors=nullptr;auto hr=D3DCompile(shader,strlen(shader),nullptr,nullptr,nullptr,entry,profile,D3DCOMPILE_OPTIMIZATION_LEVEL3,0,result.put(),errors.put());
+            if(FAILED(hr)) throw std::runtime_error(errors?std::string(static_cast<const char*>(errors->GetBufferPointer()),errors->GetBufferSize()):"GPU shader compilation failed");
+        };
+        compile("vs","vs_5_0",vs);
         errors=nullptr;
-        check_hresult(D3DCompile(shader,strlen(shader),nullptr,nullptr,nullptr,"ps","ps_5_0",D3DCOMPILE_OPTIMIZATION_LEVEL3,0,ps.put(),errors.put()));
+        compile("ps","ps_5_0",ps);
         check_hresult(device->CreateVertexShader(vs->GetBufferPointer(),vs->GetBufferSize(),nullptr,vertex.put()));
         check_hresult(device->CreatePixelShader(ps->GetBufferPointer(),ps->GetBufferSize(),nullptr,pixel.put()));
+        ps=nullptr;errors=nullptr;
+        compile("previewPs","ps_5_0",ps);
+        check_hresult(device->CreatePixelShader(ps->GetBufferPointer(),ps->GetBufferSize(),nullptr,previewPixel.put()));
+        configure(office::processingDefaults());
         regions=makeRegions(samples);
         D3D11_SAMPLER_DESC sd{}; sd.Filter=D3D11_FILTER_MIN_MAG_MIP_LINEAR;
         sd.AddressU=sd.AddressV=sd.AddressW=D3D11_TEXTURE_ADDRESS_CLAMP; sd.MaxLOD=D3D11_FLOAT32_MAX;
@@ -288,12 +291,24 @@ struct CaptureState {
         if(!input) return; // Keep the request until the first real frame arrives.
         try {
             D3D11_TEXTURE2D_DESC previewDesc{};input->GetDesc(&previewDesc);
-            unsigned level=0;
-            while((previewDesc.Width>>(level+1))>=160 && (previewDesc.Height>>(level+1))>=60) ++level;
-            previewDesc.Width=std::max(1u,previewDesc.Width>>level);previewDesc.Height=std::max(1u,previewDesc.Height>>level);
-            previewDesc.MipLevels=1;previewDesc.Usage=D3D11_USAGE_STAGING;previewDesc.BindFlags=previewDesc.MiscFlags=0;previewDesc.CPUAccessFlags=D3D11_CPU_ACCESS_READ;
-            if(!preview) check_hresult(device->CreateTexture2D(&previewDesc,nullptr,preview.put()));
-            context->CopySubresourceRegion(preview.get(),0,0,0,0,input.get(),level,nullptr);
+            previewDesc.Height=std::max(1u,static_cast<unsigned>(640.0*previewDesc.Height/previewDesc.Width));previewDesc.Width=640;
+            previewDesc.MipLevels=1;previewDesc.MiscFlags=0;
+            if(!preview) {
+                previewDesc.Usage=D3D11_USAGE_DEFAULT;previewDesc.BindFlags=D3D11_BIND_RENDER_TARGET;previewDesc.CPUAccessFlags=0;
+                check_hresult(device->CreateTexture2D(&previewDesc,nullptr,previewTarget.put()));
+                check_hresult(device->CreateRenderTargetView(previewTarget.get(),nullptr,previewView.put()));
+                previewDesc.Usage=D3D11_USAGE_STAGING;previewDesc.BindFlags=0;previewDesc.CPUAccessFlags=D3D11_CPU_ACCESS_READ;
+                check_hresult(device->CreateTexture2D(&previewDesc,nullptr,preview.put()));
+            }
+            D3D11_VIEWPORT viewport{0,0,640.f,static_cast<float>(previewDesc.Height),0,1};context->RSSetViewports(1,&viewport);
+            auto* rt=previewView.get();context->OMSetRenderTargets(1,&rt,nullptr);
+            context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+            context->VSSetShader(vertex.get(),nullptr,0);context->PSSetShader(previewPixel.get(),nullptr,0);
+            auto* constants=options.get();context->PSSetConstantBuffers(1,1,&constants);
+            auto* view=inputView.get();context->PSSetShaderResources(0,1,&view);
+            auto* filter=sampler.get();context->PSSetSamplers(0,1,&filter);context->Draw(3,0);
+            ID3D11ShaderResourceView* none=nullptr;context->PSSetShaderResources(0,1,&none);
+            context->CopyResource(preview.get(),previewTarget.get());
             D3D11_MAPPED_SUBRESOURCE mapped{};
             check_hresult(context->Map(preview.get(),0,D3D11_MAP_READ,0,&mapped));
             QImage image(static_cast<const uchar*>(mapped.pData),previewDesc.Width,previewDesc.Height,mapped.RowPitch,QImage::Format_ARGB32);
@@ -318,7 +333,7 @@ struct CaptureState {
             desc.ArraySize=1; desc.SampleDesc.Count=1; desc.Usage=D3D11_USAGE_DEFAULT;
             desc.BindFlags=D3D11_BIND_SHADER_RESOURCE|D3D11_BIND_RENDER_TARGET;
             desc.CPUAccessFlags=0; desc.MiscFlags=D3D11_RESOURCE_MISC_GENERATE_MIPS;
-            input=nullptr; inputView=nullptr;preview=nullptr;
+            input=nullptr; inputView=nullptr;preview=nullptr;previewTarget=nullptr;previewView=nullptr;
             check_hresult(device->CreateTexture2D(&desc,nullptr,input.put()));
             check_hresult(device->CreateShaderResourceView(input.get(),nullptr,inputView.put()));
         }
@@ -327,12 +342,22 @@ struct CaptureState {
         D3D11_BOX crop{sx(monitor.left),sy(monitor.top),0,sx(monitor.right),sy(monitor.bottom),1};
         context->CopySubresourceRegion(input.get(),0,0,0,0,source,0,&crop);
         context->GenerateMips(inputView.get());
+        sampleRetained();
+        if(wantPreview) capturePreview();
+        received=Clock::now(); ++frames;
+        error.clear();
+        if(frames==1) firstReceived=received;
+        lastProcessingMs=std::chrono::duration<double,std::milli>(received-began).count();
+    }
+    void sampleRetained() {
+        if(!input) return;
         D3D11_VIEWPORT viewport{0,0,static_cast<float>(colors.size()),1,0,1};
         context->RSSetViewports(1,&viewport);
         auto* rt=target.get(); context->OMSetRenderTargets(1,&rt,nullptr);
         context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
         context->VSSetShader(vertex.get(),nullptr,0); context->PSSetShader(pixel.get(),nullptr,0);
         auto* constants=regions.get(); context->PSSetConstantBuffers(0,1,&constants);
+        auto* settings=options.get();context->PSSetConstantBuffers(1,1,&settings);
         auto* view=inputView.get(); context->PSSetShaderResources(0,1,&view);
         auto* filter=sampler.get(); context->PSSetSamplers(0,1,&filter);
         context->Draw(3,0);
@@ -342,13 +367,6 @@ struct CaptureState {
         auto* bytes=static_cast<const unsigned char*>(mapped.pData);
         for(size_t i=0;i<colors.size();++i) colors[i]=ToRGBColor(bytes[i*4],bytes[i*4+1],bytes[i*4+2]);
         context->Unmap(readback.get(),0);
-        // Preview is demand-driven and GPU downscaled. It is never a second
-        // capture source and does not add full-resolution CPU frame readbacks.
-        if(wantPreview) capturePreview();
-        received=Clock::now(); ++frames;
-        error.clear();
-        if(frames==1) firstReceived=received;
-        lastProcessingMs=std::chrono::duration<double,std::milli>(received-began).count();
     }
 };
 
@@ -489,10 +507,11 @@ struct OfficeAmbience::Impl {
     }
     void validateSettings(const Json& candidate) const {
         if(candidate.at("monitor")!=config.at("monitor")) throw std::runtime_error("This panel controls the configured LG display only");
-        if(!candidate.at("enabled").is_boolean() || !candidate.at("fps").is_number_integer() || candidate.at("fps")<1 || candidate.at("fps")>30)
-            throw std::runtime_error("Output FPS must be an integer from 1 to 30");
+        if(!candidate.at("enabled").is_boolean() || !candidate.at("fps").is_number_integer() || candidate.at("fps")<1 || candidate.at("fps")>60)
+            throw std::runtime_error("Output FPS must be an integer from 1 to 60");
         double smooth=candidate.at("smoothing_ms").get<double>();
         if(!std::isfinite(smooth) || smooth<0 || smooth>2000) throw std::runtime_error("Smoothing must be 0-2000 milliseconds");
+        office::validateProcessing(candidate);
     }
     Json snapshot(bool preview=false) {
         if(preview && capture) {std::lock_guard lock(capture->state->mutex);capture->state->wantPreview=true;capture->state->capturePreview();}
@@ -501,8 +520,9 @@ struct OfficeAmbience::Impl {
         std::string image,previewError;
         if(capture) {std::lock_guard lock(capture->state->mutex);image=capture->state->previewPng.toBase64().toStdString();previewError=capture->state->previewError;}
         auto online=Json::array();{std::lock_guard lock(controllersMutex);for(auto& d:devices) online.push_back(d.controller!=nullptr);}
-        return {{"revision",revision},{"online",online},{"settings",{{"monitor",config.at("monitor")},{"enabled",config.at("enabled")},
-                {"fps",config.at("fps")},{"smoothing_ms",config.at("smoothing_ms")}}},
+        Json settings={{"monitor",config.at("monitor")},{"enabled",config.at("enabled")},{"fps",config.at("fps")},{"smoothing_ms",config.at("smoothing_ms")}};
+        const auto defaults=office::processingDefaults();for(auto& [key,value]:defaults.items()) settings[key]=config.at(key);
+        return {{"revision",revision},{"online",online},{"settings",settings},
                 {"layout",layout},{"status",report()},{"colors",colours},{"preview_png",image},{"preview_error",previewError},
                 {"test_mode",calibration?"calibration":identifyDevice.empty()?"none":"identify"}};
     }
@@ -523,6 +543,7 @@ struct OfficeAmbience::Impl {
         if(request.at("revision").get<uint64_t>()!=revision) throw std::runtime_error("Settings changed in another panel. Reload before saving");
         auto next=config;
         for(auto key:{"monitor","enabled","fps","smoothing_ms"}) next[key]=request.at("settings").at(key);
+        const auto defaults=office::processingDefaults();for(auto& [key,value]:defaults.items()) if(request.at("settings").contains(key)) next[key]=request.at("settings").at(key);
         validateSettings(next);
         auto proposed=request.at("layout");auto points=validatedLayout(proposed);next["layout"]=proposed;
         // Detect external edits before replacing a private configuration file.
@@ -534,12 +555,13 @@ struct OfficeAmbience::Impl {
         if(onDisk!=diskConfig) throw std::runtime_error("The private config was edited externally; restart the owner to reload it");
         std::unique_lock<std::mutex> lock;
         com_ptr<ID3D11Buffer> newRegions;
-        if(capture) {lock=std::unique_lock(capture->state->mutex);newRegions=capture->state->makeRegions(points);}
+        com_ptr<ID3D11Buffer> newOptions;
+        if(capture) {lock=std::unique_lock(capture->state->mutex);newRegions=capture->state->makeRegions(points);newOptions=capture->state->makeOptions(next);}
         QSaveFile file(QString::fromStdWString(configPath.wstring()));
         auto bytes=next.dump(2);
         if(!file.open(QIODevice::WriteOnly) || file.write(bytes.data(),bytes.size())!=static_cast<qint64>(bytes.size()) || !file.commit())
             throw std::runtime_error("Could not save settings; the active map is unchanged");
-        if(capture) capture->state->regions=std::move(newRegions);
+        if(capture) {capture->state->regions=std::move(newRegions);capture->state->options=std::move(newOptions);capture->state->sampleRetained();}
         samples=std::move(points);layout=std::move(proposed);config=next;diskConfig=next;smoothingMs=config["smoothing_ms"].get<double>();
         output.setInterval(std::max(1,static_cast<int>(std::round(1000.0/config["fps"].get<int>()))));
         ++revision;
@@ -560,11 +582,12 @@ struct OfficeAmbience::Impl {
         if(!config.contains("fps")) config["fps"]=15;
         if(!config.contains("smoothing_ms")) config["smoothing_ms"]=140;
         if(!config.contains("enabled")) config["enabled"]=true;
+        office::processingDefaults(config);
         validateSettings(config);
         auto wide=to_hstring(config.value("monitor",std::string("\\\\.\\DISPLAY2")));
         display.assign(wide.c_str(),wide.size());
         int fps=config.value("fps",15);
-        if(fps<1 || fps>30) throw std::runtime_error("Office FPS must be in 1..30");
+        if(fps<1 || fps>60) throw std::runtime_error("Office FPS must be in 1..60");
         smoothingMs=config.value("smoothing_ms",140.0);
         statusPath=path.parent_path()/"office-ambience-status.json";
         std::map<std::string,RGBControllerInterface*> live;
@@ -666,7 +689,7 @@ struct OfficeAmbience::Impl {
         sourceBounds=bounds; monitorBounds=monitor.bounds;
         switched=Clock::now();firstFrameDelayMs=0;inputFrames=deliveredFrames=0;
         if(!candidate) error="No capturable wallpaper host or maximized LG application is available; holding the last valid colours";
-        if(candidate) try { capture=std::make_unique<Capture>(candidate,monitor.bounds,samples); }
+        if(candidate) try { capture=std::make_unique<Capture>(candidate,monitor.bounds,samples);std::lock_guard lock(capture->state->mutex);capture->state->configure(config); }
         catch(hresult_error const& failure) { error=to_string(failure.message()); }
         catch(std::exception const& failure) { error=failure.what(); }
         status();
@@ -693,8 +716,7 @@ struct OfficeAmbience::Impl {
         if(!identifyDevice.empty() && now>=identifyUntil) identifyDevice.clear();
         if(!latest.empty() || calibration || !identifyDevice.empty()) {
             auto submitBegan=Clock::now();
-            float weight=smoothingMs<=0?1.f:static_cast<float>(1-std::exp(-std::chrono::duration<double,std::milli>(now-lastOutput).count()/smoothingMs));
-            SmoothingColorPostProcessor smooth{weight};
+            double elapsedMs=std::chrono::duration<double,std::milli>(now-lastOutput).count();
             size_t deviceIndex=0;
             {std::lock_guard lock(controllersMutex);
             for(auto& device:devices) {
@@ -707,7 +729,10 @@ struct OfficeAmbience::Impl {
                         target=ToRGBColor(static_cast<unsigned char>(x*255),static_cast<unsigned char>((1-y)*255),static_cast<unsigned char>(index%2?40:160));
                     } else if(!identifyDevice.empty()) target=device.key==identifyDevice?ToRGBColor(255,255,255):0;
                     else if(!enabled) target=0;
-                    auto color=initialized?smooth.process(RGBGetRValue(target),RGBGetGValue(target),RGBGetBValue(target),device.colors[index]):target;
+                    auto previous=device.colors[index];
+                    double delta=std::max({std::abs(int(RGBGetRValue(target))-int(RGBGetRValue(previous))),std::abs(int(RGBGetGValue(target))-int(RGBGetGValue(previous))),std::abs(int(RGBGetBValue(target))-int(RGBGetBValue(previous)))});
+                    SmoothingColorPostProcessor smooth{office::smoothingWeight(config,elapsedMs,delta)};
+                    auto color=initialized?smooth.process(RGBGetRValue(target),RGBGetGValue(target),RGBGetBValue(target),previous):target;
                     if(testing || !enabled) color=target;
                     device.colors[index]=color;
                     if(device.controller) device.controller->SetColor(static_cast<unsigned>(index),color);
