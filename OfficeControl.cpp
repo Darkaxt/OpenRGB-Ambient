@@ -25,6 +25,7 @@
 #include <QDir>
 #include <QTimer>
 #include <QPainter>
+#include <QPainterPath>
 #include <QMouseEvent>
 #include <QKeyEvent>
 #include <QMessageBox>
@@ -272,9 +273,22 @@ public:
         if(!preview.isNull()) p.drawImage(image,preview);
         else {p.fillRect(image,QColor("#102333"));p.setPen(QColor("#cdd6e0"));p.drawText(image,Qt::AlignCenter,"Waiting for a live LG preview");}
         p.save();p.setClipRect(image.intersected(rect()));
-        p.setPen(QPen(QColor(120,155,175,24),1));
         float visualGrid=std::max(grid,static_cast<float>(20./std::max(1.,image.width())));
-        if(showGrid) for(float at=visualGrid;at<1;at+=visualGrid) {p.drawLine(QPointF(image.left()+image.width()*at,image.top()),QPointF(image.left()+image.width()*at,image.bottom()));p.drawLine(QPointF(image.left(),image.top()+image.height()*at),QPointF(image.right(),image.top()+image.height()*at));}
+        if(showGrid) {
+            // White difference composition inverts the preview only. Fill the
+            // union once: separate strokes would invert intersections twice.
+            QPainterPath lines;lines.setFillRule(Qt::WindingFill);
+            const double scale=p.deviceTransform().m11(),pixel=1./scale;
+            for(float at=visualGrid;at<1;at+=visualGrid) {
+                double x=std::round((image.left()+image.width()*at)*scale)/scale;
+                double y=std::round((image.top()+image.height()*at)*scale)/scale;
+                lines.addRect(QRectF(x,image.top(),pixel,image.height()));
+                lines.addRect(QRectF(image.left(),y,image.width(),pixel));
+            }
+            p.save();p.setRenderHint(QPainter::Antialiasing,false);
+            p.setCompositionMode(QPainter::CompositionMode_Difference);
+            p.fillPath(lines,Qt::white);p.restore();
+        }
         if(!layout || layout->empty()) {p.restore();return;}
         auto selectedIds=targets();
         for(size_t d=0;d<layout->size();++d) {

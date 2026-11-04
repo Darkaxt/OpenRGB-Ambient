@@ -9,6 +9,34 @@ void require(bool condition,const char* message) {if(!condition) throw std::runt
 void mouse(QWidget& widget,QEvent::Type type,QPointF point,Qt::MouseButton button,Qt::MouseButtons buttons,Qt::KeyboardModifiers modifiers=Qt::NoModifier) {
     QMouseEvent event(type,point,point,button,buttons,modifiers);QApplication::sendEvent(&widget,&event);
 }
+void invertedGrid(QApplication& app) {
+    MapCanvas canvas;canvas.resize(1048,600);canvas.grid=.25f;
+    canvas.preview=QImage(512,216,QImage::Format_RGB32);
+    canvas.show();app.processEvents();
+    auto render=[&](double scale) {
+        QImage output(QSize(qRound(canvas.width()*scale),qRound(canvas.height()*scale)),QImage::Format_ARGB32_Premultiplied);
+        output.setDevicePixelRatio(scale);output.fill(Qt::transparent);canvas.render(&output);return output;
+    };
+    for(double scale:{1.,1.5,2.})for(auto colour:{QColor(12,35,68),QColor(244,217,183)}) {
+        canvas.preview.fill(colour);canvas.showGrid=false;auto original=render(scale);
+        canvas.showGrid=true;auto grid=render(scale);auto image=canvas.imageGeometry();
+        int x=qRound((image.left()+image.width()*.25)*scale),y=qRound((image.top()+image.height()*.25)*scale);
+        for(auto point:{QPoint(x,y+8),QPoint(x+8,y),QPoint(x,y)}) {
+            auto before=original.pixelColor(point),after=grid.pixelColor(point);
+            require(after.red()==255-before.red() && after.green()==255-before.green() && after.blue()==255-before.blue(),"Grid lines and crossings must invert the underlying pixel exactly once");
+        }
+        require(grid.pixelColor(x+8,y+8)==original.pixelColor(x+8,y+8),"Grid changed pixels between its lines");
+        canvas.showGrid=false;require(render(scale)==original,"Disabling grid did not restore the exact preview");
+    }
+    Json layout=Json::array({{{"regions",office::encode(std::vector<Region>{{.25f,.25f,.55f,.65f}})},
+        {"groups",Json::array({{{"first",0},{"count",1}}})}}});
+    canvas.layout=&layout;auto saved=layout;
+    canvas.showGrid=false;auto original=render(1.);canvas.showGrid=true;auto grid=render(1.);
+    auto bounds=canvas.selectionGeometry();
+    for(auto point:{bounds.topLeft(),bounds.bottomRight(),canvas.rotationHandle()})
+        require(grid.pixelColor(point.toPoint())==original.pixelColor(point.toPoint()),"Grid inverted a selection or rotation handle");
+    require(layout==saved,"Rendering the grid changed the saved map");
+}
 void multiSelection(QApplication& app) {
     Json original=Json::array();
     for(int d=0;d<2;++d) {
@@ -61,6 +89,7 @@ int main(int argc,char** argv) {
     QApplication app(argc,argv);
     try {
         officeui::loadFonts();
+        invertedGrid(app);
         require(QFontInfo(officeui::body()).family()=="Office Body","Native body font fell back instead of using the recovered asset");
         require(QFontInfo(officeui::display()).family()=="Office Display","Native display font fell back");
         for(auto family:{"Office Symbols Outline","Office Symbols Active"}) {
