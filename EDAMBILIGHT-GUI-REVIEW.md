@@ -248,8 +248,17 @@ inspected. Only the disposable tab was closed; the browser was preserved and the
 workflow released with native exit 0. The earlier click on a faded panel was
 cancelled, inspected (it had not switched effects), and not counted as success.
 
-Real LG capture/physical LED acceptance and final release remain governed by
-stages 7–9 in the core integration specification. The current Windows session
-has entered display standby, Wallpaper Engine's rendering process is absent,
-and one saved controller is offline. No live capture acceptance is inferred
-from standby color output or an unavailable-source UI export.
+The initial live check was parked while the laptop was locked; no capture
+acceptance was inferred from standby output. After the user returned and
+unlocked it, the 8602878 candidate passed the actual native processing checks:
+brightness/saturation reached submitted LED colors, all five algorithms exposed
+valid GPU regions, invalid settings were rejected, and the original map/settings
+were restored. The real editor Save round-trip and all 18 connected exports
+included an actual LG wallpaper preview. All six controllers were online in that
+export. Native enable, calibration, identify/return, 20 FPS (20.057 measured) and
+explicit capture recovery passed. Subsequent KVM disconnection of Keychron and
+Logitech retained their maps while the remaining four continued streaming.
+
+About displays the delivered version from the package manifest. Final package,
+installed activation and publication verification remain owned by the core
+specification's delivery stage; screenshot resemblance is not release evidence.
