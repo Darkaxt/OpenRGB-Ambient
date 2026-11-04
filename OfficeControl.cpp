@@ -324,6 +324,7 @@ public:
     void keyPressEvent(QKeyEvent* e) override {
         if(!layout || layout->empty()) return;
         if(e->matches(QKeySequence::Undo)) {undo();return;}if(e->matches(QKeySequence::Redo)) {redo();return;}
+        if(e->key()==Qt::Key_R && e->modifiers()==Qt::NoModifier){try{rotateSelection();}catch(const std::exception& ex){if(error)error(ex.what());}return;}
         if(e->key()==Qt::Key_Escape && !dragRegions.empty()) {
             *layout=undoHistory.back();undoHistory.pop_back();dragRegions.clear();handle=0;update();if(edited) edited();return;
         }
@@ -667,7 +668,7 @@ class Panel : public QMainWindow {
         resize(1440,900);result["states"]=Json::array();
         auto renderState=[this,&result](const char* name){QApplication::sendPostedEvents();centralWidget()->layout()->activate();auto file=exportPath+"/state-"+name+".png";if(!grab().save(file))throw std::runtime_error("Could not export UI state");result["states"].push_back({{"name",name},{"path",file.toStdString()},{"fixture",true}});};
         pages->setCurrentIndex(0);auto disclosure=findChild<QPushButton*>("advancedOptions");disclosure->setChecked(true);renderState("advanced");disclosure->setChecked(false);
-        pages->setCurrentIndex(1);select(0,0);auto beforeRotation=layout;map->rotateSelection();showGeometry();renderState("rotation-quarter-turn");layout=beforeRotation;map->resetHistory();map->update();
+        pages->setCurrentIndex(1);select(0,0);tree->setCurrentItem(tree->topLevelItem(0)->child(0));auto beforeRotation=layout;map->rotateSelection();showGeometry();renderState("rotation-quarter-turn");layout=beforeRotation;map->resetHistory();map->update();
         auto retainedLayout=layout,retainedSnapshot=lastSnapshot;
         lastSnapshot["online"]=std::vector<bool>(layout.size(),false);buildDevices();pages->setCurrentIndex(2);renderState("offline");
         layout=Json::array();buildDevices();renderState("empty");layout=retainedLayout;lastSnapshot=retainedSnapshot;buildDevices();
@@ -688,7 +689,8 @@ class Panel : public QMainWindow {
         } else if(editorPhase==1) {
             if(revision!=editorRevision+1 || layout[0]["groups"][0]["name"]==editorBaseline[0]["groups"][0]["name"])
                 throw std::runtime_error("Real Save button did not persist the edited name");
-            if(layout[0]["rotation_quarters"][0]!=1)throw std::runtime_error("Rotation metadata was not persisted by the real Save action");
+            int previous=editorBaseline[0].contains("rotation_quarters")?editorBaseline[0]["rotation_quarters"][0].get<int>():0;
+            if(layout[0]["rotation_quarters"][0]!=(previous+1)%4)throw std::runtime_error("Rotation metadata was not persisted by the real Save action");
             map->replaceLayout(editorBaseline);select(0,0);zoneName->setText(text(editorBaseline[0]["groups"][0]["name"]));
             QMetaObject::invokeMethod(zoneName,"editingFinished",Qt::DirectConnection);
             editorPhase=2;save->click();
@@ -713,6 +715,10 @@ public:
         QMetaObject::invokeMethod(this,[this]{client.open(state);},Qt::QueuedConnection);
     }
     void closeEvent(QCloseEvent* event) override {
+        // Export fixtures edit only their private in-memory presentation after
+        // the live Save check has restored the owner's exact original map.
+        // Do not open an invisible unsaved-draft dialog on diagnostic shutdown.
+        if(exported && !exportPath.isEmpty()){event->accept();return;}
         if(lifecycleBusy) {failure("Wait for the lighting lifecycle operation to finish.");event->ignore();return;}
         if(tray && !quitRequested && panelOptions.value("close_to_tray",true)) {hide();event->ignore();return;}
         if(dirty && QMessageBox::question(this,"Unsaved map","Close without saving your changes?")!=QMessageBox::Yes) {event->ignore();return;}

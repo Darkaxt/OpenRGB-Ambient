@@ -1,5 +1,13 @@
 # Corresponding-page visual audit — 2026-11-04
 
+This is the retained **0.4.0 baseline audit**, not the current release status.
+The original unchecked observations remain below so the failed baseline is not
+rewritten as a successful screenshot. The implementation now uses recovered
+native fonts/symbols, the reference shell/card/page composition, shape-relative
+rotation and explicit connection/loading/help surfaces. The authoritative
+item-by-item resolution and final delivery evidence are recorded in the companion
+OpenRGB repository at `office-validation/gui-0.5.0.md`.
+
 **Result: visual parity fails.** The native panel preserves much of the working
 behavior, but its appearance is a generic Qt form with a related palette. The
 earlier functional reconciliation did not establish the requested visual match.

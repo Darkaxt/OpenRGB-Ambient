@@ -5,7 +5,11 @@
 > 0.4.0 candidate fails that visual gate. See
 > [the corresponding-page checklist](design-reference/VISUAL-PARITY-CHECKLIST.md)
 > and [actual recovered iconography](design-reference/iconography/contact-sheet.png).
-> Original fonts/icons were recovered but not adopted by the native UI.
+> Original fonts/icons were recovered but not adopted by the 0.4.0 native UI.
+> The 0.5.0 reconstruction adopts the actual recovered typefaces and symbols,
+> reference page layouts and native controls. The companion OpenRGB repository's
+> `office-validation/gui-0.5.0.md` records corresponding-page verification and
+> the native adaptations; this historical recovery record is not delivery proof.
 
 Analysis boundary, 2026-11-04: the user redirected work to REA of the GUI and
 will adjust the device mapping tomorrow using the new tooling. This document
