@@ -28,10 +28,13 @@ float luminance(float3 c) {return dot(c,float3(.2126,.7152,.0722));}
 float3 filtered(float2 uv,float lod,float amount) {
     uint w,h;image.GetDimensions(w,h);
     float2 radius=amount*float2((float)h/w,1);
+    // Each tap must cover its footprint. Widely separated mip-0 point samples
+    // produce nine sharp ghost images instead of a spatial blur at large radii.
+    float sampleLod=max(lod,log2(max(1.,amount*h)));
     float3 c=0;
     // Separable binomial kernel in 9 taps; clamped at the LG's image edge.
     [unroll] for(int y=-1;y<=1;++y) [unroll] for(int x=-1;x<=1;++x)
-        c+=image.SampleLevel(linearSampler,uv+radius*float2(x,y),lod).rgb*(x==0?2:1)*(y==0?2:1)/16;
+        c+=image.SampleLevel(linearSampler,uv+radius*float2(x,y),sampleLod).rgb*(x==0?2:1)*(y==0?2:1)/16;
     return c;
 }
 float3 filtered(float2 uv,float lod) {return filtered(uv,lod,appearance.x);}

@@ -173,6 +173,13 @@ int main() {
         auto gray=state.colors[1];if(RGBGetRValue(gray)!=RGBGetGValue(gray) || RGBGetGValue(gray)!=RGBGetBValue(gray)) throw std::runtime_error("Saturation control did not produce gray");
         options["saturation"]=1;state.configure(options);state.sampleRetained();
         if(state.colors!=unblurred || state.frames!=6) throw std::runtime_error("Static-frame settings failed to restore exact identity without inventing capture frames");
+        // A wide blur must integrate high-frequency detail. Nine separated
+        // mip-zero taps leave sharp repeated edges instead of a smooth image.
+        for(unsigned y=0;y<64;++y) for(unsigned x=64;x<128;++x) pixels[y*128+x]=(x%2)?0xffffffff:0xff000000;
+        state.context->UpdateSubresource(texture.get(),0,nullptr,pixels.data(),128*4,0);state.processTexture(texture.get());
+        auto blurredDetail=decode(awaitPreview(10));int low=255,high=0;
+        for(int x=160;x<480;++x) {int v=blurredDetail.pixelColor(x,320).red();low=std::min(low,v);high=std::max(high,v);}
+        if(high-low>20 || low<100 || high>155) throw std::runtime_error("Wide blur retains sharp ghosted detail instead of integrating its footprint");
         for(unsigned y=0;y<64;++y) for(unsigned x=64;x<128;++x) pixels[y*128+x]=(y<16 || y>=48)?0xff000000:0xffff0000;
         state.context->UpdateSubresource(texture.get(),0,nullptr,pixels.data(),128*4,0);
         state.regions=state.makeRegions(std::vector<Sample>(4,Sample{.1f,0,.9f,.1f}));state.processTexture(texture.get());
