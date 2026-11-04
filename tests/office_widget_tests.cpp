@@ -5,6 +5,7 @@
 #include <QFontInfo>
 #include <QRawFont>
 #include <QTest>
+#include <QBuffer>
 void require(bool condition,const char* message) {if(!condition) throw std::runtime_error(message);}
 void mouse(QWidget& widget,QEvent::Type type,QPointF point,Qt::MouseButton button,Qt::MouseButtons buttons,Qt::KeyboardModifiers modifiers=Qt::NoModifier) {
     QMouseEvent event(type,point,point,button,buttons,modifiers);QApplication::sendEvent(&widget,&event);
@@ -76,7 +77,22 @@ void multiSelection(QApplication& app) {
     auto pageStack=qobject_cast<QStackedWidget*>(previewPage->parentWidget());require(pageStack && save,"Preview apply action missing");
     pageStack->setCurrentWidget(previewPage);app.processEvents();require(save->isVisible() && save->text()=="Apply settings","Preview blur requires leaving the page to apply");
     require(panel.fixtureWantsPreview(),"Visible Preview must request current images");
+    auto draftRequest=panel.fixturePreviewRequest();
+    require(draftRequest.at("command")=="snapshot" && draftRequest.at("preview")==true && draftRequest.at("preview_blur")==1.5,
+        "Unsaved blur must reach the read-only preview request instead of waiting for Apply");
+    require(draftRequest.size()==4 && !draftRequest.contains("settings") && !draftRequest.contains("layout"),
+        "Preview request must not apply or save the draft");
+    auto imageReply=[](double blur,const char* generation,QColor colour) {
+        QImage image(32,16,QImage::Format_RGB32);image.fill(colour);QByteArray bytes;QBuffer buffer(&bytes);buffer.open(QIODevice::WriteOnly);image.save(&buffer,"PNG");
+        return Json{{"preview_blur",blur},{"preview_generation",generation},{"preview_png",bytes.toBase64().toStdString()}};
+    };
+    panel.fixturePreviewReply(imageReply(1.5,"first",Qt::red));require(canvas->preview.pixelColor(0,0)==Qt::red,"Matching draft preview did not reach the image widget");
+    previewBlur->setValue(10);
+    panel.fixturePreviewReply(imageReply(1.5,"stale",Qt::green));require(canvas->preview.pixelColor(0,0)==Qt::red,"An old slider reply replaced the newer draft preview");
+    panel.fixturePreviewReply(imageReply(10,"second",Qt::blue));require(canvas->preview.pixelColor(0,0)==Qt::blue,"New draft preview did not update the rendered source");
+    require(*canvas->layout==original,"Previewing blur rewrote topology");
     panel.hide();app.processEvents();require(!panel.fixtureWantsPreview(),"Hidden panel continues requesting images");
+    require(!panel.fixturePreviewRequest().contains("preview_blur"),"Hidden panel requests draft blur processing");
     panel.show();pageStack->setCurrentIndex(0);app.processEvents();require(!panel.fixtureWantsPreview(),"Control page unnecessarily requests images");
     pageStack->setCurrentIndex(1);previewBlur->setValue(0);
     auto click=[&](QTreeWidgetItem* row,Qt::KeyboardModifiers modifiers=Qt::NoModifier) {

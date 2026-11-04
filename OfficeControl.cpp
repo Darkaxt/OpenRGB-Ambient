@@ -529,7 +529,7 @@ class Panel : public QMainWindow {
         slider->setRange(0,qRound((maximum-minimum)/step));
         connect(spin,&QDoubleSpinBox::valueChanged,slider,[=](double n){slider->setValue(qRound((n-minimum)/step));});
         connect(slider,&QSlider::valueChanged,spin,[=](int n){spin->setValue(minimum+n*step);});
-        connect(spin,&QDoubleSpinBox::valueChanged,this,[this,key](double n){if(key=="blur") {map->blur=n/100;map->update();}changed();});
+        connect(spin,&QDoubleSpinBox::valueChanged,this,[this,key](double n){if(key=="blur") {map->blur=n/100;map->update();}changed();if(key=="blur" && !updating) poll();});
         numbers[key]=spin;line->addWidget(spin,0,Qt::AlignRight);line->addWidget(slider);return row;
     }
     QComboBox* choice(const std::string& key,std::initializer_list<std::pair<const char*,const char*>> entries) {
@@ -558,6 +558,17 @@ class Panel : public QMainWindow {
         if(!value.value("ok",false)) {failure(text(value.at("error")));return;}
         connection->setText("Connected");connection->setStyleSheet("color:#22d3a5");connectionDetail->setText("Connected");connection->setToolTip("Native OpenRGB owner");shellPages->setCurrentIndex(0);
         if(then) then(value.at("result"));
+    }
+    void loadPreview(const Json& snapshot) {
+        auto generation=snapshot.value("preview_generation",std::string());
+        auto png=QByteArray::fromBase64(QByteArray::fromStdString(snapshot.value("preview_png",std::string())));
+        bool matchingBlur=std::abs(snapshot.value("preview_blur",numbers.at("blur")->value())-numbers.at("blur")->value())<.00001;
+        if(matchingBlur && !png.isEmpty() && (generation.empty() || generation!=decodedPreview)) {
+            QImage next;if(next.loadFromData(png,"PNG")) {map->preview=std::move(next);decodedPreview=generation;}
+        }
+        map->update();
+        livePreview->image=map->preview;livePreview->layout=layout;livePreview->colours=map->colours;livePreview->update();
+        trace(QString("preview %1 bytes decoded=%2").arg(png.size()).arg(!map->preview.isNull()));
     }
     void load(const Json& snapshot,bool force=false) {
         trace("snapshot-accepted");
@@ -591,14 +602,7 @@ class Panel : public QMainWindow {
             onlineLabels[d]->setStyleSheet(online?"color:#22d3a5":"color:#ff9f1c");
             identifyButtons[d]->setEnabled(online);
         }
-        auto generation=snapshot.value("preview_generation",std::string());
-        auto png=QByteArray::fromBase64(QByteArray::fromStdString(snapshot.value("preview_png",std::string())));
-        if(!png.isEmpty() && (generation.empty() || generation!=decodedPreview)) {
-            QImage next;if(next.loadFromData(png,"PNG")) {map->preview=std::move(next);decodedPreview=generation;}
-        }
-        map->update();
-        livePreview->image=map->preview;livePreview->layout=layout;livePreview->colours=map->colours;livePreview->update();
-        trace(QString("preview %1 bytes decoded=%2").arg(png.size()).arg(!map->preview.isNull()));
+        loadPreview(snapshot);
         if(!snapshot.value("preview_error",std::string()).empty()) {
             failure(text(snapshot.at("preview_error")));
             if(!exportPath.isEmpty()) QCoreApplication::exit(1);
@@ -608,10 +612,15 @@ class Panel : public QMainWindow {
             if(exerciseEditor && editorPhase<6) exerciseSave();else exportViews();
         }
     }
+    Json previewRequest() const {
+        Json request={{"command","snapshot"},{"preview",wantsPreview()},{"preview_generation",decodedPreview}};
+        if(wantsPreview()) request["preview_blur"]=numbers.at("blur")->value();
+        return request;
+    }
     void poll() {
         if(pending || !client.ready()) return;
         if(exportPath.isEmpty() && revision && (!isVisible() || isMinimized())) return;
-        pending=true;client.send({{"command","snapshot"},{"preview",wantsPreview()},{"preview_generation",decodedPreview}},[this](const Json& r){response(r,[this](const Json& s){load(s);});});
+        pending=true;client.send(previewRequest(),[this](const Json& r){response(r,[this](const Json& s){load(s);});});
     }
     void action(const Json& request) {client.send(request,[this](const Json& r){response(r);poll();});}
     void buildTree() {
@@ -819,6 +828,8 @@ class Panel : public QMainWindow {
 public:
 #ifdef OFFICE_WIDGET_TEST
     bool fixtureWantsPreview() const {return wantsPreview();}
+    Json fixturePreviewRequest() const {return previewRequest();}
+    void fixturePreviewReply(const Json& reply) {loadPreview(reply);}
     void fixtureLayout(const Json& value) {
         refresh.stop();client.error={};updating=true;layout=value;map->layout=&layout;map->zones.clear();buildTree();buildDevices();updating=false;select(0,0);shellPages->setCurrentIndex(0);pages->setCurrentIndex(1);
     }

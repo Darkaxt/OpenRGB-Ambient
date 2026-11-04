@@ -291,6 +291,9 @@ struct CaptureState {
     std::string previewBase64;
     std::string previewError;
     double previewEncodeMs=0;
+    float previewRequestedBlur=-1,previewAttemptBlur=-2,previewRenderedBlur=-1;
+    float previewBufferBlur=-2;
+    com_ptr<ID3D11Buffer> previewOptions;
     std::thread previewWorker;
 #ifdef OFFICE_CAPTURE_TEST
     std::function<void()> beforePreviewEncode;
@@ -372,19 +375,20 @@ struct CaptureState {
         previewCondition.notify_one();
         if(previewWorker.joinable()) previewWorker.join();
     }
-    void requestPreview() {
-        {std::lock_guard lock(previewMutex);previewPending=true;}
+    void requestPreview(float blur=-1) {
+        {std::lock_guard lock(previewMutex);previewPending=true;previewRequestedBlur=blur;}
         previewCondition.notify_one();
     }
     void runPreview() {
         for(;;) {
+            float blur;
             {std::unique_lock lock(previewMutex);previewCondition.wait(lock,[&]{return previewStopping || previewPending;});
-             if(previewStopping) return;previewPending=false;}
+             if(previewStopping) return;previewPending=false;blur=previewRequestedBlur;}
             try {
                 QImage image;uint64_t generation;
                 {std::lock_guard lock(mutex);
-                 if(!active || !input || previewAttempt==previewRevision) continue;
-                 generation=previewRevision;previewAttempt=generation;image=copyPreview();}
+                 if(!active || !input || (previewAttempt==previewRevision && previewAttemptBlur==blur)) continue;
+                 generation=previewRevision;previewAttempt=generation;previewAttemptBlur=blur;image=copyPreview(blur);}
                 // The CPU owns this image. No capture mutex, mapped GPU resource,
                 // output event thread or unbounded frame queue survives this point.
 #ifdef OFFICE_CAPTURE_TEST
@@ -396,7 +400,7 @@ struct CaptureState {
                 auto base64=encoded.toBase64().toStdString();
                 auto elapsed=std::chrono::duration<double,std::milli>(Clock::now()-began).count();
                 {std::lock_guard lock(previewMutex);previewBase64=std::move(base64);previewGeneration=generation;
-                 ++previewEncodes;previewEncodeMs=elapsed;previewError.clear();}
+                 previewRenderedBlur=blur;++previewEncodes;previewEncodeMs=elapsed;previewError.clear();}
                 previewCondition.notify_all();
             } catch(hresult_error const& e) {std::lock_guard lock(previewMutex);previewError=to_string(e.message());previewCondition.notify_all();}
               catch(std::exception const& e) {std::lock_guard lock(previewMutex);previewError=e.what();previewCondition.notify_all();}
@@ -408,7 +412,13 @@ struct CaptureState {
         check_hresult(access->GetInterface(__uuidof(ID3D11Texture2D),source.put_void()));
         processTexture(source.get());
     }
-    QImage copyPreview() {
+    QImage copyPreview(float blur=-1) {
+            if(!previewOptions || previewBufferBlur!=blur) {
+                std::array<float,4> values{blur<0?-1.f:blur/100,0,0,0};
+                D3D11_BUFFER_DESC desc{};desc.ByteWidth=sizeof(values);desc.Usage=D3D11_USAGE_IMMUTABLE;desc.BindFlags=D3D11_BIND_CONSTANT_BUFFER;
+                D3D11_SUBRESOURCE_DATA data{};data.pSysMem=values.data();previewOptions=nullptr;
+                check_hresult(device->CreateBuffer(&desc,&data,previewOptions.put()));previewBufferBlur=blur;
+            }
             D3D11_TEXTURE2D_DESC previewDesc{};input->GetDesc(&previewDesc);
             previewDesc.Height=std::max(1u,static_cast<unsigned>(640.0*previewDesc.Height/previewDesc.Width));previewDesc.Width=640;
             previewDesc.MipLevels=1;previewDesc.MiscFlags=0;
@@ -424,6 +434,7 @@ struct CaptureState {
             context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
             context->VSSetShader(vertex.get(),nullptr,0);context->PSSetShader(previewPixel.get(),nullptr,0);
             auto* constants=options.get();context->PSSetConstantBuffers(1,1,&constants);
+            auto* draft=previewOptions.get();context->PSSetConstantBuffers(2,1,&draft);
             auto* view=inputView.get();context->PSSetShaderResources(0,1,&view);
             auto* filter=sampler.get();context->PSSetSamplers(0,1,&filter);context->Draw(3,0);
             ID3D11ShaderResourceView* none=nullptr;context->PSSetShaderResources(0,1,&none);
@@ -689,27 +700,36 @@ struct OfficeAmbience::Impl {
         if(!std::isfinite(smooth) || smooth<0 || smooth>2000) throw std::runtime_error("Smoothing must be 0-2000 milliseconds");
         office::validateProcessing(candidate);
     }
-    Json snapshot(bool preview=false,const std::string& knownPreview={}) {
-        if(preview && capture) capture->state->requestPreview();
+    Json snapshot(bool preview=false,const std::string& knownPreview={},float previewBlur=-1) {
+        if(preview && capture) capture->state->requestPreview(previewBlur);
         auto colours=Json::array();
         for(auto& d:devices) {auto row=Json::array();for(auto c:d.colors) row.push_back(Json::array({RGBGetRValue(c),RGBGetGValue(c),RGBGetBValue(c)}));colours.push_back(row);}
         std::string image,previewError,previewKey;Json effective=Json::array();uint64_t encodes=0;double encodeMs=0;
         if(capture) {std::lock_guard lock(capture->state->mutex);
             for(auto& d:devices) effective.push_back(office::encode(std::vector<Sample>(capture->state->effectiveRegions.begin()+d.start,capture->state->effectiveRegions.begin()+d.start+d.count)));}
         if(capture) {std::lock_guard lock(capture->state->previewMutex);auto& state=*capture->state;
-            previewKey=previewEpoch+":"+std::to_string(sourceGeneration)+":"+std::to_string(state.previewGeneration);
-            if(preview && knownPreview!=previewKey) image=state.previewBase64;
+            previewKey=previewEpoch+":"+std::to_string(sourceGeneration)+":"+std::to_string(state.previewGeneration)+":"+std::to_string(state.previewRenderedBlur);
+            if(preview && state.previewRenderedBlur==previewBlur && knownPreview!=previewKey) image=state.previewBase64;
             previewError=state.previewError;encodes=state.previewEncodes;encodeMs=state.previewEncodeMs;}
         auto online=Json::array();{std::lock_guard lock(controllersMutex);for(auto& d:devices) online.push_back(d.controller!=nullptr);}
         Json settings={{"monitor",config.at("monitor")},{"enabled",config.at("enabled")},{"fps",config.at("fps")},{"smoothing_ms",config.at("smoothing_ms")}};
         const auto defaults=office::processingDefaults();for(auto& [key,value]:defaults.items()) settings[key]=config.at(key);
         return {{"revision",revision},{"online",online},{"settings",settings},
-                {"layout",layout},{"default_layout",factoryLayout},{"status",report()},{"colors",colours},{"effective_regions",effective},{"preview_png",image},{"preview_generation",previewKey},{"preview_encodes",encodes},{"preview_encode_ms",encodeMs},{"preview_error",previewError},
+                {"layout",layout},{"default_layout",factoryLayout},{"status",report()},{"colors",colours},{"effective_regions",effective},{"preview_png",image},{"preview_generation",previewKey},{"preview_blur",previewBlur},{"preview_encodes",encodes},{"preview_encode_ms",encodeMs},{"preview_error",previewError},
                 {"test_mode",standbyPreview?"standby":calibration?"calibration":identifyDevice.empty()?"none":"identify"}};
     }
     Json command(const Json& request) {
         auto name=request.at("command").get<std::string>();
-        if(name=="snapshot") return snapshot(request.value("preview",false),request.value("preview_generation",std::string()));
+        if(name=="snapshot") {
+            float blur=-1;
+            if(request.contains("preview_blur")) {
+                if(!request["preview_blur"].is_number()) throw std::runtime_error("Preview blur must be numeric");
+                double value=request["preview_blur"];
+                if(!std::isfinite(value) || value<0 || value>10) throw std::runtime_error("Preview blur must be 0-10 percent");
+                blur=static_cast<float>(value);
+            }
+            return snapshot(request.value("preview",false),request.value("preview_generation",std::string()),blur);
+        }
         if(name=="recover") {invalidate=true;dirty=true;return {{"accepted",true}};}
         if(name=="stop_test") {calibration=false;standbyPreview=false;identifyDevice.clear();return {{"accepted",true}};}
         if(name=="preview_standby") {calibration=false;identifyDevice.clear();standbyPreview=true;standbyBegan=Clock::now();return {{"accepted",true}};}

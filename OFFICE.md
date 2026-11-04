@@ -115,6 +115,12 @@ an unchanged unavailable source can be retried explicitly. No timed reset loop.
 The panel's dark cyan hierarchy and topology interactions were reconstructed
 from EDAmbilight v1.2.0 by Stefano Indraccolo. Its MIT credit is delivered as
 `LICENSE-EDAmbilight-MIT.txt`; see `EDAMBILIGHT-GUI-REVIEW.md` for shipped evidence.
+The Preview and Topology source images preview the unsaved blur slider through
+the same GPU filter as LED extraction. This read-only override changes neither
+the saved map nor the actual lighting until Apply. The LED overlay continues
+showing submitted colours. Preview caching includes source revision and draft
+blur, and the panel rejects images for an older slider value. Returning to zero
+uses the original retained input; it does not blur an already-filtered bitmap.
 The Preview page shows actual capture and submitted LED colours. Its separate
 MIT-licensed animation/music playground retains the original six WebGL effects,
 particles, palettes, postprocessing, audio bindings, visualizers and saved presets.

@@ -100,10 +100,10 @@ int main() {
         if(state.colors!=expected) throw std::runtime_error("GPU region average or selected-monitor crop is incorrect");
         // A static wallpaper may produce no further WGC callbacks. Opening the
         // editor must still obtain a preview from the retained GPU texture.
-        auto awaitPreview=[&] {
-            auto expectedGeneration=state.previewRevision;state.requestPreview();
+        auto awaitPreview=[&](float blur=-1) {
+            auto expectedGeneration=state.previewRevision;state.requestPreview(blur);
             std::unique_lock lock(state.previewMutex);
-            state.previewCondition.wait(lock,[&]{return state.previewGeneration>=expectedGeneration || !state.previewError.empty();});
+            state.previewCondition.wait(lock,[&]{return (state.previewGeneration>=expectedGeneration && state.previewRenderedBlur==blur) || !state.previewError.empty();});
             if(!state.previewError.empty()) throw std::runtime_error(state.previewError);
             return state.previewBase64;
         };
@@ -148,8 +148,25 @@ int main() {
         state.regions=state.makeRegions({around(.55f,.5f,.02f,.02f),around(.2f,.5f,.02f,.02f),around(.8f,.5f,.02f,.02f),around(.2f,.5f,.02f,.02f)});
         auto options=office::processingDefaults();
         state.configure(options);state.processTexture(texture.get());auto unblurred=state.colors;
+        // Unsaved slider edits must affect the retained image without applying
+        // processing settings, sampling LEDs, changing colours or WGC callbacks.
+        auto decode=[](const std::string& value) {return QImage::fromData(QByteArray::fromBase64(QByteArray::fromStdString(value)),"PNG");};
+        auto draftZero=awaitPreview(0);auto previewBefore=decode(draftZero);
+        auto beforePasses=state.samplingPasses,beforeFrames=state.frames;
+        auto draftTen=awaitPreview(10);auto previewAfter=decode(draftTen);
+        if(draftTen==draftZero || previewBefore.isNull() || previewAfter.isNull()
+            || previewAfter.pixelColor(352,320).red()<=previewBefore.pixelColor(352,320).red())
+            throw std::runtime_error("Draft blur does not visibly spread colour in the actual GPU preview");
+        auto encodes=state.previewEncodes;
+        if(awaitPreview(10)!=draftTen || state.previewEncodes!=encodes)
+            throw std::runtime_error("Unchanged draft blur re-encodes a static preview");
+        if(awaitPreview(0)!=draftZero || awaitPreview()!=draftZero)
+            throw std::runtime_error("Returning draft blur to zero/default did not restore the original image");
+        if(state.colors!=unblurred || state.samplingPasses!=beforePasses || state.frames!=beforeFrames)
+            throw std::runtime_error("Draft preview changed applied LED processing or invented capture callbacks");
         options["blur"]=10.0;state.configure(options);state.sampleRetained();
         if(RGBGetRValue(state.colors[0])<=RGBGetRValue(unblurred[0])) throw std::runtime_error("Blur did not spread adjacent colour into the actual LED sample");
+        if(awaitPreview()!=draftTen) throw std::runtime_error("Draft and applied blur disagree or apply blur twice");
         options["blur"]=0;options["brightness"]=0;state.configure(options);state.sampleRetained();
         for(auto c:state.colors) if(c) throw std::runtime_error("Brightness control is not wired to GPU output");
         options["brightness"]=1;options["saturation"]=0;state.configure(options);state.sampleRetained();

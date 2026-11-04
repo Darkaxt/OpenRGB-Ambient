@@ -17,21 +17,24 @@ void compareCs(uint3 pixelId:SV_DispatchThreadID,uint groupIndex:SV_GroupIndex) 
 SamplerState linearSampler : register(s0);
 cbuffer Regions : register(b0) { float4 region[384]; };
 cbuffer Options : register(b1) { float4 algorithm; float4 appearance; float4 borders; float4 spare; };
+// Read-only draft preview; LED extraction continues using applied appearance.
+cbuffer PreviewOptions : register(b2) { float4 previewAppearance; };
 struct Vertex { float4 position : SV_POSITION; float2 uv : TEXCOORD0; };
 Vertex vs(uint index : SV_VertexID) {
     Vertex o; o.uv=float2((index<<1)&2,index&2);
     o.position=float4(o.uv*float2(2,-2)+float2(-1,1),0,1);return o;
 }
 float luminance(float3 c) {return dot(c,float3(.2126,.7152,.0722));}
-float3 filtered(float2 uv,float lod) {
+float3 filtered(float2 uv,float lod,float amount) {
     uint w,h;image.GetDimensions(w,h);
-    float2 radius=appearance.x*float2((float)h/w,1);
+    float2 radius=amount*float2((float)h/w,1);
     float3 c=0;
     // Separable binomial kernel in 9 taps; clamped at the LG's image edge.
     [unroll] for(int y=-1;y<=1;++y) [unroll] for(int x=-1;x<=1;++x)
         c+=image.SampleLevel(linearSampler,uv+radius*float2(x,y),lod).rgb*(x==0?2:1)*(y==0?2:1)/16;
     return c;
 }
+float3 filtered(float2 uv,float lod) {return filtered(uv,lod,appearance.x);}
 float3 corrected(float3 c) {
     c=saturate(lerp(luminance(c).xxx,c,appearance.y));
     float l=luminance(c);if(l>0.0001 && l<appearance.w) c*=appearance.w/l;
@@ -109,4 +112,6 @@ float4 ps(Vertex input,out float4 sampled : SV_Target1) : SV_Target0 {
     }
     return float4(corrected(color),1);
 }
-float4 previewPs(Vertex input) : SV_TARGET {return float4(corrected(filtered(input.uv,0)),1);}
+float4 previewPs(Vertex input) : SV_TARGET {
+    return float4(corrected(filtered(input.uv,0,previewAppearance.x<0?appearance.x:previewAppearance.x)),1);
+}
