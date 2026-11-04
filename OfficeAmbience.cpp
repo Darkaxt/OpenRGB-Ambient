@@ -1,6 +1,11 @@
+#ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
 #define NOMINMAX
+#endif
 #include <windows.h>
+#include <roapi.h>
 #include <dwmapi.h>
 #include <commctrl.h>
 #include <d3d11.h>
@@ -38,6 +43,11 @@ using namespace winrt::Windows::Graphics::DirectX::Direct3D11;
 using Clock=std::chrono::steady_clock;
 using Json=nlohmann::json;
 constexpr unsigned maxSamples=384;
+struct Apartment {
+    HRESULT result=RoInitialize(RO_INIT_MULTITHREADED);
+    Apartment() { if(FAILED(result) && result!=RPC_E_CHANGED_MODE) check_hresult(result); }
+    ~Apartment() { if(SUCCEEDED(result)) RoUninitialize(); }
+};
 struct Sample { float left,top,right,bottom; };
 struct Monitor { HMONITOR handle{}; RECT bounds{}; };
 
@@ -350,15 +360,13 @@ struct OfficeAmbience::Impl {
     std::atomic_bool dirty{true};
     HWINEVENTHOOK systemHook{},objectHook{};
     static inline std::map<HWINEVENTHOOK,Impl*> hooks;
-    HRESULT apartment;
+    Apartment apartment;
 
     static void CALLBACK winEvent(HWINEVENTHOOK hook,DWORD,HWND,LONG object,LONG,DWORD,DWORD) {
         if(object!=OBJID_WINDOW) return;
         auto found=hooks.find(hook); if(found!=hooks.end()) found->second->dirty=true;
     }
     Impl(OpenRGBPluginAPIInterface* api,const std::filesystem::path& path):api(api),configPath(path) {
-        apartment=RoInitialize(RO_INIT_MULTITHREADED);
-        if(FAILED(apartment) && apartment!=RPC_E_CHANGED_MODE) check_hresult(apartment);
         std::ifstream file(path); Json config; file>>config;
         auto wide=to_hstring(config.value("monitor",std::string("\\\\.\\DISPLAY2")));
         display.assign(wide.c_str(),wide.size());
@@ -392,7 +400,6 @@ struct OfficeAmbience::Impl {
         for(auto hook:{systemHook,objectHook}) if(hook) { hooks.erase(hook); UnhookWinEvent(hook); }
         capture.reset();
         mode="stopped"; status();
-        if(SUCCEEDED(apartment)) RoUninitialize();
     }
     void chooseSource() {
         auto monitor=monitorByName(display);
@@ -400,7 +407,7 @@ struct OfficeAmbience::Impl {
         std::string selected=candidate?"app":"wallpaper";
         if(!candidate && monitor.handle) candidate=wallpaperHost(monitor);
         RECT bounds{}; if(candidate) GetWindowRect(candidate,&bounds);
-        if(candidate==source && EqualRect(&bounds,&sourceBounds) && EqualRect(&monitor.bounds,&monitorBounds)) return;
+        if(candidate==source && capture && EqualRect(&bounds,&sourceBounds) && EqualRect(&monitor.bounds,&monitorBounds)) return;
         capture.reset(); source=candidate; mode=candidate?selected:"waiting";
         sourceBounds=bounds; monitorBounds=monitor.bounds;
         switched=Clock::now(); firstFrameDelayMs=0;
