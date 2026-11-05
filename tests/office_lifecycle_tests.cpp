@@ -140,6 +140,14 @@ struct OfficeLifecycleTest {
         };
         auto beforeRest=owner.config;
         owner.calibration=true;owner.identifyDevice="*";
+        owner.automaticSaver=true;owner.dirty=false;rest("automatic-screensaver");
+        owner.automaticSaver=false;
+        owner.calibration=false;owner.identifyDevice.clear();owner.tick();
+        require(owner.devices[0].colors[0]==0,"Idle saver exit must not replay pre-saver colours before a fresh frame");
+        owner.latest.assign(314,ToRGBColor(0,255,0));owner.tick();
+        require(owner.devices[0].colors[0]==ToRGBColor(0,255,0),"Fresh imagery resumes after automatic saver exit");
+        require(owner.config==beforeRest,"Automatic saver preserves custom settings and topology");
+        owner.calibration=true;owner.identifyDevice="*";
         SendMessageW(events,WM_WTSSESSION_CHANGE,WTS_SESSION_LOCK,0);rest("session-locked");
         SendMessageW(events,WM_WTSSESSION_CHANGE,WTS_SESSION_UNLOCK,0);
         require(!owner.sessionLocked && owner.dirty && owner.invalidate,"Unlock requests fresh source selection");

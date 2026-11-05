@@ -28,7 +28,10 @@ an optional native Qt panel; it neither captures nor submits RGB itself.
 ```
 
 Window-state events choose a maximized/fullscreen application on that monitor.
-An active screensaver takes priority, including a fullscreen LG window on the
+An automatically activated Windows idle screensaver rests all lights and releases
+capture. Dismissing it resumes from fresh imagery. The Windows saver-running flag
+or `Screen-saver` input desktop distinguishes this from a shortcut launch.
+A manually launched screensaver takes priority, including a fullscreen LG window on the
 separate Windows `Screen-saver` input desktop. Desktop-switch events restore the
 normal policy when it exits; the owner never switches the user's desktop.
 Manually started fullscreen `.scr`/`WindowsScreenSaverClass` windows are recognized

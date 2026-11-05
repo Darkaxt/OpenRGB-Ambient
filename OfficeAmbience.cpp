@@ -612,7 +612,7 @@ struct OfficeAmbience::Impl {
     std::string identifyDevice;
     bool calibration=false;
     bool sessionLocked=false,displayOff=false,standbyPreview=false;
-    bool desktopUnavailable=false,monitorMissing=false;
+    bool desktopUnavailable=false,monitorMissing=false,automaticSaver=false;
     std::string inputDesktop;
     Clock::time_point standbyBegan=Clock::now();
     HPOWERNOTIFY displayNotification{};
@@ -901,10 +901,13 @@ struct OfficeAmbience::Impl {
         auto monitor=monitorByName(display);
         monitorMissing=!monitor.handle;
         InputDesktop desktop;inputDesktop=to_string(desktop.name);desktopUnavailable=desktop.secure();
-        if(monitorMissing || desktopUnavailable) return;
-        bool saver=desktop.screensaver();
-        HWND candidate=screensaverWindow(desktop.handle,monitor,saver);
-        saver=saver || candidate!=nullptr;
+        // Windows' idle saver is a rest transition, not a window whose WGC
+        // availability may leave the previous wallpaper colours illuminated.
+        // Shortcut-started .scr windows do not set this state and remain sources.
+        automaticSaver=desktop.screensaver();
+        if(monitorMissing || desktopUnavailable || automaticSaver) return;
+        HWND candidate=screensaverWindow(desktop.handle,monitor,false);
+        bool saver=candidate!=nullptr;
         if(!saver) candidate=maximizedApp(monitor);
         std::string selected=saver?"screensaver":candidate?"app":"wallpaper";
         if(!candidate && !saver) candidate=wallpaperHost(monitor);
@@ -922,7 +925,7 @@ struct OfficeAmbience::Impl {
         status();
     }
     std::string restReason() const {
-        return sessionLocked?"session-locked":displayOff?"display-asleep":desktopUnavailable?"secure-desktop":monitorMissing?"monitor-disconnected":"";
+        return sessionLocked?"session-locked":displayOff?"display-asleep":automaticSaver?"automatic-screensaver":desktopUnavailable?"secure-desktop":monitorMissing?"monitor-disconnected":"";
     }
     void tick() {
         if(!sessionLocked && !displayOff && dirty.exchange(false)) chooseSource();
