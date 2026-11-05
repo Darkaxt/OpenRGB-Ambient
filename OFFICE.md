@@ -31,9 +31,9 @@ Window-state events choose a maximized/fullscreen application on that monitor.
 An automatically activated Windows idle screensaver rests all lights and releases
 capture. Dismissing it resumes from fresh imagery. The Windows saver-running flag
 or `Screen-saver` input desktop distinguishes this from a shortcut launch.
-A manually launched screensaver takes priority, including a fullscreen LG window on the
-separate Windows `Screen-saver` input desktop. Desktop-switch events restore the
-normal policy when it exits; the owner never switches the user's desktop.
+A manually launched fullscreen LG screensaver on the ordinary input desktop
+takes capture priority. Desktop-switch events restore the normal policy when
+an automatic saver exits; the owner never switches the user's desktop.
 Manually started fullscreen `.scr`/`WindowsScreenSaverClass` windows are recognized
 on the ordinary desktop too, including the Ctrl+Alt+L Wallpaper Engine saver
 whose manual launch leaves Windows' screensaver-running flag unset.
