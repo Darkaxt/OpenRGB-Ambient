@@ -20,4 +20,4 @@ for header, interface in [("OpenRGBPluginInterface.h", "OpenRGBPluginAPIInterfac
         result = "" if re.match(r"void\s", method) else "return {};"
         output.append(f"    {method} override {{{result}}}")
     output.append("};")
-Path(__file__).with_name("interface_stubs.h").write_text("\n".join(output) + "\n")
+Path(__file__).with_name("interface_stubs.h").write_text("\n".join(output) + "\n", newline="\n")

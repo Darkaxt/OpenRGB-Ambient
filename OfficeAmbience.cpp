@@ -847,8 +847,8 @@ struct OfficeAmbience::Impl {
         auto key=deviceKey(c);return key.empty()?"native-"+office::HardwareState::identity(c):key;
     }
     void bindHardware(const std::vector<RGBControllerInterface*>& current) {
-        nativeControllers.clear();
-        for(auto* c:current) {auto key=nativeKey(c);if(nativeControllers.contains(key))throw std::runtime_error("Ambiguous native device identity");nativeControllers[key]=c;hardware->reconnected(key);}
+        auto previous=std::move(nativeControllers);nativeControllers.clear();
+        for(auto* c:current) {auto key=nativeKey(c);if(nativeControllers.contains(key))throw std::runtime_error("Ambiguous native device identity");nativeControllers[key]=c;if(!previous.contains(key) || previous.at(key)!=c)hardware->reconnected(key);}
     }
     Json hardwareSnapshot() {
         std::lock_guard lock(controllersMutex);auto rows=Json::array();
@@ -882,7 +882,7 @@ struct OfficeAmbience::Impl {
         if(action=="ambience") {hardware->ambience(key,c);for(auto& d:devices)if(d.key==key)d.delivered=false;}
         else if(action=="mode")hardware->setMode(key,c,request.at("identity"),request.at("mode"));
         else if(action=="save_mode") {
-            int m=c->GetActiveMode();if(m<0 || !(c->GetModeFlags(m)&MODE_FLAG_MANUAL_SAVE))throw std::runtime_error("This device/mode has no manual hardware save");c->SaveMode();
+            int m=c->GetActiveMode();if(!hardware->hardware(key) || outputPaused || calibration || !identifyDevice.empty() || m<0 || request.at("mode")!=m || request.at("name")!=c->GetModeName(m) || !(c->GetModeFlags(m)&MODE_FLAG_MANUAL_SAVE))throw std::runtime_error("Apply this native mode before saving it to device memory");c->SaveMode();
         } else if(action=="resize") {
             int z=request.at("zone");if(z<0 || unsigned(z)>=c->GetZoneCount() || !(c->GetZoneFlags(z)&(ZONE_FLAG_MANUALLY_CONFIGURABLE_SIZE|ZONE_FLAG_MANUALLY_CONFIGURABLE_SIZE_EFFECTS_ONLY)))throw std::runtime_error("Hardware zone is not resizable");
             if(std::any_of(devices.begin(),devices.end(),[&](auto& d){return d.key==key;}))throw std::runtime_error("This hardware geometry is bound to a saved ambience map; edit its sampling areas in Topology");

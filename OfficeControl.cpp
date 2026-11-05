@@ -55,10 +55,7 @@
 #include <QDesktopServices>
 #include <QUrl>
 #include <QShortcut>
-#include <QProcess>
 #include <QSignalBlocker>
-#include <QProcessEnvironment>
-#include <QStandardPaths>
 #include <QSystemTrayIcon>
 #include <QMenu>
 #include <QStyle>
@@ -475,7 +472,6 @@ class Panel : public QMainWindow {
     QSystemTrayIcon* tray=nullptr;
     bool quitRequested=false;
     Json panelOptions;
-    bool lifecycleBusy=false;
     Json hardwareData=Json::object();
     QTreeWidget* tree=new QTreeWidget;
     MapCanvas* map=new MapCanvas;
@@ -492,27 +488,6 @@ class Panel : public QMainWindow {
     void writePanelOption(const char* key,bool value) {
         auto next=panelOptions;next[key]=value;QSaveFile file(state+"/office-panel.json");auto data=QByteArray::fromStdString(next.dump(2));
         if(!file.open(QIODevice::WriteOnly) || file.write(data)!=data.size() || !file.commit()) {failure("Could not save panel preferences");return;}panelOptions=next;
-    }
-    void lifecycle(const QString& script) {
-        if(client.direct) {action({{"command",script=="Restart-Office.ps1"?"recover":"pause_output"}});return;}
-        if(lifecycleBusy) return;
-        if(dirty) {failure("Save or reload your draft before restarting/stopping lighting.");return;}
-        auto runtime=QStandardPaths::findExecutable("pwsh.exe");if(runtime.isEmpty()) {failure("PowerShell 7 is required for the verified lighting launcher.");return;}
-        auto path=QCoreApplication::applicationDirPath()+"/office/"+script;
-        if(!QFile::exists(path)) {failure("The packaged lighting lifecycle script is missing.");return;}
-        auto process=new QProcess(this);process->setProgram(runtime);QStringList arguments{"-NoProfile","-NonInteractive","-File",path,"-StateRoot",state};
-        if(script=="Restart-Office.ps1") arguments<<"-InstallRoot"<<QCoreApplication::applicationDirPath();
-        process->setArguments(arguments);process->setWorkingDirectory(state);
-        auto environment=QProcessEnvironment::systemEnvironment();environment.insert("TEMP",state+"/runtime-temp");environment.insert("TMP",state+"/runtime-temp");process->setProcessEnvironment(environment);
-#ifdef Q_OS_WIN
-        process->setCreateProcessArgumentsModifier([](QProcess::CreateProcessArguments* args){args->flags|=0x08000000;}); // CREATE_NO_WINDOW
-#endif
-        lifecycleBusy=true;refresh.stop();connection->setText(script=="Restart-Office.ps1"?"Restarting lighting…":"Stopping lighting…");
-        connect(process,&QProcess::errorOccurred,this,[this,process](auto){lifecycleBusy=false;failure(process->errorString());refresh.start();process->deleteLater();});
-        connect(process,qOverload<int,QProcess::ExitStatus>(&QProcess::finished),this,[this,process,script](int code,auto state){
-            lifecycleBusy=false;if(code) failure("Lighting lifecycle failed: "+QString::fromUtf8(process->readAllStandardError()));
-            else if(script=="Restart-Office.ps1") client.reconnect(this->state);else connection->setText("Lighting stopped");
-            refresh.start();process->deleteLater();});process->start();
     }
     #include "OfficeHardwarePanel.inc"
     void buildViews();
@@ -901,7 +876,6 @@ public:
         // the live Save check has restored the owner's exact original map.
         // Do not open an invisible unsaved-draft dialog on diagnostic shutdown.
         if(exported && !exportPath.isEmpty()){event->accept();return;}
-        if(lifecycleBusy) {failure("Wait for the lighting lifecycle operation to finish.");event->ignore();return;}
         if(tray && !quitRequested && panelOptions.value("close_to_tray",true)) {hide();event->ignore();return;}
         if(dirty && QMessageBox::question(this,"Unsaved map","Close without saving your changes?")!=QMessageBox::Yes) {event->ignore();return;}
         action({{"command","stop_test"}});event->accept();

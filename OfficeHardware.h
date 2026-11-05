@@ -89,7 +89,7 @@ public:
         return {{"id",key},{"identity",identity(c)},{"name",c->GetDisplayName()},{"native_name",c->GetName()},{"vendor",c->GetVendor()},
             {"description",c->GetDescription()},{"version",c->GetVersion()},{"serial",c->GetSerial()},{"location",c->GetLocation()},
             {"mapped",mapped},{"leds",leds},{"zones",zones},{"modes",modes},{"active_mode",c->GetActiveMode()},
-            {"owner",hardware(key)?"hardware":"ambience"},{"selection",saved.value(key,Json::object())},
+            {"owner",hardware(key)?"hardware":mapped?"ambience":"unmanaged"},{"selection",saved.value(key,Json::object())},
             {"schema",c->GetDeviceSpecificConfigurationSchema()},{"configuration",c->GetDeviceSpecificConfiguration()}};
     }
     bool hardware(const std::string& key) const {return saved.contains(key) && saved.at(key).value("owner",std::string())=="hardware";}

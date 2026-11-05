@@ -169,6 +169,7 @@ void hardwareEditor(QApplication& app) {
     auto speed=dialog->findChild<QSpinBox*>("hardwareSpeed"),brightness=dialog->findChild<QSpinBox*>("hardwareBrightness");auto choice=dialog->findChild<QComboBox*>("hardwareMode");
     require(!speed->isVisible() && !brightness->isVisible(),"Direct mode displayed unsupported speed/brightness controls");
     choice->setCurrentIndex(1);app.processEvents();require(speed->isVisible() && speed->minimum()==1 && speed->maximum()==5 && brightness->isVisible(),"Mode capabilities did not replace unsupported controls with driver ranges");
+    require(!dialog->findChild<QPushButton*>("hardwareSave")->isEnabled(),"Unapplied native selection can overwrite hardware memory");
     speed->setValue(4);brightness->setValue(60);dialog->findChild<QPushButton*>("hardwareApply")->click();
     require(sent.at("command")=="hardware" && sent.at("action")=="mode" && sent.at("identity")=="identity-1" && sent.at("mode").at("speed")==4 && sent.at("mode").at("brightness")==60,"Native mode widgets did not send the identity-bound edited parameters");
     dialog->findChild<QPushButton*>("hardwareAmbience")->click();require(sent.at("action")=="ambience","Return to ambience not wired");

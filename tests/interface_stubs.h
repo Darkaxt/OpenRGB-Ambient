@@ -2,7 +2,6 @@
 #pragma once
 #include <OpenRGBPluginInterface.h>
 struct StubOpenRGBPluginAPIInterface : OpenRGBPluginAPIInterface {
-    bool SaveProfile(std::string) override {return false;}
     void                                    LogEntry(const char* filename, int line, unsigned int level, const char* fmt, ...) override {}
     RGBControllerInterface*                 CreateVirtualRGBController(RGBController_Setup* setup) override {return {};}
     void                                    DeleteVirtualRGBController(RGBControllerInterface* rgb_controller) override {}
@@ -40,6 +39,7 @@ struct StubOpenRGBPluginAPIInterface : OpenRGBPluginAPIInterface {
     nlohmann::json                          GetSettings(std::string settings_key) override {return {};}
     void                                    SaveSettings() override {}
     void                                    SetSettings(std::string settings_key, nlohmann::json new_settings) override {}
+    bool                                    SaveProfile(std::string profile_name) override {return {};}
 };
 struct StubRGBControllerInterface : RGBControllerInterface {
     std::string             GetName() override {return {};}
