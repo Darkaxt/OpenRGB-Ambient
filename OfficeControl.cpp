@@ -593,7 +593,7 @@ class Panel : public QMainWindow {
         bool resting=!s.value("rest_reason",std::string()).empty();
         status->setText(resting?"RESTING":s.value("standby",false)?"STANDBY":settings.value("enabled",true)?"ACTIVE":"INACTIVE");
         status->setToolTip(text(s.at("mode"))+" · "+text(s.at("error")));liveRate->setText(QString("%1 Hz output clock\n%2 device updates").arg(s.at("output_fps").get<double>(),0,'f',1).arg(s.value("device_submissions",uint64_t(0))));
-        testState->setText(resting?"Lights off · resume on unlock or display wake":snapshot.at("test_mode")=="none"?"Ambience running":"Temporary test active");
+        testState->setText(resting?"Lights resting · resumes automatically":snapshot.at("test_mode")=="none"?"Ambience running":"Temporary test active");
         diagnostics->setPlainText(QString::fromStdString(s.dump(2)));
         map->colours=snapshot.at("colors");
         map->effective=snapshot.value("effective_regions",Json::array());
