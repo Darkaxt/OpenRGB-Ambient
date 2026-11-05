@@ -43,7 +43,7 @@ int main(int argc,char** argv) {
             require(journal.error().empty(),"Concurrent journal writes succeeded");
         }
         records=read(root/"parallel.jsonl");std::set<unsigned> seq;
-        for(auto& record:records)seq.insert(record["sequence"]);
+        for(auto& record:records)seq.insert(record["sequence"].get<unsigned>());
         require(records.size()==160 && seq.size()==160,"Concurrent writes retain complete noninterleaved records");
         auto rotated=root/"rotating.jsonl";
         {office::Journal journal(rotated,2048,3);for(int i=0;i<100;++i)journal.write("rotate",{{"index",i}});require(journal.error().empty(),"Rotation succeeded");}
