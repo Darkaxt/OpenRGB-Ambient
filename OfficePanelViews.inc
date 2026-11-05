@@ -13,7 +13,7 @@ void Panel::arrangeDashboard() {
 
 void Panel::buildViews() {
     using namespace officeui;
-    setStyleSheet(stylesheet());setWindowIcon(icon("settings_brightness"));
+    setStyleSheet(stylesheet());setWindowIcon(QIcon(":/office/OpenRGB.png"));
     QFile buildFile(QCoreApplication::applicationDirPath()+"/office-build.json");Json build=Json::object();
     if(buildFile.open(QIODevice::ReadOnly)){auto data=buildFile.readAll();auto parsed=Json::parse(data.constData(),data.constData()+data.size(),nullptr,false);if(parsed.is_object())build=std::move(parsed);}
     auto version=QString::fromStdString(build.value("version",std::string("development")));
@@ -134,8 +134,8 @@ void Panel::buildViews() {
         connect(calibrate,&QPushButton::clicked,this,[this]{action({{"command","calibrate"}});});connect(stopTest,&QPushButton::clicked,this,[this]{action({{"command","stop_test"}});});
         connect(recover,&QPushButton::clicked,this,[this]{action({{"command","recover"}});});
         if(exportPath.isEmpty() && QSystemTrayIcon::isSystemTrayAvailable()) {
-            tray=new QSystemTrayIcon(style()->standardIcon(QStyle::SP_ComputerIcon),this);tray->setToolTip("Office Ambilight");auto menu=new QMenu(this);
-            menu->addAction("Open Office Ambilight",this,[this]{showNormal();raise();activateWindow();});menu->addAction("Return to ambience",this,[this]{action({{"command","stop_test"}});});
+            tray=new QSystemTrayIcon(windowIcon(),this);tray->setToolTip("Office Ambilight");auto menu=new QMenu(this);
+            menu->addAction("Open Office Ambilight",this,[this]{showNormal();raise();activateWindow();});menu->addAction("End temporary lighting test",this,[this]{action({{"command","stop_test"}});});
             menu->addAction(client.direct?"Exit Office Ambilight":"Exit panel",this,[this]{quitRequested=true;close();});tray->setContextMenu(menu);connect(tray,&QSystemTrayIcon::activated,this,[this](auto reason){if(reason==QSystemTrayIcon::Trigger || reason==QSystemTrayIcon::DoubleClick){showNormal();raise();activateWindow();}});tray->show();
         }
 }

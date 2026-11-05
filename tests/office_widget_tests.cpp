@@ -159,12 +159,13 @@ void trayMenuBackground() {
     }
 }
 void hardwareEditor(QApplication& app) {
-    Json sent;Panel panel("unused-test-state",{},false,false,[&](Json request,OfficeReply reply){sent=request;reply({{"ok",true},{"result",Json::object()}});});
+    Json sent;Panel panel("unused-test-state",{},false,false,[&](Json request,OfficeReply reply){sent=request;if(request.at("command")=="snapshot")reply({{"ok",false},{"error","No capture source in the hardware editor fixture"}});else reply({{"ok",true},{"result",Json::object()}});});
     Json plain={{"index",0},{"zone",-1},{"name","Direct"},{"flags",MODE_FLAG_HAS_PER_LED_COLOR},{"speed",0},{"speed_min",0},{"speed_max",0},{"brightness",0},{"brightness_min",0},{"brightness_max",0},{"direction",0},{"color_mode",MODE_COLORS_PER_LED},{"colors_min",0},{"colors_max",0},{"colors",Json::array()}};
     Json pulse=plain;pulse["index"]=1;pulse["name"]="Pulse";pulse["flags"]=MODE_FLAG_HAS_SPEED|MODE_FLAG_HAS_BRIGHTNESS|MODE_FLAG_HAS_MODE_SPECIFIC_COLOR;pulse["speed_min"]=1;pulse["speed_max"]=5;pulse["speed"]=2;pulse["brightness_max"]=100;pulse["brightness"]=80;pulse["color_mode"]=MODE_COLORS_MODE_SPECIFIC;pulse["colors_min"]=1;pulse["colors_max"]=3;pulse["colors"]=Json::array({0xffffff});
     Json device={{"id","test"},{"identity","identity-1"},{"name","Test keyboard"},{"owner","ambience"},{"mapped",true},{"active_mode",0},{"zones",Json::array()},{"schema",Json::object()},{"configuration",Json::object()},
         {"modes",Json::array({plain,pulse})},{"leds",Json::array({{{"name","Key A"},{"color",255}},{{"name","Key B"},{"color",65535}}})}};
     panel.fixtureHardware(device);app.processEvents();auto dialog=panel.findChild<QDialog*>("hardwareDialog");require(dialog,"Native hardware editor did not open");
+    require(!panel.windowIcon().isNull(),"OpenRGB application icon resource missing");
     auto tabs=dialog->findChild<QTabWidget*>("hardwareTabs");require(tabs && tabs->count()==4,"Native hardware controls lost their contextual tab placement");tabs->setCurrentIndex(1);app.processEvents();
     auto speed=dialog->findChild<QSpinBox*>("hardwareSpeed"),brightness=dialog->findChild<QSpinBox*>("hardwareBrightness");auto choice=dialog->findChild<QComboBox*>("hardwareMode");
     require(!speed->isVisible() && !brightness->isVisible(),"Direct mode displayed unsupported speed/brightness controls");

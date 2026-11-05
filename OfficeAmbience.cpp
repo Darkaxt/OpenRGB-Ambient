@@ -857,20 +857,22 @@ struct OfficeAmbience::Impl {
     }
     Json hardwareCommand(const Json& request) {
         auto action=request.at("action").get<std::string>();
-        if(action=="rescan") {if(!detectionActive)api->RescanDevices();return {{"accepted",true}};}
+        if(action=="rescan") {bool detecting;{std::lock_guard lock(controllersMutex);detecting=detectionActive;}if(!detecting)api->RescanDevices();return {{"accepted",true}};}
         if(action=="profile_save" || action=="profile_load") {
             auto name=request.at("name").get<std::string>();
             if(name.empty() || name.size()>100 || name.find_first_of("\\/:*?\"<>|.")!=std::string::npos)throw std::runtime_error("Use a profile name without path characters or dots");
-            {std::lock_guard lock(controllersMutex);if(detectionActive)throw std::runtime_error("Wait for discovery before using profiles");}
+            {
+            std::lock_guard lock(controllersMutex);if(detectionActive)throw std::runtime_error("Wait for discovery before using profiles");
+            if(!restReason().empty() || outputPaused || calibration || !identifyDevice.empty())throw std::runtime_error("End temporary tests and resume lighting before using native profiles");
             if(action=="profile_save") {if(!api->SaveProfile(name))throw std::runtime_error("Native profile save failed");}
             else {
                 auto profiles=api->GetProfileList();if(std::find(profiles.begin(),profiles.end(),name)==profiles.end())throw std::runtime_error("Native profile no longer exists");
                 if(!api->LoadProfile(name))throw std::runtime_error("Native profile load failed");
-                std::lock_guard lock(controllersMutex);
                 for(auto& [key,c]:nativeControllers) {
                     if(c->SupportsPerZoneModes()) {for(unsigned z=0;z<c->GetZoneCount();++z)if(c->GetZoneActiveMode(z)>=0)hardware->setMode(key,c,office::HardwareState::identity(c),office::HardwareState::mode(c,c->GetZoneActiveMode(z),z));}
                     else if(c->GetActiveMode()>=0) {auto m=office::HardwareState::mode(c,c->GetActiveMode());if(m.at("color_mode")==MODE_COLORS_PER_LED){m["led_colors"]=Json::array();for(unsigned i=0;i<c->GetLEDCount();++i)m["led_colors"].push_back(c->GetColor(i));}hardware->setMode(key,c,office::HardwareState::identity(c),m);}
                 }
+            }
             }
             return hardwareSnapshot();
         }

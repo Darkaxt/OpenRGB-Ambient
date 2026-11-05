@@ -34,6 +34,43 @@ struct Api : StubOpenRGBPluginAPIInterface {
 void require(bool value,const char* message) {if(!value) throw std::runtime_error(message);}
 
 struct OfficeLifecycleTest {
+    static void hardwareOwnership() {
+        struct Native : Controller {
+            using Controller::Controller;
+            int active=0;unsigned updates=0,saves=0;
+            unsigned GetModeCount() override{return 2;}
+            int GetActiveMode() override{return active;}
+            std::string GetModeName(unsigned m) override{return m?"Pulse":"Direct";}
+            unsigned GetModeFlags(unsigned m) override{return m?MODE_FLAG_MANUAL_SAVE:0;}
+            void SetActiveMode(int m) override{active=m;}
+            void UpdateMode() override{++updates;}
+            void SaveMode() override{++saves;}
+        };
+        struct Profiles : Api {
+            Native* keyboard=nullptr;unsigned saved=0,loaded=0;
+            std::vector<std::string> GetProfileList() override{return {"Test"};}
+            bool SaveProfile(std::string) override{++saved;return true;}
+            bool LoadProfile(std::string) override{++loaded;keyboard->active=1;return true;}
+        };
+        QTemporaryDir dir;auto path=std::filesystem::path(dir.path().toStdWString())/"office-ambience.json";
+        {std::ofstream out(path);out<<Json{{"monitor","primary"},{"fps",15},{"smoothing_ms",0}};}
+        Controller strip("Govee H6609",20),bars("Govee H8048",20),laptop("Lenovo Legion 7 Gen 8",109),desk("Secretlab",48,"NL72S2"),mouse("G502 X PLUS",8);
+        Native keys("Keychron Q6 HE ISO",109);Profiles api;api.keyboard=&keys;api.controllers={&strip,&bars,&keys,&laptop,&desk,&mouse};
+        OfficeAmbience::Impl owner(&api,path,false);owner.dirty=false;owner.latest.assign(314,ToRGBColor(20,40,60));owner.tick();
+        auto key=owner.nativeKey(&keys),identity=office::HardwareState::identity(&keys);auto request=Json{{"command","hardware"},{"action","mode"},{"device",key},{"identity",identity},{"mode",office::HardwareState::mode(&keys,1)}};
+        owner.command(request);auto writes=keys.writes,updates=keys.updates;owner.latest.assign(314,ToRGBColor(60,40,20));owner.tick();
+        require(keys.writes==writes && keys.updates==updates,"Ambience overwrote the explicit native effect");
+        owner.command({{"command","hardware"},{"action","save_mode"},{"device",key},{"identity",identity},{"mode",1},{"name","Pulse"}});require(keys.saves==1,"Native SaveMode did not reach hardware API");
+        owner.command({{"command","identify_all"}});owner.tick();require(keys.writes>writes,"Temporary Identify did not take over native hardware");
+        bool rejected=false;try{owner.command({{"command","hardware"},{"action","profile_load"},{"name","Test"}});}catch(const std::exception&){rejected=true;}
+        require(rejected && api.loaded==0,"Native profile changed hardware during a temporary test");
+        owner.command({{"command","stop_test"}});owner.tick();require(keys.active==1 && keys.updates==updates+1,"Native hardware effect did not resume after Identify");
+        owner.command({{"command","hardware"},{"action","profile_save"},{"name","Test"}});owner.command({{"command","hardware"},{"action","profile_load"},{"name","Test"}});
+        require(api.saved==1 && api.loaded==1 && owner.hardware->hardware(key),"Native profile API or retained ownership not wired");
+        owner.command({{"command","pause_output"}});owner.tick();require(owner.devices[2].colors[0]==0,"Pause did not rest a native-owned device");
+        owner.command({{"command","pause_output"}});owner.tick();require(keys.active==1,"Resume did not restore the native mode");
+        owner.command({{"command","hardware"},{"action","ambience"},{"device",key},{"identity",identity}});owner.tick();require(!owner.hardware->hardware(key) && owner.devices[2].colors[0]==ToRGBColor(60,40,20),"Return to ambience did not restore mapped colour output");
+    }
     static void screensaverSelection() {
         // A private, never-activated desktop exercises the same cross-desktop
         // enumeration used for Windows' Screen-saver desktop. No host input.
@@ -73,6 +110,7 @@ struct OfficeLifecycleTest {
         require(ordinaryRejected && manualRecognized,"Recognize manually launched screensaver tool window without SPI flag; reject an ordinary fullscreen app");
     }
     static void run() {
+        hardwareOwnership();
         screensaverSelection();
         auto primary=primaryMonitor();MONITORINFO primaryInfo{};primaryInfo.cbSize=sizeof(primaryInfo);
         require(primary.handle && GetMonitorInfoW(primary.handle,&primaryInfo) && (primaryInfo.dwFlags&MONITORINFOF_PRIMARY),"Resolve Windows main display, not enumeration order or saved DISPLAY name");

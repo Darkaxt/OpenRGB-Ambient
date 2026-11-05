@@ -761,7 +761,10 @@ class Panel : public QMainWindow {
         exported=true;QDir().mkpath(exportPath);
         Json result={{"native_revision",revision},{"devices",layout.size()},{"editor_save_roundtrip",exerciseEditor && editorPhase==6},{"multi_selection_save_roundtrip",exerciseEditor && editorPhase==6},
             {"actual_preview",!map->preview.isNull()},{"source_error",lastSnapshot.at("status").value("error",std::string())},
-            {"font_family",font().family().toStdString()},{"views",Json::array()},{"design","EDAmbilight recovered native assets"}};
+            {"font_family",font().family().toStdString()},{"views",Json::array()},{"design","EDAmbilight recovered native assets"},
+            {"application_model",client.direct?"unified":"diagnostic-client"},{"ui_thread",GetCurrentThreadId()},
+            {"output_thread",lastSnapshot.at("status").value("output_thread",0u)},{"process",GetCurrentProcessId()},
+            {"application_icon",!windowIcon().isNull()}};
         for(auto size:{QSize(1000,700),QSize(1440,900),QSize(1920,1080)}) {
             resize(size);
             int device=size.width()==1000?0:size.width()==1440?2:1;
