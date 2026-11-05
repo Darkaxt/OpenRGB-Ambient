@@ -590,7 +590,7 @@ class Panel : public QMainWindow {
             map->zones=selectedZones;restoreTreeSelection(selectedDevice,selectedGroup);
         }
         auto s=snapshot.at("status");
-        brightnessStatus->setText(QString("Applied display factor: %1% · %2").arg(s.value("display_brightness_factor",1.)*100,0,'f',1).arg(!snapshot.at("settings").value("follow_display_brightness",true)?"off":s.value("display_brightness_error",std::string()).empty()?"following":s.value("display_brightness_valid",false)?"read unavailable; retaining last factor":"read unavailable; using baseline"));
+        brightnessStatus->setText(QString("Applied display factor: %1% · %2").arg(s.value("display_brightness_factor",1.)*100,0,'f',1).arg(!snapshot.at("settings").value("follow_display_brightness",true)?"off":s.value("display_brightness_error",std::string()).empty()?(s.value("display_brightness_valid",false)?"following":"waiting for active display"):s.value("display_brightness_valid",false)?"read unavailable; retaining last factor":"read unavailable; using baseline"));
         brightnessStatus->setToolTip(text(s.value("display_brightness_error",std::string())));
         deviceSummary->setText(QString("%1 / %2 devices online  ·  %3 mapped LEDs").arg(s.at("online_devices").get<int>()).arg(layout.size()).arg(s.at("leds").get<int>()));
         inventorySummary->setText(deviceSummary->text());
