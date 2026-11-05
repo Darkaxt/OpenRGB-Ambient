@@ -57,6 +57,7 @@
 #include <QShortcut>
 #include <QSignalBlocker>
 #include <QSystemTrayIcon>
+#include <QThread>
 #include <QMenu>
 #include <QStyle>
 #include <QProgressBar>
@@ -762,8 +763,8 @@ class Panel : public QMainWindow {
         Json result={{"native_revision",revision},{"devices",layout.size()},{"editor_save_roundtrip",exerciseEditor && editorPhase==6},{"multi_selection_save_roundtrip",exerciseEditor && editorPhase==6},
             {"actual_preview",!map->preview.isNull()},{"source_error",lastSnapshot.at("status").value("error",std::string())},
             {"font_family",font().family().toStdString()},{"views",Json::array()},{"design","EDAmbilight recovered native assets"},
-            {"application_model",client.direct?"unified":"diagnostic-client"},{"ui_thread",GetCurrentThreadId()},
-            {"output_thread",lastSnapshot.at("status").value("output_thread",0u)},{"process",GetCurrentProcessId()},
+            {"application_model",client.direct?"unified":"diagnostic-client"},{"ui_thread",quintptr(QThread::currentThreadId())},
+            {"output_thread",lastSnapshot.at("status").value("output_thread",0u)},{"process",QCoreApplication::applicationPid()},
             {"application_icon",!windowIcon().isNull()}};
         for(auto size:{QSize(1000,700),QSize(1440,900),QSize(1920,1080)}) {
             resize(size);

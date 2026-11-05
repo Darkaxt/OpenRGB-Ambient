@@ -869,8 +869,8 @@ struct OfficeAmbience::Impl {
                 auto profiles=api->GetProfileList();if(std::find(profiles.begin(),profiles.end(),name)==profiles.end())throw std::runtime_error("Native profile no longer exists");
                 if(!api->LoadProfile(name))throw std::runtime_error("Native profile load failed");
                 for(auto& [key,c]:nativeControllers) {
-                    if(c->SupportsPerZoneModes()) {for(unsigned z=0;z<c->GetZoneCount();++z)if(c->GetZoneActiveMode(z)>=0)hardware->setMode(key,c,office::HardwareState::identity(c),office::HardwareState::mode(c,c->GetZoneActiveMode(z),z));}
-                    else if(c->GetActiveMode()>=0) {auto m=office::HardwareState::mode(c,c->GetActiveMode());if(m.at("color_mode")==MODE_COLORS_PER_LED){m["led_colors"]=Json::array();for(unsigned i=0;i<c->GetLEDCount();++i)m["led_colors"].push_back(c->GetColor(i));}hardware->setMode(key,c,office::HardwareState::identity(c),m);}
+                    if(c->SupportsPerZoneModes()) {for(unsigned z=0;z<c->GetZoneCount();++z)if(c->GetZoneActiveMode(z)>=0 && unsigned(c->GetZoneActiveMode(z))<c->GetZoneModeCount(z))hardware->setMode(key,c,office::HardwareState::identity(c),office::HardwareState::mode(c,c->GetZoneActiveMode(z),z));}
+                    else if(c->GetActiveMode()>=0 && unsigned(c->GetActiveMode())<c->GetModeCount()) {auto m=office::HardwareState::mode(c,c->GetActiveMode());if(m.at("color_mode")==MODE_COLORS_PER_LED){m["led_colors"]=Json::array();for(unsigned i=0;i<c->GetLEDCount();++i)m["led_colors"].push_back(c->GetColor(i));}hardware->setMode(key,c,office::HardwareState::identity(c),m);}
                 }
             }
             }
@@ -880,7 +880,7 @@ struct OfficeAmbience::Impl {
         auto key=request.at("device").get<std::string>();auto found=nativeControllers.find(key);
         if(found==nativeControllers.end() || detectionActive)throw std::runtime_error("Device is offline or discovery is in progress");
         auto* c=found->second;hardware->checkIdentity(c,request.at("identity"));
-        if(!restReason().empty())throw std::runtime_error("Hardware changes are unavailable while lighting is resting");
+        if(!restReason().empty() || outputPaused || calibration || !identifyDevice.empty())throw std::runtime_error("End temporary tests and resume lighting before changing hardware settings");
         if(action=="ambience") {hardware->ambience(key,c);for(auto& d:devices)if(d.key==key)d.delivered=false;}
         else if(action=="mode")hardware->setMode(key,c,request.at("identity"),request.at("mode"));
         else if(action=="save_mode") {
