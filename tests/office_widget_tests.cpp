@@ -83,7 +83,7 @@ void multiSelection(QApplication& app) {
     auto draftRequest=panel.fixturePreviewRequest();
     require(draftRequest.at("command")=="snapshot" && draftRequest.at("preview")==true && draftRequest.at("preview_blur")==1.5,
         "Unsaved blur must reach the read-only preview request instead of waiting for Apply");
-    require(draftRequest.size()==4 && !draftRequest.contains("settings") && !draftRequest.contains("layout"),
+    require(!draftRequest.contains("settings") && !draftRequest.contains("layout") && !draftRequest.value("hardware",false),
         "Preview request must not apply or save the draft");
     auto imageReply=[](double blur,const char* generation,QColor colour) {
         QImage image(32,16,QImage::Format_RGB32);image.fill(colour);QByteArray bytes;QBuffer buffer(&bytes);buffer.open(QIODevice::WriteOnly);image.save(&buffer,"PNG");

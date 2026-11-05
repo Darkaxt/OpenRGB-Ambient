@@ -617,7 +617,7 @@ class Panel : public QMainWindow {
     }
     Json previewRequest() const {
         Json request={{"command","snapshot"},{"preview",wantsPreview()},{"preview_generation",decodedPreview}};
-        request["hardware"]=pages->currentIndex()==2 || !exportPath.isEmpty();
+        if(pages->currentIndex()==2 || !exportPath.isEmpty())request["hardware"]=true;
         if(wantsPreview()) request["preview_blur"]=numbers.at("blur")->value();
         return request;
     }
