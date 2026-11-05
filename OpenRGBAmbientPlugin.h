@@ -18,6 +18,8 @@
 #include "ImageProcessor.h"
 #include "Settings.h"
 #include "OfficeAmbience.h"
+#include "OfficeRuntime.h"
+#include <QPointer>
 
 class LedUpdateEvent;
 
@@ -78,7 +80,8 @@ private:
 
     OpenRGBPluginAPIInterface *pluginApiPtr = nullptr;
     Settings *settings = nullptr;
-    std::unique_ptr<OfficeAmbience> office;
+    std::unique_ptr<OfficeRuntime> office;
+    QPointer<QWidget> officePanel;
     std::mutex officeMutex;
 
     HWND endSessionWindow = nullptr;

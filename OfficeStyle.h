@@ -183,5 +183,8 @@ QScrollBar:horizontal{background:transparent;height:6px;margin:0;} QScrollBar::h
 QScrollBar::add-line:horizontal,QScrollBar::sub-line:horizontal{width:0;border:0;} QScrollBar::add-page:horizontal,QScrollBar::sub-page:horizontal{background:transparent;}
 QSplitter::handle{background:transparent;width:8px;} QToolButton{border:0;background:transparent;}
 QToolTip{background:#0a1b25;color:#cdd6e0;border:1px solid #23525b;}
+QTabWidget::pane{border:1px solid #1c4550;border-radius:10px;background:#06111a;}
+QTabBar::tab{background:#081923;color:#92a4b3;padding:10px 16px;border-bottom:2px solid transparent;}
+QTabBar::tab:selected{color:#14f5ff;border-bottom-color:#14f5ff;background:#10313a;}
 )";}
 }

@@ -2,6 +2,7 @@
 #include <memory>
 #include <filesystem>
 #include <QObject>
+#include "OfficeLayout.h"
 class OpenRGBPluginAPIInterface;
 
 // The office's existing plugin host and fixed six-device layout. No window is
@@ -12,6 +13,7 @@ public:
     ~OfficeAmbience() override;
     void stop();
     void resourcesUpdated(unsigned reason);
+    office::Json command(const office::Json& request);
 private:
     friend struct OfficeLifecycleTest;
     struct Impl;

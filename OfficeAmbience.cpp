@@ -21,6 +21,7 @@
 #include "OfficeControlServer.h"
 #include "OfficeProcessing.h"
 #include "OfficeJournal.h"
+#include "OfficeHardware.h"
 #include "DisplayBrightness.h"
 #include "OfficeSamplingShader.h"
 #include <OpenRGBPluginInterface.h>
@@ -644,6 +645,9 @@ struct OfficeAmbience::Impl {
     office::DisplayBrightness displayBrightness;
     Clock::time_point lastBrightnessRead{};
     std::vector<Device> devices;
+    std::unique_ptr<office::HardwareState> hardware;
+    std::map<std::string,RGBControllerInterface*> nativeControllers;
+    bool detectionActive=false,outputPaused=false;
     mutable std::mutex controllersMutex;
     std::string controllerError;
     std::vector<Sample> samples;
@@ -787,10 +791,14 @@ struct OfficeAmbience::Impl {
                 if(!std::isfinite(value) || value<0 || value>10) throw std::runtime_error("Preview blur must be 0-10 percent");
                 blur=static_cast<float>(value);
             }
-            return snapshot(request.value("preview",false),request.value("preview_generation",std::string()),blur);
+            auto result=snapshot(request.value("preview",false),request.value("preview_generation",std::string()),blur);
+            if(request.value("hardware",false))result["hardware"]=hardwareSnapshot();
+            return result;
         }
         journal->write("control_action",{{"command",name}});
-        if(name=="recover") {invalidate=true;dirty=true;return {{"accepted",true}};}
+        if(name=="recover") {outputPaused=false;invalidate=true;dirty=true;return {{"accepted",true}};}
+        if(name=="pause_output") {outputPaused=!outputPaused;return {{"paused",outputPaused}};}
+        if(name=="hardware")return hardwareCommand(request);
         if(name=="stop_test") {calibration=false;standbyPreview=false;identifyDevice.clear();return {{"accepted",true}};}
         if(name=="preview_standby") {calibration=false;identifyDevice.clear();standbyPreview=true;standbyBegan=Clock::now();return {{"accepted",true}};}
         if(name=="identify_all") {standbyPreview=false;calibration=false;identifyDevice="*";identifyUntil=Clock::now()+std::chrono::seconds(2);return {{"accepted",true}};}
@@ -835,6 +843,62 @@ struct OfficeAmbience::Impl {
     Json diskConfig;
     Json factoryLayout;
 
+    std::string nativeKey(RGBControllerInterface* c) {
+        auto key=deviceKey(c);return key.empty()?"native-"+office::HardwareState::identity(c):key;
+    }
+    void bindHardware(const std::vector<RGBControllerInterface*>& current) {
+        nativeControllers.clear();
+        for(auto* c:current) {auto key=nativeKey(c);if(nativeControllers.contains(key))throw std::runtime_error("Ambiguous native device identity");nativeControllers[key]=c;hardware->reconnected(key);}
+    }
+    Json hardwareSnapshot() {
+        std::lock_guard lock(controllersMutex);auto rows=Json::array();
+        for(auto& [key,c]:nativeControllers)rows.push_back(hardware->describe(key,c,std::any_of(devices.begin(),devices.end(),[&](auto& d){return d.key==key;})));
+        return {{"devices",rows},{"profiles",api->GetProfileList()},{"detecting",detectionActive},{"detection_percent",api->GetDetectionPercent()},{"detection_status",api->GetDetectionString()}};
+    }
+    Json hardwareCommand(const Json& request) {
+        auto action=request.at("action").get<std::string>();
+        if(action=="rescan") {if(!detectionActive)api->RescanDevices();return {{"accepted",true}};}
+        if(action=="profile_save" || action=="profile_load") {
+            auto name=request.at("name").get<std::string>();
+            if(name.empty() || name.size()>100 || name.find_first_of("\\/:*?\"<>|.")!=std::string::npos)throw std::runtime_error("Use a profile name without path characters or dots");
+            {std::lock_guard lock(controllersMutex);if(detectionActive)throw std::runtime_error("Wait for discovery before using profiles");}
+            if(action=="profile_save") {if(!api->SaveProfile(name))throw std::runtime_error("Native profile save failed");}
+            else {
+                auto profiles=api->GetProfileList();if(std::find(profiles.begin(),profiles.end(),name)==profiles.end())throw std::runtime_error("Native profile no longer exists");
+                if(!api->LoadProfile(name))throw std::runtime_error("Native profile load failed");
+                std::lock_guard lock(controllersMutex);
+                for(auto& [key,c]:nativeControllers) {
+                    if(c->SupportsPerZoneModes()) {for(unsigned z=0;z<c->GetZoneCount();++z)if(c->GetZoneActiveMode(z)>=0)hardware->setMode(key,c,office::HardwareState::identity(c),office::HardwareState::mode(c,c->GetZoneActiveMode(z),z));}
+                    else if(c->GetActiveMode()>=0) {auto m=office::HardwareState::mode(c,c->GetActiveMode());if(m.at("color_mode")==MODE_COLORS_PER_LED){m["led_colors"]=Json::array();for(unsigned i=0;i<c->GetLEDCount();++i)m["led_colors"].push_back(c->GetColor(i));}hardware->setMode(key,c,office::HardwareState::identity(c),m);}
+                }
+            }
+            return hardwareSnapshot();
+        }
+        std::lock_guard lock(controllersMutex);
+        auto key=request.at("device").get<std::string>();auto found=nativeControllers.find(key);
+        if(found==nativeControllers.end() || detectionActive)throw std::runtime_error("Device is offline or discovery is in progress");
+        auto* c=found->second;hardware->checkIdentity(c,request.at("identity"));
+        if(!restReason().empty())throw std::runtime_error("Hardware changes are unavailable while lighting is resting");
+        if(action=="ambience") {hardware->ambience(key,c);for(auto& d:devices)if(d.key==key)d.delivered=false;}
+        else if(action=="mode")hardware->setMode(key,c,request.at("identity"),request.at("mode"));
+        else if(action=="save_mode") {
+            int m=c->GetActiveMode();if(m<0 || !(c->GetModeFlags(m)&MODE_FLAG_MANUAL_SAVE))throw std::runtime_error("This device/mode has no manual hardware save");c->SaveMode();
+        } else if(action=="resize") {
+            int z=request.at("zone");if(z<0 || unsigned(z)>=c->GetZoneCount() || !(c->GetZoneFlags(z)&(ZONE_FLAG_MANUALLY_CONFIGURABLE_SIZE|ZONE_FLAG_MANUALLY_CONFIGURABLE_SIZE_EFFECTS_ONLY)))throw std::runtime_error("Hardware zone is not resizable");
+            if(std::any_of(devices.begin(),devices.end(),[&](auto& d){return d.key==key;}))throw std::runtime_error("This hardware geometry is bound to a saved ambience map; edit its sampling areas in Topology");
+            auto count=request.at("count");if(!count.is_number_integer() || count<c->GetZoneLEDsMin(z) || count>c->GetZoneLEDsMax(z))throw std::runtime_error("Invalid native zone size");c->ResizeZone(z,count);
+        } else if(action=="configuration") {
+            int z=request.value("zone",-1);if(z<-1 || (z>=0 && unsigned(z)>=c->GetZoneCount()))throw std::runtime_error("Invalid hardware zone");
+            // Geometry-affecting driver options cannot invalidate existing maps.
+            if(std::any_of(devices.begin(),devices.end(),[&](auto& d){return d.key==key;}))throw std::runtime_error("Mapped hardware configuration is fixed; sampling remains editable in Topology");
+            auto schema=z<0?c->GetDeviceSpecificConfigurationSchema():c->GetDeviceSpecificZoneConfigurationSchema(z);
+            if(schema.is_null() || schema.empty())throw std::runtime_error("Driver supplies no configuration schema");
+            auto value=request.at("configuration");office::validateHardwareConfiguration(schema,value);
+            if(z<0)c->SetDeviceSpecificConfiguration(value);else c->SetDeviceSpecificZoneConfiguration(z,value);api->SaveSettings();
+        } else throw std::runtime_error("Unknown hardware action");
+        return hardware->describe(key,c,std::any_of(devices.begin(),devices.end(),[&](auto& d){return d.key==key;}));
+    }
+
     static void CALLBACK winEvent(HWINEVENTHOOK hook,DWORD event,HWND,LONG object,LONG,DWORD,DWORD) {
         if(event!=EVENT_SYSTEM_DESKTOPSWITCH && object!=OBJID_WINDOW) return;
         auto found=hooks.find(hook); if(found!=hooks.end()) {
@@ -848,6 +912,8 @@ struct OfficeAmbience::Impl {
     Impl(OpenRGBPluginAPIInterface* api,const std::filesystem::path& path,bool activate=true):journal(std::make_shared<office::Journal>(path.parent_path()/"logs"/"office-ambience-events.jsonl")),api(api),configPath(path) {
         journal->write("owner_start",{{"executable",QCoreApplication::applicationFilePath().toStdString()}});
         std::ifstream file(path);file>>config;diskConfig=config;
+        hardware=std::make_unique<office::HardwareState>(QString::fromStdWString((path.parent_path()/"office-hardware.json").wstring()));
+        bindHardware(api->GetRGBControllers());
         // Legacy display names are accepted on disk but never pin capture to
         // disconnected hardware. Do not rewrite the saved map merely on load.
         config["monitor"]="primary";
@@ -949,10 +1015,12 @@ struct OfficeAmbience::Impl {
         if(reason==RESOURCEMANAGER_UPDATE_REASON_DETECTION_STARTED) {
             journal->write("detection_started");
             for(auto& d:devices) d.controller=nullptr;
+            detectionActive=true;nativeControllers.clear();
             return;
         }
         if(reason!=RESOURCEMANAGER_UPDATE_REASON_DEVICE_LIST_UPDATED && reason!=RESOURCEMANAGER_UPDATE_REASON_DETECTION_COMPLETE) return;
         auto current=api->GetRGBControllers();controllerError.clear();
+        bindHardware(current);detectionActive=reason!=RESOURCEMANAGER_UPDATE_REASON_DETECTION_COMPLETE;
         for(auto& d:devices) {
             RGBControllerInterface* found=nullptr;
             for(auto* c:current) if(deviceKey(c)==d.key) {
@@ -1039,7 +1107,7 @@ struct OfficeAmbience::Impl {
         }
         if(!identifyDevice.empty() && now>=identifyUntil) identifyDevice.clear();
         bool standby=resting || standbyPreview;
-        if(!latest.empty() || calibration || !identifyDevice.empty() || standby) {
+        if(!latest.empty() || calibration || !identifyDevice.empty() || standby || outputPaused || hardware->any()) {
             auto submitBegan=Clock::now();
             auto sentBefore=deviceSubmissions;
             double elapsedMs=std::chrono::duration<double,std::milli>(now-lastOutput).count();
@@ -1047,6 +1115,11 @@ struct OfficeAmbience::Impl {
             {std::lock_guard lock(controllersMutex);
             for(auto& device:devices) {
                 bool changed=false;
+                bool overrideHardware=resting || standbyPreview || outputPaused || !config.at("enabled").get<bool>() || calibration || !identifyDevice.empty();
+                try {if(hardware->output(device.key,device.controller,overrideHardware,true)){++deviceIndex;continue;}}
+                catch(const std::exception& e){controllerError=e.what();++deviceIndex;continue;}
+                if(hardware->consumeReset(device.key))device.delivered=false;
+                if(latest.empty() && !overrideHardware){++deviceIndex;continue;}
                 for(size_t index=0;index<device.count;++index) {
                     bool enabled=config["enabled"].get<bool>() && layout[deviceIndex]["enabled"].get<bool>();
                     for(const auto& group:layout[deviceIndex]["groups"]) if(index>=group.at("first").get<size_t>() && index<group.at("first").get<size_t>()+group.at("count").get<size_t>()) enabled=enabled && group.value("enabled",true);
@@ -1065,7 +1138,7 @@ struct OfficeAmbience::Impl {
                         double gain=displayBrightness.applied(config.at("follow_display_brightness").get<bool>());
                         target=ToRGBColor(office::dimChannel(RGBGetRValue(target),gain),office::dimChannel(RGBGetGValue(target),gain),office::dimChannel(RGBGetBValue(target),gain));
                     }
-                    if(resting) target=0;
+                    if(resting || outputPaused) target=0;
                     auto previous=device.colors[index];
                     double delta=std::max({std::abs(int(RGBGetRValue(target))-int(RGBGetRValue(previous))),std::abs(int(RGBGetGValue(target))-int(RGBGetGValue(previous))),std::abs(int(RGBGetBValue(target))-int(RGBGetBValue(previous)))});
                     auto weight=office::smoothingWeight(config,elapsedMs,delta);
@@ -1073,7 +1146,7 @@ struct OfficeAmbience::Impl {
                         office::adaptedChannel(RGBGetRValue(target),RGBGetRValue(previous),weight),
                         office::adaptedChannel(RGBGetGValue(target),RGBGetGValue(previous),weight),
                         office::adaptedChannel(RGBGetBValue(target),RGBGetBValue(previous),weight)):target;
-                    if(testing || !enabled || resting) color=target;
+                    if(testing || !enabled || resting || outputPaused) color=target;
                     device.colors[index]=color;
                     if(device.controller && (!device.delivered || previous!=color)) {
                         device.controller->SetColor(static_cast<unsigned>(index),color);changed=true;++ledWrites;
@@ -1081,6 +1154,10 @@ struct OfficeAmbience::Impl {
                 }
                 if(device.controller && changed) {device.controller->UpdateLEDs();device.delivered=true;++deviceSubmissions;}
                 ++deviceIndex;
+            }
+            for(auto& [key,c]:nativeControllers)if(std::none_of(devices.begin(),devices.end(),[&](auto& d){return d.key==key;}) && hardware->hardware(key)) {
+                try {bool over=resting || outputPaused || !config.at("enabled").get<bool>();if(!hardware->output(key,c,over,false) && over && hardware->consumeReset(key)){c->SetAllColors(0);c->UpdateLEDs();}}
+                catch(const std::exception& e){controllerError=e.what();}
             }}
             initialized=true; ++outputFrames;
             auto submitted=Clock::now();
@@ -1105,6 +1182,7 @@ struct OfficeAmbience::Impl {
             {"display_brightness_display",displayBrightness.display},
             {"capture_bounds",{selectedMonitor.bounds.left,selectedMonitor.bounds.top,selectedMonitor.bounds.right,selectedMonitor.bounds.bottom}},
             {"source_generation",sourceGeneration},
+            {"application_model","unified"},{"output_thread",GetCurrentThreadId()},{"output_paused",outputPaused},
             {"devices",devices.size()},{"leds",samples.size()},{"output_frames",outputFrames},
             {"input_frames",inputFrames},{"gpu_processing_ms",processingMs},
             {"changed_input_frames",changedInputFrames},{"skipped_input_frames",skippedInputFrames},{"sampling_passes",samplingPasses},
@@ -1134,3 +1212,4 @@ OfficeAmbience::OfficeAmbience(OpenRGBPluginAPIInterface* api,const std::filesys
 OfficeAmbience::~OfficeAmbience()=default;
 void OfficeAmbience::stop() { impl.reset(); }
 void OfficeAmbience::resourcesUpdated(unsigned reason) {if(impl) impl->resourcesUpdated(reason);}
+office::Json OfficeAmbience::command(const office::Json& request) {return impl->command(request);}

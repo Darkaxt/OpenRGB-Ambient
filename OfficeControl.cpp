@@ -3,6 +3,13 @@
 #include "OfficeLayout.h"
 #include "OfficeProcessing.h"
 #include "OfficeStyle.h"
+#include "OfficePanel.h"
+#include <QPointer>
+#include <QDialog>
+#include <QDialogButtonBox>
+#include <QTabWidget>
+#include <QColorDialog>
+#include <RGBControllerInterface.h>
 #include <QApplication>
 #include <QMainWindow>
 #include <QStackedWidget>
@@ -110,6 +117,7 @@ class Client : public QObject {
     uint64_t next=0;
     std::map<uint64_t,std::function<void(const Json&)>> callbacks;
 public:
+    OfficeDispatch direct;
     std::function<void()> connected;
     std::function<void(QString)> error;
     std::function<void(QString)> trace;
@@ -139,6 +147,7 @@ public:
         callbacks.clear();socket.abort();
     }
     void open(const QString& state) {
+        if(direct) {if(connected) connected();return;}
         if(trace) trace("opening-endpoint-record");
         QFile file(state+"/office-control.json");
         if(!file.open(QIODevice::ReadOnly)) {if(error) error("Start the Office Ambience owner before opening the panel.");return;}
@@ -147,9 +156,10 @@ public:
         if(!info.contains("token") || !info["token"].is_string() || !info.contains("endpoint") || !info["endpoint"].is_string()) {if(error) error("The private endpoint record is invalid.");return;}
         token=info.at("token").get<std::string>();pending.clear();socket.connectToServer(text(info.at("endpoint")));
     }
-    bool ready() const {return socket.state()==QLocalSocket::ConnectedState;}
+    bool ready() const {return bool(direct) || socket.state()==QLocalSocket::ConnectedState;}
     void reconnect(const QString& directory) {socket.abort();callbacks.clear();pending.clear();open(directory);}
     void send(Json request,std::function<void(const Json&)> callback) {
+        if(direct) {QPointer<Client> alive(this);direct(std::move(request),[alive,callback=std::move(callback)](const Json& reply){if(alive)callback(reply);});return;}
         if(!ready()) {if(error) error("OpenRGB is not connected. Reconnect before saving.");return;}
         request["id"]=++next;request["token"]=token;callbacks[next]=std::move(callback);
         if(trace) trace(QString("request %1 %2").arg(next).arg(text(request.at("command"))));
@@ -466,6 +476,7 @@ class Panel : public QMainWindow {
     bool quitRequested=false;
     Json panelOptions;
     bool lifecycleBusy=false;
+    Json hardwareData=Json::object();
     QTreeWidget* tree=new QTreeWidget;
     MapCanvas* map=new MapCanvas;
     QLineEdit* zoneName=new QLineEdit;
@@ -483,6 +494,7 @@ class Panel : public QMainWindow {
         if(!file.open(QIODevice::WriteOnly) || file.write(data)!=data.size() || !file.commit()) {failure("Could not save panel preferences");return;}panelOptions=next;
     }
     void lifecycle(const QString& script) {
+        if(client.direct) {action({{"command",script=="Restart-Office.ps1"?"recover":"pause_output"}});return;}
         if(lifecycleBusy) return;
         if(dirty) {failure("Save or reload your draft before restarting/stopping lighting.");return;}
         auto runtime=QStandardPaths::findExecutable("pwsh.exe");if(runtime.isEmpty()) {failure("PowerShell 7 is required for the verified lighting launcher.");return;}
@@ -502,6 +514,7 @@ class Panel : public QMainWindow {
             else if(script=="Restart-Office.ps1") client.reconnect(this->state);else connection->setText("Lighting stopped");
             refresh.start();process->deleteLater();});process->start();
     }
+    #include "OfficeHardwarePanel.inc"
     void buildViews();
     void arrangeDashboard();
     void mapToEdge(int edge) {
@@ -575,6 +588,13 @@ class Panel : public QMainWindow {
     void load(const Json& snapshot,bool force=false) {
         trace("snapshot-accepted");
         lastSnapshot=snapshot;
+        bool newHardware=false;
+        if(snapshot.contains("hardware")) {
+            auto before=hardwareData.value("devices",Json::array()),after=snapshot.at("hardware").at("devices");
+            newHardware=before.size()!=after.size();
+            if(!newHardware)for(size_t i=0;i<after.size();++i)if(before[i].at("identity")!=after[i].at("identity") || before[i].at("owner")!=after[i].at("owner")){newHardware=true;break;}
+            hardwareData=snapshot.at("hardware");
+        }
         if(force || !revision || (!dirty && snapshot.at("revision").get<uint64_t>()!=revision)) {
             int selectedDevice=map->device,selectedGroup=map->group;auto selectedZones=map->zones;
             updating=true;revision=snapshot.at("revision");settings=snapshot.at("settings");layout=snapshot.at("layout");
@@ -590,13 +610,15 @@ class Panel : public QMainWindow {
             map->zones=selectedZones;restoreTreeSelection(selectedDevice,selectedGroup);
         }
         auto s=snapshot.at("status");
+        if(newHardware && revision)buildDevices();
         brightnessStatus->setText(QString("Applied display factor: %1% · %2").arg(s.value("display_brightness_factor",1.)*100,0,'f',1).arg(!snapshot.at("settings").value("follow_display_brightness",true)?"off":s.value("display_brightness_error",std::string()).empty()?(s.value("display_brightness_valid",false)?"following":"waiting for active display"):s.value("display_brightness_valid",false)?"read unavailable; retaining last factor":"read unavailable; using baseline"));
         brightnessStatus->setToolTip(text(s.value("display_brightness_error",std::string())));
         deviceSummary->setText(QString("%1 / %2 devices online  ·  %3 mapped LEDs").arg(s.at("online_devices").get<int>()).arg(layout.size()).arg(s.at("leds").get<int>()));
         inventorySummary->setText(deviceSummary->text());
-        totalDevices->setText(QString::number(layout.size()));mappedDevices->setText(QString::number(layout.size()));
+        totalDevices->setText(QString::number(hardwareData.value("devices",Json::array()).size()));mappedDevices->setText(QString::number(layout.size()));
+        if(auto scan=findChild<QPushButton*>("hardwareRescan")){bool busy=hardwareData.value("detecting",false);scan->setEnabled(!busy);scan->setText(busy?QString("Discovering · %1%").arg(hardwareData.value("detection_percent",0)):"Rescan devices");}
         bool resting=!s.value("rest_reason",std::string()).empty();
-        status->setText(resting?"RESTING":s.value("standby",false)?"STANDBY":settings.value("enabled",true)?"ACTIVE":"INACTIVE");
+        status->setText(resting?"RESTING":s.value("output_paused",false)?"PAUSED":s.value("standby",false)?"STANDBY":settings.value("enabled",true)?"ACTIVE":"INACTIVE");
         status->setToolTip(text(s.at("mode"))+" · "+text(s.at("error")));liveRate->setText(QString("%1 Hz output clock\n%2 device updates").arg(s.at("output_fps").get<double>(),0,'f',1).arg(s.value("device_submissions",uint64_t(0))));
         testState->setText(resting?"Lights resting · resumes automatically":snapshot.at("test_mode")=="none"?"Ambience running":"Temporary test active");
         diagnostics->setPlainText(QString::fromStdString(s.dump(2)));
@@ -619,6 +641,7 @@ class Panel : public QMainWindow {
     }
     Json previewRequest() const {
         Json request={{"command","snapshot"},{"preview",wantsPreview()},{"preview_generation",decodedPreview}};
+        request["hardware"]=pages->currentIndex()==2 || !exportPath.isEmpty();
         if(wantsPreview()) request["preview_blur"]=numbers.at("blur")->value();
         return request;
     }
@@ -659,7 +682,9 @@ class Panel : public QMainWindow {
             identifyButtons.push_back(identify);
             bool connected=lastSnapshot.contains("online") && lastSnapshot["online"].at(d).get<bool>();
             auto online=new QLabel(connected?"Connected":"Offline · map retained");online->setStyleSheet(connected?"color:#22d3a5":"color:#ff9f1c");onlineLabels.push_back(online);identify->setEnabled(connected);
-            row->addWidget(online);row->addWidget(check);auto edit=officeui::button("Edit topology","hub");row->addWidget(edit);row->addWidget(identify);
+            row->addWidget(online);row->addWidget(check);auto edit=officeui::button("Topology","hub");row->addWidget(edit);
+            auto hardwareButton=officeui::button("Hardware","memory");hardwareButton->setAccessibleName("Hardware settings "+text(layout[d]["name"]));row->addWidget(hardwareButton);row->addWidget(identify);
+            connect(hardwareButton,&QPushButton::clicked,this,[this,key]{openHardware(key);});
             connect(edit,&QPushButton::clicked,this,[editZone,d]{editZone(d,0);});
             connect(check,&QCheckBox::toggled,this,[this,d](bool on){layout[d]["enabled"]=on;changed();syncTree();buildDevices();});
             connect(identify,&QPushButton::clicked,this,[this,d]{action({{"command","identify"},{"device",layout[d]["id"]}});});
@@ -678,6 +703,9 @@ class Panel : public QMainWindow {
             auto dashEdit=officeui::button("Topology","hub");dashRow->addWidget(dashEdit);auto expand=officeui::button("Zones","hub");expand->setCheckable(true);dashRow->addWidget(expand);auto dashWidget=new QWidget;auto dashLayout=new QVBoxLayout(dashWidget);dashLayout->addLayout(dashRow);auto zones=new QWidget;auto zoneRows=new QVBoxLayout(zones);zoneRows->setContentsMargins(42,0,0,0);for(size_t g=0;g<layout[d]["groups"].size();++g){auto zone=officeui::button(text(layout[d]["groups"][g]["name"]),"hub");zoneRows->addWidget(zone);connect(zone,&QPushButton::clicked,this,[editZone,d,g]{editZone(d,g);});}zones->hide();dashLayout->addWidget(zones);connect(expand,&QPushButton::toggled,zones,&QWidget::setVisible);dashboardList->addWidget(dashWidget);
             connect(dashName,&QCheckBox::toggled,this,[this,d](bool on){layout[d]["enabled"]=on;changed();syncTree();buildDevices();});connect(dashEdit,&QPushButton::clicked,this,[editZone,d]{editZone(d,0);});
         }dashboardList->addStretch();
+        if(hardwareData.contains("devices"))for(const auto& item:hardwareData.at("devices"))if(!item.value("mapped",false)) {
+            auto card=new officeui::Card(text(item.at("name")),"memory");card->content->addWidget(officeui::label("Native OpenRGB hardware · not part of the saved office sampling map","hint"));auto edit=officeui::button("Hardware settings","tune");card->content->addWidget(edit);auto key=item.at("id").get<std::string>();connect(edit,&QPushButton::clicked,this,[this,key]{openHardware(key);});deviceList->addWidget(card);
+        }
         if(layout.empty()){deviceList->addStretch();auto empty=new officeui::Card("No devices available","device_hub");empty->content->addWidget(officeui::label("Offline maps stay available. Reconnect the native owner or return the KVM devices to this PC."));auto reconnect=officeui::button("Reconnect","refresh");empty->content->addWidget(reconnect);connect(reconnect,&QPushButton::clicked,this,[this]{client.reconnect(state);});deviceList->addWidget(empty);}
         deviceList->addStretch();deviceList->activate();devicePage->setMinimumHeight(deviceList->minimumSize().height());devicePage->updateGeometry();
         totalDevices->setText(QString::number(layout.size()));mappedDevices->setText(QString::number(layout.size()));
@@ -775,7 +803,16 @@ class Panel : public QMainWindow {
         }
         // Supplemental presentations are local UI fixtures, never saved to the
         // hardware owner. They expose states absent from the live gallery.
-        resize(1440,900);result["states"]=Json::array();
+        resize(1440,900);result["states"]=Json::array();result["hardware_views"]=Json::array();
+        if(hardwareData.contains("devices"))for(const auto& device:hardwareData.at("devices")) {
+            hardwareDialog(device);auto dialog=findChild<QDialog*>("hardwareDialog");auto tabs=dialog->findChild<QTabWidget*>("hardwareTabs");
+            for(int tab=0;tab<tabs->count();++tab){tabs->setCurrentIndex(tab);QApplication::sendPostedEvents();dialog->layout()->activate();
+                auto file=exportPath+"/hardware-"+text(device.at("id"))+"-"+QString::number(tab)+".png";
+                if(!dialog->grab().save(file))throw std::runtime_error("Could not export native hardware controls");
+                result["hardware_views"].push_back({{"device",device.at("id")},{"tab",tabs->tabText(tab).toStdString()},{"path",file.toStdString()}});
+            }
+            dialog->setObjectName("retiredHardwareDialog");dialog->close();
+        }
         auto renderState=[this,&result](const char* name){QApplication::sendPostedEvents();centralWidget()->layout()->activate();auto file=exportPath+"/state-"+name+".png";if(!grab().save(file))throw std::runtime_error("Could not export UI state");result["states"].push_back({{"name",name},{"path",file.toStdString()},{"fixture",true}});};
         pages->setCurrentIndex(0);auto disclosure=findChild<QPushButton*>("advancedOptions");disclosure->setChecked(true);renderState("advanced");disclosure->setChecked(false);
         pages->setCurrentIndex(1);select(0,0);tree->setCurrentItem(tree->topLevelItem(0)->child(0));auto beforeRotation=layout;map->rotateSelection();showGeometry();renderState("rotation-quarter-turn");layout=beforeRotation;map->resetHistory();map->update();
@@ -833,6 +870,7 @@ class Panel : public QMainWindow {
     }
 public:
 #ifdef OFFICE_WIDGET_TEST
+    void fixtureHardware(const Json& value) {refresh.stop();client.connected={};hardwareDialog(value);}
     bool fixtureWantsPreview() const {return wantsPreview();}
     Json fixturePreviewRequest() const {return previewRequest();}
     void fixturePreviewReply(const Json& reply) {loadPreview(reply);}
@@ -840,7 +878,8 @@ public:
         refresh.stop();client.error={};updating=true;layout=value;map->layout=&layout;map->zones.clear();buildTree();buildDevices();updating=false;select(0,0);shellPages->setCurrentIndex(0);pages->setCurrentIndex(1);
     }
 #endif
-    Panel(QString stateDirectory,QString exportDirectory,bool exercise=false,bool unavailable=false):state(std::move(stateDirectory)),exportPath(std::move(exportDirectory)),exerciseEditor(exercise),allowUnavailable(unavailable) {
+    Panel(QString stateDirectory,QString exportDirectory,bool exercise=false,bool unavailable=false,OfficeDispatch direct={}):state(std::move(stateDirectory)),exportPath(std::move(exportDirectory)),exerciseEditor(exercise),allowUnavailable(unavailable) {
+        client.direct=std::move(direct);
         clock.start();client.trace=[this](QString event){trace(event);};trace("panel-constructing");
         QFile preferences(state+"/office-panel.json");if(preferences.open(QIODevice::ReadOnly)) {auto data=preferences.readAll();panelOptions=Json::parse(data.constData(),data.constData()+data.size(),nullptr,false);}if(!panelOptions.is_object()) panelOptions=Json::object();
         setWindowTitle("Office Ambilight · OpenRGB");resize(1440,900);setMinimumSize(1000,700);
@@ -866,6 +905,7 @@ public:
         if(tray && !quitRequested && panelOptions.value("close_to_tray",true)) {hide();event->ignore();return;}
         if(dirty && QMessageBox::question(this,"Unsaved map","Close without saving your changes?")!=QMessageBox::Yes) {event->ignore();return;}
         action({{"command","stop_test"}});event->accept();
+        if(client.direct) QCoreApplication::quit();
     }
     void resizeEvent(QResizeEvent* e) override {QMainWindow::resizeEvent(e);arrangeDashboard();pageSubtitle->setVisible(width()>=1200);}
 };
@@ -875,7 +915,15 @@ namespace {
 #include "OfficePanelViews.inc"
 }
 
-#ifndef OFFICE_WIDGET_TEST
+QWidget* createOfficePanel(const QString& state,OfficeDispatch dispatch) {
+    officeui::loadFonts();
+    auto destination=qEnvironmentVariable("OPENRGB_OFFICE_EXPORT");
+    auto panel=new Panel(state,destination,qEnvironmentVariableIsSet("OPENRGB_OFFICE_EXERCISE_EDITOR"),qEnvironmentVariableIsSet("OPENRGB_OFFICE_ALLOW_UNAVAILABLE"),std::move(dispatch));
+    if(!destination.isEmpty())panel->show();
+    return panel;
+}
+
+#if !defined(OFFICE_WIDGET_TEST) && !defined(OFFICE_EMBEDDED_PANEL)
 int main(int argc,char** argv) {
     QApplication app(argc,argv);app.setApplicationName("Office Ambilight");
     officeui::loadFonts();

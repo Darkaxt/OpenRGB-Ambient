@@ -12,6 +12,7 @@
 #include "PluginMetadata.h"
 
 #include "OpenRGBAmbientPlugin.h"
+#include <QApplication>
 
 #include <ResourceManagerCallback.h>
 
@@ -44,7 +45,10 @@ namespace
 
 OpenRGBAmbientPlugin::~OpenRGBAmbientPlugin()
 {
-    {std::lock_guard lock(officeMutex);office.reset();}
+    delete officePanel;
+    std::unique_ptr<OfficeRuntime> retired;
+    {std::lock_guard lock(officeMutex);retired=std::move(office);}
+    retired.reset();
     destroyEndSessionWindow();
     stopCapture();
 }
@@ -83,11 +87,10 @@ unsigned int OpenRGBAmbientPlugin::GetPluginAPIVersion()
 
 void OpenRGBAmbientPlugin::Load(OpenRGBPluginAPIInterface* plugin_api_ptr)
 {
-    std::lock_guard lock(officeMutex);
     pluginApiPtr = plugin_api_ptr;
     auto officeConfig=pluginApiPtr->GetConfigurationDirectory()/"office-ambience.json";
     if(std::filesystem::exists(officeConfig)) {
-        office=std::make_unique<OfficeAmbience>(pluginApiPtr,officeConfig);
+        office=std::make_unique<OfficeRuntime>(pluginApiPtr,officeConfig);
         return;
     }
 
@@ -118,7 +121,11 @@ void OpenRGBAmbientPlugin::Load(OpenRGBPluginAPIInterface* plugin_api_ptr)
 
 QWidget *OpenRGBAmbientPlugin::GetWidget()
 {
-    if(office) return nullptr;
+    if(office) {
+        if(!qobject_cast<QApplication*>(QCoreApplication::instance())) return nullptr;
+        if(!officePanel) officePanel=createOfficePanel(QString::fromStdWString(pluginApiPtr->GetConfigurationDirectory().wstring()),office->dispatch(this));
+        return officePanel;
+    }
     const auto ui = new SettingsTab{pluginApiPtr, *settings};
     connect(this, &OpenRGBAmbientPlugin::previewUpdated, ui, &SettingsTab::updatePreview);
     connect(this, &OpenRGBAmbientPlugin::ledColorsUpdated, ui, &SettingsTab::updateLedColors);
@@ -142,7 +149,10 @@ QMenu *OpenRGBAmbientPlugin::GetTrayMenu()
 
 void OpenRGBAmbientPlugin::Unload()
 {
-    {std::lock_guard lock(officeMutex);if(office) { office.reset(); return; }}
+    delete officePanel;
+    std::unique_ptr<OfficeRuntime> retired;
+    {std::lock_guard lock(officeMutex);retired=std::move(office);}
+    if(retired) {retired.reset();return;}
     for (const auto controller : pluginApiPtr->GetRGBControllers())
         controller->UnregisterUpdateCallback(settings);
 

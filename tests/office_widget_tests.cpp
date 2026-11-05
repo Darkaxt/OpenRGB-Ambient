@@ -158,10 +158,27 @@ void trayMenuBackground() {
         require(highlight.alpha()==255 && highlight!=background,"Tray menu selection must remain visible on its own background");
     }
 }
+void hardwareEditor(QApplication& app) {
+    Json sent;Panel panel("unused-test-state",{},false,false,[&](Json request,OfficeReply reply){sent=request;reply({{"ok",true},{"result",Json::object()}});});
+    Json plain={{"index",0},{"zone",-1},{"name","Direct"},{"flags",MODE_FLAG_HAS_PER_LED_COLOR},{"speed",0},{"speed_min",0},{"speed_max",0},{"brightness",0},{"brightness_min",0},{"brightness_max",0},{"direction",0},{"color_mode",MODE_COLORS_PER_LED},{"colors_min",0},{"colors_max",0},{"colors",Json::array()}};
+    Json pulse=plain;pulse["index"]=1;pulse["name"]="Pulse";pulse["flags"]=MODE_FLAG_HAS_SPEED|MODE_FLAG_HAS_BRIGHTNESS|MODE_FLAG_HAS_MODE_SPECIFIC_COLOR;pulse["speed_min"]=1;pulse["speed_max"]=5;pulse["speed"]=2;pulse["brightness_max"]=100;pulse["brightness"]=80;pulse["color_mode"]=MODE_COLORS_MODE_SPECIFIC;pulse["colors_min"]=1;pulse["colors_max"]=3;pulse["colors"]=Json::array({0xffffff});
+    Json device={{"id","test"},{"identity","identity-1"},{"name","Test keyboard"},{"owner","ambience"},{"mapped",true},{"active_mode",0},{"zones",Json::array()},{"schema",Json::object()},{"configuration",Json::object()},
+        {"modes",Json::array({plain,pulse})},{"leds",Json::array({{{"name","Key A"},{"color",255}},{{"name","Key B"},{"color",65535}}})}};
+    panel.fixtureHardware(device);app.processEvents();auto dialog=panel.findChild<QDialog*>("hardwareDialog");require(dialog,"Native hardware editor did not open");
+    auto tabs=dialog->findChild<QTabWidget*>("hardwareTabs");require(tabs && tabs->count()==4,"Native hardware controls lost their contextual tab placement");tabs->setCurrentIndex(1);app.processEvents();
+    auto speed=dialog->findChild<QSpinBox*>("hardwareSpeed"),brightness=dialog->findChild<QSpinBox*>("hardwareBrightness");auto choice=dialog->findChild<QComboBox*>("hardwareMode");
+    require(!speed->isVisible() && !brightness->isVisible(),"Direct mode displayed unsupported speed/brightness controls");
+    choice->setCurrentIndex(1);app.processEvents();require(speed->isVisible() && speed->minimum()==1 && speed->maximum()==5 && brightness->isVisible(),"Mode capabilities did not replace unsupported controls with driver ranges");
+    speed->setValue(4);brightness->setValue(60);dialog->findChild<QPushButton*>("hardwareApply")->click();
+    require(sent.at("command")=="hardware" && sent.at("action")=="mode" && sent.at("identity")=="identity-1" && sent.at("mode").at("speed")==4 && sent.at("mode").at("brightness")==60,"Native mode widgets did not send the identity-bound edited parameters");
+    dialog->findChild<QPushButton*>("hardwareAmbience")->click();require(sent.at("action")=="ambience","Return to ambience not wired");
+    dialog->close();app.processEvents();
+}
 int main(int argc,char** argv) {
     QApplication app(argc,argv);
     try {
         officeui::loadFonts();
+        hardwareEditor(app);
         trayMenuBackground();
         invertedGrid(app);
         contextOutlines(app);

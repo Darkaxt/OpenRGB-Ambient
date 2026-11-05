@@ -2,6 +2,7 @@
 #pragma once
 #include <OpenRGBPluginInterface.h>
 struct StubOpenRGBPluginAPIInterface : OpenRGBPluginAPIInterface {
+    bool SaveProfile(std::string) override {return false;}
     void                                    LogEntry(const char* filename, int line, unsigned int level, const char* fmt, ...) override {}
     RGBControllerInterface*                 CreateVirtualRGBController(RGBController_Setup* setup) override {return {};}
     void                                    DeleteVirtualRGBController(RGBControllerInterface* rgb_controller) override {}
