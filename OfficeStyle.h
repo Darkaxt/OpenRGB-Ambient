@@ -159,7 +159,7 @@ QMenu::item{background:#071522;padding:7px 22px;}
 QMenu::item:selected{background:#10333e;color:#14f5ff;}
 QMenu::item:disabled{color:#637486;}
 QMenu::separator{height:1px;background:#23525b;margin:4px 6px;}
-QMainWindow{background:#040c14;} QLabel[role='eyebrow']{color:#93a4b5;font-weight:700;}
+QMainWindow,QDialog{background:#040c14;} QLabel[role='eyebrow']{color:#93a4b5;font-weight:700;}
 QLabel[role='hint']{color:#93a4b5;} QLabel[role='metric']{color:#14f5ff;}
 QLabel#sectionBadge{background:rgba(20,245,255,15);border:1px solid rgba(20,245,255,35);border-radius:8px;}
 QPushButton{background:#0a1b25;border:1px solid #23525b;border-radius:9px;padding:5px 12px;font-weight:600;}

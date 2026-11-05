@@ -26,7 +26,7 @@ void hardwareDialog(Json device) {
     auto lighting=new QWidget;auto lightingLayout=new QVBoxLayout(lighting);auto ownershipRow=new QHBoxLayout;ownershipRow->addWidget(label("Apply a native effect to hand this device to OpenRGB hardware mode.","hint"),1);
     auto returnToAmbience=button("Use ambience","auto_awesome");returnToAmbience->setObjectName("hardwareAmbience");returnToAmbience->setEnabled(device.value("mapped",false));ownershipRow->addWidget(returnToAmbience);lightingLayout->addLayout(ownershipRow);
     connect(returnToAmbience,&QPushButton::clicked,dialog,[this,dialog,request,ownership]{hardwareCall(request("ambience"),dialog,[ownership](const Json&){ownership->setText("Ambience owns this device");});});
-    auto modeCard=new Card("Native lighting mode","light_mode");auto target=new ChoiceBox;target->setObjectName("hardwareModeTarget");target->addItem("Entire device",-1);
+    auto modeCard=new Card("Native lighting mode","settings_brightness");auto target=new ChoiceBox;target->setObjectName("hardwareModeTarget");target->addItem("Entire device",-1);
     for(const auto& zone:device.at("zones"))if(!zone.at("modes").empty())target->addItem(text(zone.at("name")),zone.at("index").get<int>());
     modeCard->content->addWidget(label("Hardware target","hint"));modeCard->content->addWidget(target);
     auto modeChoice=new ChoiceBox;modeChoice->setObjectName("hardwareMode");modeCard->content->addWidget(modeChoice);

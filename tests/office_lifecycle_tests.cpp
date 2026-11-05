@@ -34,6 +34,19 @@ struct Api : StubOpenRGBPluginAPIInterface {
 void require(bool value,const char* message) {if(!value) throw std::runtime_error(message);}
 
 struct OfficeLifecycleTest {
+    static void savePreservesUntouchedSettings() {
+        QTemporaryDir dir;auto path=std::filesystem::path(dir.path().toStdWString())/"office-ambience.json";
+        {std::ofstream out(path);out<<Json{{"monitor","\\\\.\\DISPLAY2"},{"fps",15},{"smoothing_ms",140}};}
+        Controller strip("Govee H6609",20),bars("Govee H8048",20),laptop("Lenovo Legion 7 Gen 8",109),desk("Secretlab",48,"NL72S2"),mouse("G502 X PLUS",8),keys("Keychron Q6 HE ISO",109);
+        Api api;api.controllers={&strip,&bars,&keys,&laptop,&desk,&mouse};OfficeAmbience::Impl owner(&api,path,false);
+        owner.diskConfig["layout"]=owner.layout;auto original=owner.diskConfig.dump(2);{std::ofstream out(path);out<<original;}
+        auto snapshot=owner.snapshot(false);
+        auto save=[&](const Json& settings){owner.command({{"command","save"},{"revision",owner.revision},{"settings",settings},{"layout",snapshot.at("layout")}});};
+        save(snapshot.at("settings"));std::ifstream saved(path);std::string bytes((std::istreambuf_iterator<char>(saved)),{});saved.close();
+        require(bytes==original,"Topology Save rewrote the legacy display alias or injected untouched processing defaults");
+        auto edited=snapshot.at("settings");edited["follow_display_brightness"]=false;save(edited);
+        require(owner.diskConfig.at("follow_display_brightness")==false && owner.diskConfig.at("monitor")=="\\\\.\\DISPLAY2","Explicit settings edits did not persist independently of the runtime display alias");
+    }
     static void hardwareOwnership() {
         struct Native : Controller {
             using Controller::Controller;
@@ -110,6 +123,7 @@ struct OfficeLifecycleTest {
         require(ordinaryRejected && manualRecognized,"Recognize manually launched screensaver tool window without SPI flag; reject an ordinary fullscreen app");
     }
     static void run() {
+        savePreservesUntouchedSettings();
         hardwareOwnership();
         screensaverSelection();
         auto primary=primaryMonitor();MONITORINFO primaryInfo{};primaryInfo.cbSize=sizeof(primaryInfo);

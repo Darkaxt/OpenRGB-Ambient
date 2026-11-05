@@ -817,6 +817,12 @@ struct OfficeAmbience::Impl {
         const auto defaults=office::processingDefaults();for(auto& [key,value]:defaults.items()) if(request.at("settings").contains(key)) next[key]=request.at("settings").at(key);
         validateSettings(next);
         auto proposed=request.at("layout");auto points=validatedLayout(proposed);next["layout"]=proposed;
+        // The runtime resolves aliases and missing defaults without migrating
+        // the user's file. A topology Save must preserve those untouched keys.
+        auto document=diskConfig;
+        for(auto& [key,value]:request.at("settings").items())
+            if(next.contains(key) && config.contains(key) && next.at(key)!=config.at(key)) document[key]=next.at(key);
+        document["layout"]=proposed;
         // Detect external edits before replacing a private configuration file.
         std::ifstream currentFile(configPath);Json onDisk;currentFile>>onDisk;
         // MSVC's stream handle does not share delete access. Release it before
@@ -829,11 +835,11 @@ struct OfficeAmbience::Impl {
         com_ptr<ID3D11Buffer> newOptions;
         if(capture) {lock=std::unique_lock(capture->state->mutex);newRegions=capture->state->makeRegions(points);newOptions=capture->state->makeOptions(next);}
         QSaveFile file(QString::fromStdWString(configPath.wstring()));
-        auto bytes=next.dump(2);
+        auto bytes=document.dump(2);
         if(!file.open(QIODevice::WriteOnly) || file.write(bytes.data(),bytes.size())!=static_cast<qint64>(bytes.size()) || !file.commit())
             throw std::runtime_error("Could not save settings; the active map is unchanged");
         if(capture) {capture->state->regions=std::move(newRegions);capture->state->options=std::move(newOptions);capture->state->sampleRetained();}
-        samples=std::move(points);layout=std::move(proposed);config=next;diskConfig=next;smoothingMs=config["smoothing_ms"].get<double>();
+        samples=std::move(points);layout=std::move(proposed);config=next;diskConfig=document;smoothingMs=config["smoothing_ms"].get<double>();
         output.setInterval(std::max(1,static_cast<int>(std::round(1000.0/config["fps"].get<int>()))));
         ++revision;
         if(lock.owns_lock()) lock.unlock();

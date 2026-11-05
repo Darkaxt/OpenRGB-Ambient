@@ -167,6 +167,8 @@ void hardwareEditor(QApplication& app) {
     panel.fixtureHardware(device);app.processEvents();auto dialog=panel.findChild<QDialog*>("hardwareDialog");require(dialog,"Native hardware editor did not open");
     require(!panel.windowIcon().isNull(),"OpenRGB application icon resource missing");
     auto tabs=dialog->findChild<QTabWidget*>("hardwareTabs");require(tabs && tabs->count()==4,"Native hardware controls lost their contextual tab placement");tabs->setCurrentIndex(1);app.processEvents();
+    QImage background(dialog->size(),QImage::Format_ARGB32_Premultiplied);background.fill(Qt::transparent);dialog->render(&background);
+    require(background.pixelColor(3,3)==QColor("#040c14"),"Hardware dialog must paint its opaque themed surface, not leak a black or transparent window");
     auto speed=dialog->findChild<QSpinBox*>("hardwareSpeed"),brightness=dialog->findChild<QSpinBox*>("hardwareBrightness");auto choice=dialog->findChild<QComboBox*>("hardwareMode");
     require(!speed->isVisible() && !brightness->isVisible(),"Direct mode displayed unsupported speed/brightness controls");
     choice->setCurrentIndex(1);app.processEvents();require(speed->isVisible() && speed->minimum()==1 && speed->maximum()==5 && brightness->isVisible(),"Mode capabilities did not replace unsupported controls with driver ranges");
