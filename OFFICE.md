@@ -1,9 +1,20 @@
 # Main-monitor office ambience
 
-Identical captured LG pixels are rejected by an exact GPU comparison before mip
+Capture always follows the display marked as main in Windows. The primary flag,
+device name and current bounds are resolved again on source selection and display
+change/resume events; no DISPLAY number or physical LG identity is pinned. Legacy
+saved monitor names are ignored without rewriting saved topology/settings on load.
+The control snapshot reports the effective monitor policy as `primary`; a later
+explicit Save persists that policy alongside the existing settings. Diagnostics
+include `capture_display` and `capture_bounds` for the actual selected display.
+Undocking naturally selects the laptop's main display. Disconnected controllers
+retain their maps; connected laptop/mouse lighting continues. Regions remain
+normalized across resolutions, so their relative placement is preserved.
+
+Identical captured main-display pixels are rejected by an exact GPU comparison before mip
 generation, blur, media-border detection or colour extraction. Only a four-byte
 change flag reaches the CPU; the full image stays on the GPU. Other-monitor pixel
-changes do not invalidate the LG crop. New dimensions, sources, mapping and image
+changes do not invalidate the main-display crop. New dimensions, sources, mapping and image
 settings still invalidate their affected work. Static previews reuse the encoded
 generation rather than recompressing an identical screenshot.
 
@@ -24,14 +35,14 @@ path remains available. The office path requires the verified six-controller,
 an optional native Qt panel; it neither captures nor submits RGB itself.
 
 ```json
-{"monitor":"\\\\.\\DISPLAY2","fps":15,"smoothing_ms":140}
+{"monitor":"primary","fps":15,"smoothing_ms":140}
 ```
 
 Window-state events choose a maximized/fullscreen application on that monitor.
 An automatically activated Windows idle screensaver rests all lights and releases
 capture. Dismissing it resumes from fresh imagery. The Windows saver-running flag
 or `Screen-saver` input desktop distinguishes this from a shortcut launch.
-A manually launched fullscreen LG screensaver on the ordinary input desktop
+A manually launched fullscreen main-display screensaver on the ordinary input desktop
 takes capture priority. Desktop-switch events restore the normal policy when
 an automatic saver exits; the owner never switches the user's desktop.
 Manually started fullscreen `.scr`/`WindowsScreenSaverClass` windows are recognized
@@ -48,10 +59,10 @@ replace one current colour row; there is no frame queue. The output timer applie
 temporal smoothing and updates the six native controllers. While sources change
 or capture is unavailable, it retains the previous valid row. Black imagery is
 valid. The accepted approximate perimeter layout is 3/7/4/6, and bar order is left
-ten/right ten. Laptop lighting follows the LG in this release.
+ten/right ten. All connected lighting follows the Windows main display.
 
 Windows session lock, session display sleep, an inaccessible/secure input desktop,
-or LG disconnection forces all output black and releases capture. This takes
+or the absence of a Windows main display forces all output black and releases capture. This takes
 priority over identify, calibration and the standby preview. Unlock/display wake
 recreates capture and waits for fresh imagery; saved mapping/brightness are not
 modified. A dimmed display is still awake. Session display notifications do not
@@ -84,7 +95,7 @@ Ratio alone, a dark scene, a one-sided dark edge or an entirely black frame cann
 cause cropping. One GPU pass computes the rectangle shared by all LEDs; normalized
 regions scale into that content rectangle without changing saved topology. The
 full capture remains visible in the editor with effective sampling outlines.
-Topology shows the actual downscaled LG capture, per-LED sampling rectangles,
+Topology shows the actual downscaled main-display capture, per-LED sampling rectangles,
 hardware LED names/indices, and current output colours. Select a device/zone or
 one LED; drag, resize, quarter-turn or reverse its sampling order. Click a device
 row to select all its zones, Ctrl-click to add/remove entries, or Shift-click a
@@ -93,7 +104,7 @@ spacing and physical LED identities are preserved. One undo restores the entire
 gesture and Escape cancels it. The Show choice defaults to Selected devices;
 Selected zones hides unselected zones and All devices gives a complete overview.
 Lighting enable checkboxes remain independent of editor selection. Coordinates
-are percentages of the LG image, with Y increasing downwards. Devices includes
+are percentages of the main-display image, with Y increasing downwards. Devices includes
 device/zone enable and individual/all-device two-second identify. Eight constant
 pixel corner/edge handles resize regions; grid/snap, pan/zoom, undo/redo and edge
 presets retain hardware LED identity. Cyan shows the editable region; dashed amber
@@ -127,7 +138,7 @@ uses the original retained input; it does not blur an already-filtered bitmap.
 The Preview page shows actual capture and submitted LED colours. Its separate
 MIT-licensed animation/music playground retains the original six WebGL effects,
 particles, palettes, postprocessing, audio bindings, visualizers and saved presets.
-It is local browser content, not another RGB writer: maximize it on the LG to use
+It is local browser content, not another RGB writer: maximize it on the main display to use
 the existing app-capture policy. Controls fade after four seconds; moving inside
 the page shows them again, and H toggles manual hiding.
 Settings tests/reconnects the same-user native pipe, opens diagnostics, and invokes

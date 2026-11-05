@@ -67,7 +67,7 @@ struct DpiContext {
     ~DpiContext() { SetThreadDpiAwarenessContext(previous); }
 };
 using Sample=office::Region;
-struct Monitor { HMONITOR handle{}; RECT bounds{}; };
+struct Monitor { HMONITOR handle{}; RECT bounds{}; std::string name; };
 
 std::wstring windowClass(HWND window) {
     wchar_t value[256]{}; GetClassNameW(window,value,256); return value;
@@ -86,15 +86,17 @@ bool isRenderer(HWND window) {
     return name==L"wallpaper64.exe" || name==L"wallpaper32.exe" ||
         name==L"webwallpaper32.exe" || name==L"webwallpaper64.exe" || name==L"edgewallpaper64.exe";
 }
-Monitor monitorByName(const std::wstring& name) {
-    struct Search { const std::wstring& name; Monitor result; } search{name,{}};
+Monitor primaryMonitor() {
+    Monitor result;
     EnumDisplayMonitors(nullptr,nullptr,[](HMONITOR handle,HDC,LPRECT,LPARAM data)->BOOL {
-        auto& s=*reinterpret_cast<Search*>(data);
         MONITORINFOEXW info{}; info.cbSize=sizeof(info);
-        if(GetMonitorInfoW(handle,&info) && s.name==info.szDevice) s.result={handle,info.rcMonitor};
+        if(GetMonitorInfoW(handle,&info) && (info.dwFlags&MONITORINFOF_PRIMARY)) {
+            *reinterpret_cast<Monitor*>(data)={handle,info.rcMonitor,to_string(info.szDevice)};
+            return FALSE;
+        }
         return TRUE;
-    },reinterpret_cast<LPARAM>(&search));
-    return search.result;
+    },reinterpret_cast<LPARAM>(&result));
+    return result;
 }
 bool overlaps(RECT a,RECT b) { RECT intersection{}; return IntersectRect(&intersection,&a,&b); }
 HWND wallpaperHost(const Monitor& monitor) {
@@ -588,7 +590,7 @@ struct OfficeAmbience::Impl {
     QTimer output;
     OpenRGBPluginAPIInterface* api;
     std::filesystem::path configPath,statusPath;
-    std::wstring display;
+    Monitor selectedMonitor;
     std::vector<Device> devices;
     mutable std::mutex controllersMutex;
     std::string controllerError;
@@ -693,7 +695,7 @@ struct OfficeAmbience::Impl {
         return result;
     }
     void validateSettings(const Json& candidate) const {
-        if(candidate.at("monitor")!=config.at("monitor")) throw std::runtime_error("This panel controls the configured LG display only");
+        if(candidate.at("monitor")!="primary") throw std::runtime_error("Capture always follows the Windows main display");
         if(!candidate.at("enabled").is_boolean() || !candidate.at("fps").is_number_integer() || candidate.at("fps")<1 || candidate.at("fps")>60)
             throw std::runtime_error("Output FPS must be an integer from 1 to 60");
         double smooth=candidate.at("smoothing_ms").get<double>();
@@ -785,14 +787,14 @@ struct OfficeAmbience::Impl {
     // inventory, map and output implementation used by the installed owner.
     Impl(OpenRGBPluginAPIInterface* api,const std::filesystem::path& path,bool activate=true):api(api),configPath(path) {
         std::ifstream file(path);file>>config;diskConfig=config;
-        if(!config.contains("monitor")) config["monitor"]="\\\\.\\DISPLAY2";
+        // Legacy display names are accepted on disk but never pin capture to
+        // disconnected hardware. Do not rewrite the saved map merely on load.
+        config["monitor"]="primary";
         if(!config.contains("fps")) config["fps"]=15;
         if(!config.contains("smoothing_ms")) config["smoothing_ms"]=140;
         if(!config.contains("enabled")) config["enabled"]=true;
         office::processingDefaults(config);
         validateSettings(config);
-        auto wide=to_hstring(config.value("monitor",std::string("\\\\.\\DISPLAY2")));
-        display.assign(wide.c_str(),wide.size());
         int fps=config.value("fps",15);
         if(fps<1 || fps>60) throw std::runtime_error("Office FPS must be in 1..60");
         smoothingMs=config.value("smoothing_ms",140.0);
@@ -898,7 +900,10 @@ struct OfficeAmbience::Impl {
         }
     }
     void chooseSource() {
-        auto monitor=monitorByName(display);
+        chooseSource(primaryMonitor());
+    }
+    void chooseSource(const Monitor& monitor) {
+        selectedMonitor=monitor;
         monitorMissing=!monitor.handle;
         InputDesktop desktop;inputDesktop=to_string(desktop.name);desktopUnavailable=desktop.secure();
         // Windows' idle saver is a rest transition, not a window whose WGC
@@ -918,7 +923,7 @@ struct OfficeAmbience::Impl {
         ++sourceGeneration;
         sourceBounds=bounds; monitorBounds=monitor.bounds;
         switched=Clock::now();firstFrameDelayMs=0;inputFrames=deliveredFrames=0;changedInputFrames=skippedInputFrames=samplingPasses=0;
-        if(!candidate) error=saver?"Waiting for the LG screensaver window; holding the last valid colours":"No capturable wallpaper host or maximized LG application is available; holding the last valid colours";
+        if(!candidate) error=saver?"Waiting for the main-display screensaver window; holding the last valid colours":"No capturable wallpaper host or maximized main-display application is available; holding the last valid colours";
         if(candidate) try { capture=std::make_unique<Capture>(candidate,monitor.bounds,samples);std::lock_guard lock(capture->state->mutex);capture->state->configure(config); }
         catch(hresult_error const& failure) { error=to_string(failure.message()); }
         catch(std::exception const& failure) { error=failure.what(); }
@@ -1009,6 +1014,8 @@ struct OfficeAmbience::Impl {
     Json report() const {
         std::lock_guard lock(controllersMutex);
         return {{"mode",mode},{"standby",!restReason().empty() || standbyPreview},{"rest_reason",restReason()},{"input_desktop",inputDesktop},{"source_hwnd",reinterpret_cast<uintptr_t>(source)},
+            {"monitor_policy","primary"},{"capture_display",selectedMonitor.name},
+            {"capture_bounds",{selectedMonitor.bounds.left,selectedMonitor.bounds.top,selectedMonitor.bounds.right,selectedMonitor.bounds.bottom}},
             {"source_generation",sourceGeneration},
             {"devices",devices.size()},{"leds",samples.size()},{"output_frames",outputFrames},
             {"input_frames",inputFrames},{"gpu_processing_ms",processingMs},

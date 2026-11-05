@@ -206,7 +206,7 @@ public:
     std::function<void()> edited;
     std::function<void(int,int,Qt::KeyboardModifiers)> picked;
     std::function<void(QString)> error;
-    MapCanvas() {setMinimumSize(280,210);setMouseTracking(true);setFocusPolicy(Qt::StrongFocus);setAccessibleName("Actual LG sampling map");}
+    MapCanvas() {setMinimumSize(280,210);setMouseTracking(true);setFocusPolicy(Qt::StrongFocus);setAccessibleName("Main display sampling map");}
     QRectF imageGeometry() const {return imageRect();}
     QRectF selectionGeometry() const {return screenBounds();}
     int orientation() const {auto ids=targets();if(ids.empty())return 0;const auto& d=layout->at(ids.front().first);if(!d.contains("rotation_quarters"))return 0;return d["rotation_quarters"].at(ids.front().second).get<int>();}
@@ -216,7 +216,7 @@ public:
     void rotateSelection() {
         auto values=selected();if(values.empty())return;auto from=office::bounds(values);
         float w=(from.bottom-from.top)*2160.f/5120.f,h=(from.right-from.left)*5120.f/2160.f;
-        if(w>1 || h>1)throw std::runtime_error("Resize this zone before rotating it inside the LG image.");
+        if(w>1 || h>1)throw std::runtime_error("Resize this zone before rotating it inside the main display image.");
         float cx=(from.left+from.right)/2,cy=(from.top+from.bottom)/2;
         float x=std::clamp(cx-w/2,0.f,1-w),y=std::clamp(cy-h/2,0.f,1-h);
         auto next=office::transform(values,from,{x,y,x+w,y+h},90,false);
@@ -276,7 +276,7 @@ public:
         QPainter p(this);p.setRenderHint(QPainter::Antialiasing);auto image=imageRect();
         p.fillRect(rect(),QColor("#020a10"));
         if(!preview.isNull()) p.drawImage(image,preview);
-        else {p.fillRect(image,QColor("#102333"));p.setPen(QColor("#cdd6e0"));p.drawText(image,Qt::AlignCenter,"Waiting for a live LG preview");}
+        else {p.fillRect(image,QColor("#102333"));p.setPen(QColor("#cdd6e0"));p.drawText(image,Qt::AlignCenter,"Waiting for a live main display preview");}
         p.save();p.setClipRect(image.intersected(rect()));
         if(showGrid) {
             // White difference composition inverts the preview only. Fill the
@@ -400,7 +400,7 @@ public:
         QPainter p(this);p.setRenderHint(QPainter::Antialiasing);p.fillRect(rect(),QColor("#020a10"));
         QRectF target(rect().adjusted(16,16,-16,-16));double h=target.width()*2160/5120;
         if(h>target.height()) {double w=target.height()*5120/2160;target.setLeft(target.center().x()-w/2);target.setWidth(w);} else {target.setTop(target.center().y()-h/2);target.setHeight(h);}
-        if(!image.isNull()) p.drawImage(target,image);else {p.setPen(Qt::white);p.drawText(target,Qt::AlignCenter,"Waiting for the LG source");}
+        if(!image.isNull()) p.drawImage(target,image);else {p.setPen(Qt::white);p.drawText(target,Qt::AlignCenter,"Waiting for the main display source");}
         if(overlay) for(size_t d=0;d<layout.size() && d<colours.size();++d) for(size_t i=0;i<layout[d]["regions"].size() && i<colours[d].size();++i) {
             auto r=layout[d]["regions"][i],c=colours[d][i];QColor color(c[0].get<int>(),c[1].get<int>(),c[2].get<int>(),185);
             QRectF box(target.left()+r[0].get<double>()*target.width(),target.top()+r[1].get<double>()*target.height(),(r[2].get<double>()-r[0].get<double>())*target.width(),(r[3].get<double>()-r[1].get<double>())*target.height());
@@ -875,7 +875,7 @@ int main(int argc,char** argv) {
     officeui::loadFonts();
     QCommandLineParser parser;parser.addHelpOption();parser.addOption({"state","Private OpenRGB state directory","directory","D:/Tools/OpenRGB/state-integration"});
     parser.addOption({"export-views","Export all real connected panel views, then exit","directory"});
-    parser.addOption({"allow-unavailable-source","Export the real waiting/error state if the LG source is unavailable; not live capture acceptance"});
+    parser.addOption({"allow-unavailable-source","Export the real waiting/error state if the main display source is unavailable; not live capture acceptance"});
     parser.addOption({"exercise-editor","Verify the real Save button and restore the original map before exporting"});parser.process(app);
     if(parser.isSet("exercise-editor") && !parser.isSet("export-views")) parser.showHelp(1);
     // One interactive panel per private state. Diagnostic exports are isolated,

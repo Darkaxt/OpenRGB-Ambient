@@ -20,7 +20,7 @@ inline std::vector<Region> validateRegions(const Json& values,size_t count) {
         for(const auto& n:value) if(!n.is_number() || !std::isfinite(n.get<double>())) throw std::runtime_error("Sampling coordinates must be finite numbers");
         Region r{value[0].get<float>(),value[1].get<float>(),value[2].get<float>(),value[3].get<float>()};
         if(r.left<0 || r.top<0 || r.right>1 || r.bottom>1 || r.right<=r.left || r.bottom<=r.top)
-            throw std::runtime_error("Sampling rectangles must have positive size and stay inside the LG image");
+            throw std::runtime_error("Sampling rectangles must have positive size and stay inside the main display image");
         result.push_back(r);
     }
     return result;

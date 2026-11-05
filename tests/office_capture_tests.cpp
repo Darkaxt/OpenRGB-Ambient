@@ -75,8 +75,30 @@ float4 diagnose(Vertex input):SV_TARGET {
     upload();unchanged();options["black_bar_detect"]=false;state.configure(options);state.sampleRetained();unchanged();
 }
 
+void mainDisplayCrops() {
+    const std::vector<Sample> map={around(.25f,.25f,.2f,.2f),around(.75f,.75f,.2f,.2f)};
+    // Two monitors share one shell texture; changing the primary display must
+    // sample the new crop, including negative desktop coordinates. A subsequent
+    // laptop-only 16:10 source retains exactly the same normalized regions.
+    for(unsigned which=0;which<3;++which) {
+        RECT host=which<2?RECT{-128,-32,128,96}:RECT{0,0,160,100};
+        RECT monitor=which==0?RECT{-128,-32,0,96}:which==1?RECT{0,-32,128,96}:host;
+        unsigned width=host.right-host.left,height=host.bottom-host.top;
+        CaptureState state(map,host,monitor,D3D_DRIVER_TYPE_WARP);
+        std::vector<uint32_t> pixels(width*height);
+        for(unsigned y=0;y<height;++y)for(unsigned x=0;x<width;++x)
+            pixels[y*width+x]=which==2?0xff0000ff:x<128?0xffff0000:0xff00ff00;
+        D3D11_TEXTURE2D_DESC desc{};desc.Width=width;desc.Height=height;
+        desc.MipLevels=desc.ArraySize=desc.SampleDesc.Count=1;desc.Format=DXGI_FORMAT_B8G8R8A8_UNORM;desc.Usage=D3D11_USAGE_DEFAULT;
+        D3D11_SUBRESOURCE_DATA data{pixels.data(),width*4,0};com_ptr<ID3D11Texture2D> texture;
+        check_hresult(state.device->CreateTexture2D(&desc,&data,texture.put()));state.processTexture(texture.get());
+        auto expected=which==0?ToRGBColor(255,0,0):which==1?ToRGBColor(0,255,0):ToRGBColor(0,0,255);
+        if(state.colors!=std::vector<RGBColor>(map.size(),expected)) throw std::runtime_error("Main-display change/resolution sampled another display or changed normalized map");
+    }
+}
 int main() {
     try {
+        mainDisplayCrops();
         mediaMattes();
         CaptureState state({around(.25f,.25f,.2f,.2f),around(.75f,.25f,.2f,.2f),
                             around(.25f,.75f,.2f,.2f),around(.75f,.75f,.2f,.2f)},

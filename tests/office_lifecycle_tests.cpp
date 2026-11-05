@@ -74,6 +74,9 @@ struct OfficeLifecycleTest {
     }
     static void run() {
         screensaverSelection();
+        auto primary=primaryMonitor();MONITORINFO primaryInfo{};primaryInfo.cbSize=sizeof(primaryInfo);
+        require(primary.handle && GetMonitorInfoW(primary.handle,&primaryInfo) && (primaryInfo.dwFlags&MONITORINFOF_PRIMARY),"Resolve Windows main display, not enumeration order or saved DISPLAY name");
+        require(EqualRect(&primary.bounds,&primaryInfo.rcMonitor) && !primary.name.empty(),"Primary capture uses actual native display bounds and identity");
         QTemporaryDir dir;require(dir.isValid(),"Temporary config directory");
         auto path=std::filesystem::path(dir.path().toStdWString())/"office-ambience.json";
         {std::ofstream out(path);out<<Json{{"monitor","test-unavailable"},{"fps",15},{"smoothing_ms",0}};}
@@ -81,6 +84,7 @@ struct OfficeLifecycleTest {
             laptop("Lenovo Legion 7 Gen 8",109),desk("Secretlab",48,"NL72S2"),mouse("G502 X PLUS",8);
         Api api;api.controllers={&strip,&bars,&keys,&laptop,&desk,&mouse};
         OfficeAmbience::Impl owner(&api,path,false);
+        require(owner.config["monitor"]=="primary" && owner.diskConfig["monitor"]=="test-unavailable","Legacy disconnected display name cannot pin capture or rewrite saved configuration on load");
         // Output tests below inject a fresh colour row, not an OS capture source.
         // Test the missing-monitor rest policy separately after those assertions.
         owner.dirty=false;
@@ -159,6 +163,9 @@ struct OfficeLifecycleTest {
         SendMessageW(events,WM_POWERBROADCAST,PBT_POWERSETTINGCHANGE,reinterpret_cast<LPARAM>(&power));rest("display-asleep");
         power.value=2;SendMessageW(events,WM_POWERBROADCAST,PBT_POWERSETTINGCHANGE,reinterpret_cast<LPARAM>(&power));
         require(!owner.displayOff && owner.dirty && owner.invalidate,"A dim/on display resumes source selection");
+        owner.dirty=false;owner.invalidate=false;
+        SendMessageW(events,WM_DISPLAYCHANGE,32,MAKELPARAM(2560,1600));
+        require(owner.dirty && owner.invalidate,"Display topology/main-display change invalidates capture for fresh monitor resolution");
         owner.standbyPreview=false;owner.dirty=false;
         owner.latest.assign(314,ToRGBColor(0,255,0));owner.tick();
         require(owner.devices[0].colors[0]==ToRGBColor(0,255,0),"Fresh imagery restores lighting after wake");
@@ -200,8 +207,29 @@ struct OfficeLifecycleTest {
         require(restarted.devices.size()==6 && restarted.samples.size()==314 && restarted.report()["online_devices"]==5,"Persisted map boots with a missing device");
         owner.resourcesUpdated(RESOURCEMANAGER_UPDATE_REASON_DETECTION_STARTED);
         require(owner.report()["online_devices"]==0,"Rescan releases all borrowed pointers before native deletion");
-        owner.dirty=true;owner.tick();
-        require(owner.report()["rest_reason"]=="monitor-disconnected" && owner.latest.empty(),"Missing LG rests instead of replaying stale colours");
+        owner.chooseSource(Monitor{});owner.dirty=false;owner.tick();
+        require(owner.report()["rest_reason"]=="monitor-disconnected" && owner.latest.empty(),"No Windows main display rests instead of replaying stale colours");
+
+        // A persisted office map is portable without the four desk controllers.
+        // Synthetic topology observations exercise production source selection;
+        // they never reconfigure Windows or manufacture a captured frame.
+        api.controllers={&laptop,&mouse};
+        OfficeAmbience::Impl portable(&api,path,false);
+        auto portableMap=portable.layout;auto portableSettings=portable.config;
+        Monitor officeMain{reinterpret_cast<HMONITOR>(101),{10000,10000,15120,12160},"office-main"};
+        Monitor laptopMain{reinterpret_cast<HMONITOR>(102),{-12560,10000,-10000,11600},"laptop-main"};
+        portable.chooseSource(officeMain);auto generation=portable.sourceGeneration;
+        portable.latest.assign(314,ToRGBColor(20,40,60));
+        portable.chooseSource(laptopMain);
+        require(!portable.monitorMissing && portable.sourceGeneration>generation && EqualRect(&portable.monitorBounds,&laptopMain.bounds),"Main-display replacement updates crop at different resolution and origin");
+        require(portable.report()["capture_display"]=="laptop-main" && portable.report()["capture_bounds"]==Json::array({-12560,10000,-10000,11600}),"Diagnostics expose the resolved source display rather than a stale configured name");
+        require(portable.layout==portableMap && portable.config==portableSettings,"Main-display changes preserve normalized map and processing settings");
+        portable.dirty=false;portable.tick();
+        require(portable.report()["online_devices"]==2 && portable.devices[3].colors[0]==ToRGBColor(20,40,60) && portable.devices[5].colors[0]==ToRGBColor(20,40,60),"Laptop and mouse output continues with desk controllers offline");
+        portable.chooseSource(Monitor{});portable.dirty=false;portable.tick();
+        require(portable.latest.empty() && portable.report()["rest_reason"]=="monitor-disconnected","Transient absent display releases stale image and rests lights");
+        portable.chooseSource(laptopMain);portable.latest.assign(314,ToRGBColor(60,40,20));portable.dirty=false;portable.tick();
+        require(portable.devices[3].colors[0]==ToRGBColor(60,40,20) && portable.devices[5].colors[0]==ToRGBColor(60,40,20),"Available main display resumes connected portable devices with new imagery");
     }
 };
 int main(int argc,char** argv) {
