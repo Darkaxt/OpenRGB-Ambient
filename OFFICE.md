@@ -74,6 +74,20 @@ and `input_desktop` without capturing secure-desktop imagery.
 directory. It contains source mode/HWND, input/output counters, processing time,
 first-frame delay and capture errors, without screenshots or access tokens.
 
+`logs/office-ambience-events.jsonl` independently retains lifecycle history:
+UTC plus monotonic time, PID/TID, per-process session/sequence and source commit.
+It records capture create/start/release intent and completion, source HWND/PID,
+process basename/class (no window titles), desktop/lock/display events, first
+frames, HRESULT/device-removal errors, control actions and device availability.
+Health summaries are appended every ten seconds; no per-frame records or pixels
+are logged. Writes use Windows write-through with no application flush timer;
+completed records survive abrupt process exit. Retention is eight 4 MiB segments
+(current plus .1 through .7), preserved across owner restarts. Inspect the last
+begin without a matching completion when diagnosing a blocked graphics call.
+`diagnostic_error` in the status snapshot exposes journal I/O failures. Logging
+does not reset capture, change source selection or prove a caller caused a
+graphics-kernel deadlock. A sudden power loss may still lose an incomplete write.
+
 Build against the matching OpenRGB API-5 headers and Qt 6.8.3 with
 `scripts/Build-Office.ps1`. The Windows workflow pins the native source revision.
 The production D3D11 shader is exercised using WARP by `office_capture_tests`;

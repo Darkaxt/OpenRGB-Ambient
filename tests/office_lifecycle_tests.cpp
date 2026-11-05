@@ -170,6 +170,19 @@ struct OfficeLifecycleTest {
         owner.latest.assign(314,ToRGBColor(0,255,0));owner.tick();
         require(owner.devices[0].colors[0]==ToRGBColor(0,255,0),"Fresh imagery restores lighting after wake");
         require(owner.config==beforeRest,"Lifecycle transitions preserve all settings and mapping");
+        {
+            std::ifstream log(path.parent_path()/"logs"/"office-ambience-events.jsonl");
+            std::set<std::string> events;std::string line;bool locked=false,unlocked=false;
+            while(std::getline(log,line)) {
+                auto record=Json::parse(line);events.insert(record.at("event"));
+                if(record["event"]=="session_event") {
+                    locked=locked || record["data"]["notification"]==WTS_SESSION_LOCK;
+                    unlocked=unlocked || record["data"]["notification"]==WTS_SESSION_UNLOCK;
+                }
+                require(!record.contains("colors") && !record.contains("token"),"Diagnostic journal excludes pixels and credentials");
+            }
+            require(locked && unlocked && events.contains("display_power") && events.contains("capture_invalidated") && events.contains("rest_transition") && events.contains("control_action") && events.contains("settings_applied"),"Production lifecycle and controls persist correlation events before process exit");
+        }
         auto fakeHook=reinterpret_cast<HWINEVENTHOOK>(1);OfficeAmbience::Impl::hooks[fakeHook]=&owner;
         owner.dirty=false;owner.invalidate=false;
         OfficeAmbience::Impl::winEvent(fakeHook,EVENT_SYSTEM_DESKTOPSWITCH,nullptr,0,0,0,0);

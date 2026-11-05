@@ -20,6 +20,7 @@
 #include "ColorPostProcessor.h"
 #include "OfficeControlServer.h"
 #include "OfficeProcessing.h"
+#include "OfficeJournal.h"
 #include "OfficeSamplingShader.h"
 #include <OpenRGBPluginInterface.h>
 #include <ResourceManagerCallback.h>
@@ -539,53 +540,82 @@ class Capture {
     event_token arrived{},closed{};
 public:
     std::shared_ptr<CaptureState> state;
-    Capture(HWND window,RECT monitor,const std::vector<Sample>& samples) {
+    std::shared_ptr<office::Journal> journal;
+    uint64_t generation=0;
+    Capture(HWND window,RECT monitor,const std::vector<Sample>& samples,std::shared_ptr<office::Journal> targetJournal={},uint64_t sourceGeneration=0):journal(std::move(targetJournal)),generation(sourceGeneration) {
+        if(journal) journal->write("gpu_create_begin",{{"generation",generation}});
         RECT bounds{}; check_bool(GetWindowRect(window,&bounds));
         state=std::make_shared<CaptureState>(samples,bounds,monitor);
+        if(journal) journal->write("gpu_create_complete",{{"generation",generation}});
+        if(journal) journal->write("capture_item_create_begin",{{"generation",generation}});
         auto factory=get_activation_factory<GraphicsCaptureItem,IGraphicsCaptureItemInterop>();
         check_hresult(factory->CreateForWindow(window,guid_of<GraphicsCaptureItem>(),put_abi(item)));
+        if(journal) journal->write("capture_item_create_complete",{{"generation",generation}});
         auto dxgi=state->device.as<IDXGIDevice>(); com_ptr<IInspectable> wrapper;
         check_hresult(CreateDirect3D11DeviceFromDXGIDevice(dxgi.get(),wrapper.put()));
         auto winDevice=wrapper.as<IDirect3DDevice>();
         try {
+        if(journal)journal->write("capture_pool_create_begin",{{"generation",generation}});
         pool=Direct3D11CaptureFramePool::CreateFreeThreaded(winDevice,DirectXPixelFormat::B8G8R8A8UIntNormalized,2,item.Size());
         session=pool.CreateCaptureSession(item); session.IsCursorCaptureEnabled(false);
+        if(journal)journal->write("capture_pool_create_complete",{{"generation",generation}});
         try { session.IsBorderRequired(false); } catch(hresult_error const&) {}
         auto owned=state;
-        closed=item.Closed([owned](auto const&,auto const&) { std::lock_guard lock(owned->mutex); owned->closed=true; });
+        auto log=journal;auto gen=generation;
+        closed=item.Closed([owned,log,gen](auto const&,auto const&) { if(log)log->write("capture_item_closed",{{"generation",gen}});std::lock_guard lock(owned->mutex); owned->closed=true; });
         auto size=item.Size();
-        arrived=pool.FrameArrived([owned,winDevice,size](auto const& sender,auto const&) mutable {
+        arrived=pool.FrameArrived([owned,winDevice,size,log,gen](auto const& sender,auto const&) mutable {
             std::lock_guard lock(owned->mutex);
             if(!owned->active) return;
             try {
                 auto frame=sender.TryGetNextFrame(); if(!frame) return;
                 auto content=frame.ContentSize();
                 auto callbackBegan=Clock::now();
-                if(content.Width==size.Width && content.Height==size.Height) {owned->process(frame);owned->received=callbackBegan;}
+                if(content.Width==size.Width && content.Height==size.Height) {
+                    bool first=owned->frames==0;owned->process(frame);owned->received=callbackBegan;
+                    if(first && log)log->write("capture_first_frame",{{"generation",gen},{"width",content.Width},{"height",content.Height}});
+                }
                 frame.Close();
                 if(content.Width>0 && content.Height>0 && (content.Width!=size.Width || content.Height!=size.Height)) {
+                    if(log)log->write("capture_resize_begin",{{"generation",gen},{"width",content.Width},{"height",content.Height}});
                     size=content;
                     sender.Recreate(winDevice,DirectXPixelFormat::B8G8R8A8UIntNormalized,2,size);
+                    if(log)log->write("capture_resize_complete",{{"generation",gen}});
                 }
             }
-            catch(hresult_error const& error) { owned->error=to_string(error.message());if(FAILED(owned->device->GetDeviceRemovedReason())) owned->closed=true; }
-            catch(std::exception const& error) { owned->error=error.what(); }
+            catch(hresult_error const& error) {
+                auto message=to_string(error.message());auto removed=owned->device->GetDeviceRemovedReason();
+                if(log && owned->error!=message)log->write("capture_error",{{"generation",gen},{"hresult",static_cast<int32_t>(error.code())},{"device_removed_reason",static_cast<int32_t>(removed)},{"message",message}});
+                owned->error=message;if(FAILED(removed)) owned->closed=true;
+            }
+            catch(std::exception const& error) {if(log && owned->error!=error.what())log->write("capture_error",{{"generation",gen},{"message",error.what()}});owned->error=error.what(); }
         });
+        if(journal)journal->write("capture_start_begin",{{"generation",generation}});
         session.StartCapture();
+        if(journal)journal->write("capture_start_complete",{{"generation",generation}});
         } catch(...) {stop();throw;}
     }
     void stop() noexcept {
+        if(journal)journal->write("capture_stop_begin",{{"generation",generation}});
         { std::lock_guard lock(state->mutex); state->active=false; }
-        try {if(pool && arrived.value) pool.FrameArrived(arrived);} catch(...) {}
-        try {if(item && closed.value) item.Closed(closed);} catch(...) {}
-        try {if(session) session.Close();} catch(...) {}
-        try {if(pool) pool.Close();} catch(...) {}
+        auto step=[&](const char* name,auto action) {
+            if(journal)journal->write("capture_release_begin",{{"generation",generation},{"operation",name}});
+            try {action();if(journal)journal->write("capture_release_complete",{{"generation",generation},{"operation",name}});}
+            catch(hresult_error const& e) {if(journal)journal->write("capture_release_error",{{"generation",generation},{"operation",name},{"hresult",static_cast<int32_t>(e.code())}});}
+            catch(...) {if(journal)journal->write("capture_release_error",{{"generation",generation},{"operation",name}});}
+        };
+        step("frame_unsubscribe",[&]{if(pool && arrived.value)pool.FrameArrived(arrived);});
+        step("item_unsubscribe",[&]{if(item && closed.value)item.Closed(closed);});
+        step("session_close",[&]{if(session)session.Close();});
+        step("pool_close",[&]{if(pool)pool.Close();});
+        if(journal)journal->write("capture_stop_complete",{{"generation",generation}});
     }
     ~Capture() {stop();}
 };
 } // namespace
 
 struct OfficeAmbience::Impl {
+    std::shared_ptr<office::Journal> journal;
     const std::string previewEpoch=QUuid::createUuid().toString(QUuid::WithoutBraces).toStdString();
     QTimer output;
     OpenRGBPluginAPIInterface* api;
@@ -602,6 +632,8 @@ struct OfficeAmbience::Impl {
     std::string mode="waiting",error;
     Clock::time_point lastOutput=Clock::now(),switched=lastOutput,lastStatus=lastOutput;
     Clock::time_point received{};
+    Clock::time_point lastHealth=Clock::now();
+    std::string loggedRest,loggedDesktop,statusWriteError;
     uint64_t outputFrames=0,inputFrames=0;
     uint64_t changedInputFrames=0,skippedInputFrames=0,samplingPasses=0,deviceSubmissions=0,ledWrites=0;
     double smoothingMs=140,processingMs=0,firstFrameDelayMs=0;
@@ -636,6 +668,7 @@ struct OfficeAmbience::Impl {
             SetWindowLongPtrW(window,GWLP_USERDATA,reinterpret_cast<LONG_PTR>(self));
         }
         if(self && message==WM_WTSSESSION_CHANGE) {
+            self->journal->write("session_event",{{"notification",w},{"session_id",l}});
             if(w==WTS_SESSION_LOCK) {self->sessionLocked=true;self->standbyBegan=Clock::now();}
             if(w==WTS_SESSION_UNLOCK) {self->sessionLocked=false;self->desktopUnavailable=false;}
         }
@@ -643,13 +676,15 @@ struct OfficeAmbience::Impl {
             auto* setting=reinterpret_cast<POWERBROADCAST_SETTING*>(l);
             if(setting && setting->PowerSetting==sessionDisplayState && setting->DataLength==sizeof(DWORD)) {
                 DWORD state{};std::memcpy(&state,setting->Data,sizeof(state));
+                self->journal->write("display_power",{{"state",state}});
                 if(state==0 && !self->displayOff) self->standbyBegan=Clock::now();
                 self->displayOff=state==0;
                 if(!self->displayOff) {self->invalidate=true;self->dirty=true;}
             }
         }
         if(self && (message==WM_DISPLAYCHANGE || (message==WM_POWERBROADCAST && w==PBT_APMRESUMEAUTOMATIC) ||
-                    (message==WM_WTSSESSION_CHANGE && (w==WTS_SESSION_UNLOCK || w==WTS_CONSOLE_CONNECT || w==WTS_REMOTE_CONNECT)))) {self->invalidate=true;self->dirty=true;}
+                    (message==WM_WTSSESSION_CHANGE && (w==WTS_SESSION_UNLOCK || w==WTS_CONSOLE_CONNECT || w==WTS_REMOTE_CONNECT)))) {
+            self->journal->write("capture_invalidated",{{"message",message},{"notification",w}});self->invalidate=true;self->dirty=true;}
         return DefWindowProcW(window,message,w,l);
     }
 
@@ -732,6 +767,7 @@ struct OfficeAmbience::Impl {
             }
             return snapshot(request.value("preview",false),request.value("preview_generation",std::string()),blur);
         }
+        journal->write("control_action",{{"command",name}});
         if(name=="recover") {invalidate=true;dirty=true;return {{"accepted",true}};}
         if(name=="stop_test") {calibration=false;standbyPreview=false;identifyDevice.clear();return {{"accepted",true}};}
         if(name=="preview_standby") {calibration=false;identifyDevice.clear();standbyPreview=true;standbyBegan=Clock::now();return {{"accepted",true}};}
@@ -771,6 +807,7 @@ struct OfficeAmbience::Impl {
         output.setInterval(std::max(1,static_cast<int>(std::round(1000.0/config["fps"].get<int>()))));
         ++revision;
         if(lock.owns_lock()) lock.unlock();
+        journal->write("settings_applied",{{"revision",revision},{"fps",config["fps"]}});
         return snapshot();
     }
     Json diskConfig;
@@ -779,13 +816,15 @@ struct OfficeAmbience::Impl {
     static void CALLBACK winEvent(HWINEVENTHOOK hook,DWORD event,HWND,LONG object,LONG,DWORD,DWORD) {
         if(event!=EVENT_SYSTEM_DESKTOPSWITCH && object!=OBJID_WINDOW) return;
         auto found=hooks.find(hook); if(found!=hooks.end()) {
+            if(event==EVENT_SYSTEM_DESKTOPSWITCH) found->second->journal->write("desktop_switch");
             found->second->dirty=true;
             if(event==EVENT_SYSTEM_DESKTOPSWITCH) found->second->invalidate=true;
         }
     }
     // Test construction skips only OS event/IPC activation, retaining the actual
     // inventory, map and output implementation used by the installed owner.
-    Impl(OpenRGBPluginAPIInterface* api,const std::filesystem::path& path,bool activate=true):api(api),configPath(path) {
+    Impl(OpenRGBPluginAPIInterface* api,const std::filesystem::path& path,bool activate=true):journal(std::make_shared<office::Journal>(path.parent_path()/"logs"/"office-ambience-events.jsonl")),api(api),configPath(path) {
+        journal->write("owner_start",{{"executable",QCoreApplication::applicationFilePath().toStdString()}});
         std::ifstream file(path);file>>config;diskConfig=config;
         // Legacy display names are accepted on disk but never pin capture to
         // disconnected hardware. Do not rewrite the saved map merely on load.
@@ -872,11 +911,13 @@ struct OfficeAmbience::Impl {
         systemHook=objectHook=desktopHook=nullptr;
     }
     ~Impl() {
+        journal->write("owner_stop_begin");
         control.reset();
         output.stop();
         releaseEvents();
         capture.reset();
         mode="stopped"; status();
+        journal->write("owner_stop_complete");
     }
     void resourcesUpdated(unsigned reason) {
         // OpenRGB emits these synchronously while removed controllers are still
@@ -884,6 +925,7 @@ struct OfficeAmbience::Impl {
         // removal may free a controller immediately after this callback returns.
         std::lock_guard lock(controllersMutex);
         if(reason==RESOURCEMANAGER_UPDATE_REASON_DETECTION_STARTED) {
+            journal->write("detection_started");
             for(auto& d:devices) d.controller=nullptr;
             return;
         }
@@ -895,6 +937,7 @@ struct OfficeAmbience::Impl {
                 if(found || c->GetLEDCount()!=d.count) {controllerError="Reconnected controller identity/count differs: "+d.key;found=nullptr;break;}
                 found=c;
             }
+            if(found!=d.controller)journal->write("device_availability",{{"device",d.key},{"online",found!=nullptr}});
             if(found && found!=d.controller) {found->SetCustomMode();d.delivered=false;}
             d.controller=found;
         }
@@ -910,6 +953,7 @@ struct OfficeAmbience::Impl {
         // availability may leave the previous wallpaper colours illuminated.
         // Shortcut-started .scr windows do not set this state and remain sources.
         automaticSaver=desktop.screensaver();
+        if(inputDesktop!=loggedDesktop) {journal->write("input_desktop",{{"desktop",inputDesktop},{"secure",desktopUnavailable},{"automatic_saver",automaticSaver}});loggedDesktop=inputDesktop;}
         if(monitorMissing || desktopUnavailable || automaticSaver) return;
         HWND candidate=screensaverWindow(desktop.handle,monitor,false);
         bool saver=candidate!=nullptr;
@@ -919,14 +963,17 @@ struct OfficeAmbience::Impl {
         RECT bounds{}; if(candidate) GetWindowRect(candidate,&bounds);
         bool force=invalidate.exchange(false);
         if(!force && candidate==source && mode==selected && capture && EqualRect(&bounds,&sourceBounds) && EqualRect(&monitor.bounds,&monitorBounds)) return;
+        DWORD sourcePid{};if(candidate)GetWindowThreadProcessId(candidate,&sourcePid);
+        journal->write("source_switch_begin",{{"old_generation",sourceGeneration},{"old_hwnd",reinterpret_cast<uintptr_t>(source)},{"new_hwnd",reinterpret_cast<uintptr_t>(candidate)},{"source_pid",sourcePid},{"source_process",to_string(ownerName(candidate))},{"source_class",to_string(windowClass(candidate))},{"mode",selected},{"forced",force},{"display",monitor.name},{"bounds",{monitor.bounds.left,monitor.bounds.top,monitor.bounds.right,monitor.bounds.bottom}}});
         capture.reset(); source=candidate; mode=candidate?selected:"waiting";
         ++sourceGeneration;
         sourceBounds=bounds; monitorBounds=monitor.bounds;
         switched=Clock::now();firstFrameDelayMs=0;inputFrames=deliveredFrames=0;changedInputFrames=skippedInputFrames=samplingPasses=0;
         if(!candidate) error=saver?"Waiting for the main-display screensaver window; holding the last valid colours":"No capturable wallpaper host or maximized main-display application is available; holding the last valid colours";
-        if(candidate) try { capture=std::make_unique<Capture>(candidate,monitor.bounds,samples);std::lock_guard lock(capture->state->mutex);capture->state->configure(config); }
-        catch(hresult_error const& failure) { error=to_string(failure.message()); }
-        catch(std::exception const& failure) { error=failure.what(); }
+        if(candidate) try { capture=std::make_unique<Capture>(candidate,monitor.bounds,samples,journal,sourceGeneration);std::lock_guard lock(capture->state->mutex);capture->state->configure(config); }
+        catch(hresult_error const& failure) { error=to_string(failure.message());journal->write("capture_create_error",{{"generation",sourceGeneration},{"hresult",static_cast<int32_t>(failure.code())},{"message",error}}); }
+        catch(std::exception const& failure) { error=failure.what();journal->write("capture_create_error",{{"generation",sourceGeneration},{"message",error}}); }
+        journal->write("source_switch_complete",{{"generation",sourceGeneration},{"mode",mode},{"capture_created",capture!=nullptr}});
         status();
     }
     std::string restReason() const {
@@ -935,6 +982,7 @@ struct OfficeAmbience::Impl {
     void tick() {
         if(!sessionLocked && !displayOff && dirty.exchange(false)) chooseSource();
         const bool resting=!restReason().empty();
+        if(restReason()!=loggedRest) {journal->write("rest_transition",{{"previous",loggedRest},{"reason",restReason()}});loggedRest=restReason();}
         if(resting) {
             capture.reset();source=nullptr;mode="resting";latest.clear();
             inputFrames=deliveredFrames=0;changedInputFrames=skippedInputFrames=samplingPasses=0;received={};error.clear();
@@ -1010,6 +1058,8 @@ struct OfficeAmbience::Impl {
         // Diagnostic reporting cadence never classifies a silent/static frame as
         // failure and never cancels or restarts a valid capture session.
         if(now-lastStatus>=std::chrono::seconds(1)) status();
+        // Health cadence is observation only; never cancels/restarts capture.
+        if(now-lastHealth>=std::chrono::seconds(10)) {journal->write("health",report());lastHealth=now;}
     }
     Json report() const {
         std::lock_guard lock(controllersMutex);
@@ -1026,7 +1076,7 @@ struct OfficeAmbience::Impl {
             {"output_fps",measuredFps},
             {"online_devices",std::count_if(devices.begin(),devices.end(),[](const auto& d){return d.controller!=nullptr;})},{"controller_error",controllerError},
             {"first_frame_after_switch_ms",firstFrameDelayMs},{"has_valid_frame",!latest.empty()},
-            {"error",error},{"updated_utc",QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs).toStdString()}};
+            {"error",error},{"diagnostic_error",journal->error()},{"updated_utc",QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs).toStdString()}};
     }
     void status() {
         auto elapsed=std::chrono::duration<double>(Clock::now()-lastStatus).count();
@@ -1034,7 +1084,10 @@ struct OfficeAmbience::Impl {
         previousStatusOutput=outputFrames;
         auto value=report();
         QSaveFile file(QString::fromStdWString(statusPath.wstring()));
-        if(file.open(QIODevice::WriteOnly)) { auto data=value.dump(2); file.write(data.data(),data.size()); file.commit(); }
+        auto data=value.dump(2);
+        bool saved=file.open(QIODevice::WriteOnly) && file.write(data.data(),data.size())==static_cast<qint64>(data.size()) && file.commit();
+        auto failure=saved?std::string():file.errorString().toStdString();
+        if(failure!=statusWriteError) {journal->write(saved?"status_write_recovered":"status_write_error",{{"message",failure}});statusWriteError=failure;}
         lastStatus=Clock::now();
     }
 };
