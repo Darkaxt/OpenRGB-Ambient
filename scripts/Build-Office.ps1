@@ -11,7 +11,7 @@ Enter-VsDevShell -VsInstallPath $vs -DevCmdArguments '-arch=x64 -host_arch=x64' 
 $env:PATH=(Join-Path $QtRoot 'bin')+';'+$env:PATH
 New-Item -ItemType Directory -Path $BuildRoot -Force | Out-Null
 $cmake=Join-Path $vs 'Common7/IDE/CommonExtensions/Microsoft/CMake/CMake/bin/cmake.exe'
-& $cmake -S $source -B $BuildRoot -G 'Visual Studio 17 2022' -A x64 -DQT_VERSION=6 "-DCMAKE_PREFIX_PATH=$QtRoot" "-DOPENRGB_SOURCE_DIR=$OpenRGBSource" -DBUILD_TESTING=ON
+& $cmake -S $source -B $BuildRoot -G 'Visual Studio 17 2022' -A x64 -DQT_VERSION=6 "-DCMAKE_PREFIX_PATH=$QtRoot" "-DOPENRGB_SOURCE_DIR=$OpenRGBSource" "-DGIT_EXECUTABLE=$git" -DBUILD_TESTING=ON
 if($LASTEXITCODE) { throw 'CMake configure failed' }
 & $cmake --build $BuildRoot --config Release --parallel 2
 if($LASTEXITCODE) { throw 'Plugin build failed' }

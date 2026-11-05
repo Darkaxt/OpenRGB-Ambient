@@ -30,6 +30,7 @@ int main(int argc,char** argv) {
         require(child.waitForFinished(-1) && child.exitCode()==0,"Abrupt child completed");
         auto records=read(path);require(records.size()==1 && records[0]["event"]=="capture_create_begin","Write survives abrupt exit without destructor/flush timer");
         for(auto key:{"utc","elapsed_ms","pid","tid","session","sequence","build"}) require(records[0].contains(key),"Correlation field missing");
+        require(records[0]["build"].get<std::string>().size()==40,"Journal must identify the exact source build");
         {
             office::Journal journal(path);
             journal.write("next_process");
