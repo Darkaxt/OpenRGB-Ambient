@@ -546,7 +546,16 @@ public:
         if(journal) journal->write("gpu_create_begin",{{"generation",generation}});
         RECT bounds{}; check_bool(GetWindowRect(window,&bounds));
         state=std::make_shared<CaptureState>(samples,bounds,monitor);
-        if(journal) journal->write("gpu_create_complete",{{"generation",generation}});
+        if(journal) {
+            auto dxgiDevice=state->device.as<IDXGIDevice>();com_ptr<IDXGIAdapter> adapter;
+            auto result=dxgiDevice->GetAdapter(adapter.put());DXGI_ADAPTER_DESC desc{};LARGE_INTEGER driver{};
+            if(SUCCEEDED(result))result=adapter->GetDesc(&desc);
+            auto driverResult=adapter?adapter->CheckInterfaceSupport(__uuidof(IDXGIDevice),&driver):E_NOINTERFACE;
+            journal->write("gpu_create_complete",{{"generation",generation},{"adapter_query_hresult",static_cast<int32_t>(result)},
+                {"adapter",to_string(desc.Description)},{"vendor_id",desc.VendorId},{"device_id",desc.DeviceId},
+                {"adapter_luid_low",desc.AdapterLuid.LowPart},{"adapter_luid_high",desc.AdapterLuid.HighPart},
+                {"driver_query_hresult",static_cast<int32_t>(driverResult)},{"driver_version_raw",driver.QuadPart}});
+        }
         if(journal) journal->write("capture_item_create_begin",{{"generation",generation}});
         auto factory=get_activation_factory<GraphicsCaptureItem,IGraphicsCaptureItemInterop>();
         check_hresult(factory->CreateForWindow(window,guid_of<GraphicsCaptureItem>(),put_abi(item)));

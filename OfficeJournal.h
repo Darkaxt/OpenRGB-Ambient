@@ -8,7 +8,7 @@
 #include <windows.h>
 #include <QDateTime>
 #include <QUuid>
-#include <json.hpp>
+#include <nlohmann/json.hpp>
 #include <chrono>
 #include <algorithm>
 #include <filesystem>
@@ -61,7 +61,7 @@ public:
         try {
             nlohmann::json record={{"utc",QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs).toStdString()},
                 {"elapsed_ms",std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-began).count()},
-                {"pid",GetCurrentProcessId()},{"tid",GetCurrentThreadId()},{"session",session},{"sequence",++sequence},
+                {"pid",GetCurrentProcessId()},{"tid",GetCurrentThreadId()},{"uptime_ms",GetTickCount64()},{"session",session},{"sequence",++sequence},
                 {"build",OFFICE_SOURCE_REVISION},{"event",event},{"data",std::move(data)}};
             auto line=record.dump(-1,' ',false,nlohmann::json::error_handler_t::replace)+"\n";
             if(line.size()>limit) {failure="journal record exceeds segment limit";return;}
