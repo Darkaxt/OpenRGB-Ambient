@@ -65,6 +65,9 @@ void multiSelection(QApplication& app) {
         original.push_back({{"id",d==0?"Legion":"Secretlab"},{"name",d==0?"Laptop":"Desk"},{"enabled",true},{"regions",regions},{"groups",groups},{"led_names",names}});
     }
     Panel panel("E:/Temp/openrgb-multiselect-widget-unavailable",{});panel.fixtureLayout(original);panel.show();app.processEvents();
+    auto follow=panel.findChild<QCheckBox*>("followDisplayBrightness");
+    auto brightnessReadback=panel.findChild<QLabel*>("displayBrightnessStatus");
+    require(follow && brightnessReadback && follow->text()=="Follow main display brightness","Display dimming control/readback missing from production panel");
     auto tree=panel.findChild<QTreeWidget*>("topologyTree");auto view=panel.findChild<QComboBox*>("topologyVisibility");
     // MapCanvas has no Q_OBJECT: resolve the actual QWidget by its stable name.
     auto canvas=static_cast<MapCanvas*>(panel.findChild<QWidget*>("topologyCanvas"));

@@ -95,6 +95,17 @@ struct OfficeLifecycleTest {
         owner.standbyPreview=false;for(auto* c:{&strip,&bars,&keys,&laptop,&desk,&mouse}) c->writes=0;
         owner.latest.assign(314,ToRGBColor(255,0,0));owner.dirty=false;
         owner.tick();require(strip.writes==20 && mouse.writes==8,"Initial six-device output");
+        // Retain exactly the same captured row: display dimming is an output
+        // property, so it must not wait for a new wallpaper frame or GPU sample.
+        owner.lastBrightnessRead=Clock::now();owner.displayBrightness.display=owner.selectedMonitor.name;
+        owner.displayBrightness.factor=.5;owner.displayBrightness.valid=true;owner.tick();
+        require(owner.devices[0].colors[0]==ToRGBColor(128,0,0) && owner.devices.back().colors[0]==ToRGBColor(128,0,0),"Static retained image must dim across controllers without recapture");
+        owner.command({{"command","identify_all"}});owner.tick();
+        require(owner.devices[0].colors[0]==ToRGBColor(255,255,255),"Identify test must retain its reference colour despite display dimming");
+        owner.command({{"command","stop_test"}});owner.config["follow_display_brightness"]=false;owner.tick();
+        require(owner.devices[0].colors[0]==ToRGBColor(255,0,0),"Disabling display following must restore manual brightness baseline");
+        owner.config["follow_display_brightness"]=true;owner.displayBrightness.factor=1;owner.tick();
+        for(auto* c:{&strip,&bars,&keys,&laptop,&desk,&mouse}) c->writes=c->count;
         auto sent=owner.deviceSubmissions,writes=owner.ledWrites;
         owner.tick();owner.tick();
         require(owner.deviceSubmissions==sent && owner.ledWrites==writes,"Unchanged output skips all controller writes and submissions");

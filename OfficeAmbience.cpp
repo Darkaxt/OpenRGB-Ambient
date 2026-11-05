@@ -21,6 +21,7 @@
 #include "OfficeControlServer.h"
 #include "OfficeProcessing.h"
 #include "OfficeJournal.h"
+#include "DisplayBrightness.h"
 #include "OfficeSamplingShader.h"
 #include <OpenRGBPluginInterface.h>
 #include <ResourceManagerCallback.h>
@@ -98,6 +99,16 @@ Monitor primaryMonitor() {
         return TRUE;
     },reinterpret_cast<LPARAM>(&result));
     return result;
+}
+void readDisplayBrightness(office::DisplayBrightness& brightness,const Monitor& monitor) {
+    auto name=to_hstring(monitor.name);
+    HDC dc=monitor.handle?CreateDCW(L"DISPLAY",name.c_str(),nullptr,nullptr):nullptr;
+    office::GammaRamp ramp{};
+    bool ok=dc && GetDeviceGammaRamp(dc,&ramp);
+    const DWORD failure=ok?0:GetLastError();
+    if(dc) DeleteDC(dc);
+    brightness.observe(monitor.name,ok?std::optional(ramp):std::nullopt,
+        "Display gamma read unavailable (Win32 "+std::to_string(failure)+")");
 }
 bool overlaps(RECT a,RECT b) { RECT intersection{}; return IntersectRect(&intersection,&a,&b); }
 HWND wallpaperHost(const Monitor& monitor) {
@@ -630,6 +641,8 @@ struct OfficeAmbience::Impl {
     OpenRGBPluginAPIInterface* api;
     std::filesystem::path configPath,statusPath;
     Monitor selectedMonitor;
+    office::DisplayBrightness displayBrightness;
+    Clock::time_point lastBrightnessRead{};
     std::vector<Device> devices;
     mutable std::mutex controllersMutex;
     std::string controllerError;
@@ -997,6 +1010,15 @@ struct OfficeAmbience::Impl {
             inputFrames=deliveredFrames=0;changedInputFrames=skippedInputFrames=samplingPasses=0;received={};error.clear();
         }
         auto now=Clock::now();
+        if(!resting && config.at("follow_display_brightness").get<bool>() &&
+           (lastBrightnessRead==Clock::time_point{} || displayBrightness.display!=selectedMonitor.name || now-lastBrightnessRead>=std::chrono::seconds(1))) {
+            // Gamma has no change-notification API. Sample at 1 Hz independently
+            // of capture; this observation period is not a recovery deadline.
+            auto before=displayBrightness;
+            readDisplayBrightness(displayBrightness,selectedMonitor);lastBrightnessRead=now;
+            if(before.display!=displayBrightness.display || before.valid!=displayBrightness.valid || before.error!=displayBrightness.error || std::abs(before.factor-displayBrightness.factor)>=.001)
+                journal->write("display_brightness",{{"display",displayBrightness.display},{"factor",displayBrightness.factor},{"valid",displayBrightness.valid},{"error",displayBrightness.error}});
+        }
         if(capture) {
             auto state=capture->state;
             bool closed=false;
@@ -1039,6 +1061,10 @@ struct OfficeAmbience::Impl {
                         target=ToRGBColor(static_cast<unsigned char>(x*255),static_cast<unsigned char>((1-y)*255),static_cast<unsigned char>(index%2?40:160));
                     } else if(!identifyDevice.empty()) target=device.key==identifyDevice || identifyDevice=="*"?ToRGBColor(255,255,255):0;
                     else if(!enabled) target=0;
+                    if(!testing) {
+                        double gain=displayBrightness.applied(config.at("follow_display_brightness").get<bool>());
+                        target=ToRGBColor(office::dimChannel(RGBGetRValue(target),gain),office::dimChannel(RGBGetGValue(target),gain),office::dimChannel(RGBGetBValue(target),gain));
+                    }
                     if(resting) target=0;
                     auto previous=device.colors[index];
                     double delta=std::max({std::abs(int(RGBGetRValue(target))-int(RGBGetRValue(previous))),std::abs(int(RGBGetGValue(target))-int(RGBGetGValue(previous))),std::abs(int(RGBGetBValue(target))-int(RGBGetBValue(previous)))});
@@ -1074,6 +1100,9 @@ struct OfficeAmbience::Impl {
         std::lock_guard lock(controllersMutex);
         return {{"mode",mode},{"standby",!restReason().empty() || standbyPreview},{"rest_reason",restReason()},{"input_desktop",inputDesktop},{"source_hwnd",reinterpret_cast<uintptr_t>(source)},
             {"monitor_policy","primary"},{"capture_display",selectedMonitor.name},
+            {"display_brightness_factor",displayBrightness.applied(config.at("follow_display_brightness").get<bool>())},
+            {"display_brightness_valid",displayBrightness.valid},{"display_brightness_error",displayBrightness.error},
+            {"display_brightness_display",displayBrightness.display},
             {"capture_bounds",{selectedMonitor.bounds.left,selectedMonitor.bounds.top,selectedMonitor.bounds.right,selectedMonitor.bounds.bottom}},
             {"source_generation",sourceGeneration},
             {"devices",devices.size()},{"leds",samples.size()},{"output_frames",outputFrames},

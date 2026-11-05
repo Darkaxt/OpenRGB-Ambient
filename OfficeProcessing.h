@@ -7,7 +7,7 @@
 namespace office {
 inline Json processingDefaults() {
     return {{"strategy","mapped"},{"depth",10.0},{"adaptive_min",3.0},{"adaptive_max",20.0},
-        {"black_bar_detect",false},{"blur",0.0},{"saturation",1.0},{"brightness",1.0},
+        {"black_bar_detect",false},{"blur",0.0},{"saturation",1.0},{"brightness",1.0},{"follow_display_brightness",true},
         {"min_luminance",0.0},{"ema_alpha",0.35},{"scene_cut",255.0},
         {"smoothing_mode","time"},{"standby","hold"},{"standby_brightness",0.15},
         {"effect_center_x",0.5},{"effect_center_y",0.5}};
@@ -29,6 +29,7 @@ inline void validateProcessing(const Json& c) {
     }
     if(c.at("adaptive_min")>c.at("adaptive_max")) throw std::runtime_error("Adaptive minimum exceeds maximum depth");
     if(!c.at("black_bar_detect").is_boolean()) throw std::runtime_error("Black bar detection must be a boolean");
+    if(!c.at("follow_display_brightness").is_boolean()) throw std::runtime_error("Follow display brightness must be a boolean");
     if(c.at("smoothing_mode")!="time" && c.at("smoothing_mode")!="ema") throw std::runtime_error("Unknown smoothing mode");
     const std::vector<std::string> standby{"hold","fade","dim","pulse","rotate","aurora","ember","off"};
     if(std::find(standby.begin(),standby.end(),c.at("standby").get<std::string>())==standby.end()) throw std::runtime_error("Unknown screen standby effect");

@@ -1,9 +1,25 @@
 #include "../OfficeLayout.h"
 #include "../OfficeProcessing.h"
+#include "../DisplayBrightness.h"
 #include <iostream>
 using namespace office;
 int main() {
     try {
+        GammaRamp ramp{};
+        for(size_t c=0;c<3;++c) for(size_t i=0;i<256;++i) ramp[c][i]=static_cast<uint16_t>(i*257);
+        if(std::abs(*gammaBrightness(ramp)-1)>1e-8) throw std::runtime_error("Identity gamma must keep baseline brightness");
+        for(size_t c=0;c<3;++c) for(size_t i=0;i<256;++i) ramp[c][i]=static_cast<uint16_t>(i*255*.88*(1-c*.2));
+        ramp[0][255]+=4;
+        auto factor=gammaBrightness(ramp);
+        if(!factor || std::abs(*factor-.88*255/257)>.0001) throw std::runtime_error("LightBulb linear brightness must exclude temperature attenuation and endpoint jitter");
+        DisplayBrightness brightness;brightness.observe("primary",ramp);
+        brightness.observe("primary",{},"read failed");
+        if(!brightness.valid || brightness.factor!=*factor || brightness.error.empty()) throw std::runtime_error("Failed read on same display must retain valid attenuation");
+        if(brightness.applied(false)!=1 || dimChannel(200,.5)!=100) throw std::runtime_error("Follow toggle and scalar output contract");
+        ramp[0][128]=0;
+        if(gammaBrightness(ramp)) throw std::runtime_error("Nonlinear colour calibration must not be misread as brightness");
+        brightness.observe("new-primary",ramp);
+        if(brightness.valid || brightness.factor!=1) throw std::runtime_error("Changing displays cannot reuse stale dimming");
         std::vector<Region> points={{.1f,.2f,.2f,.3f},{.3f,.2f,.4f,.3f}};
         auto turned=transform(points,{.1f,.2f,.4f,.3f},{.4f,.1f,.6f,.7f},90,false);
         if(std::abs(turned[0].left-.4f)>.0001f || std::abs(turned[0].top-.1f)>.0001f)
@@ -20,6 +36,7 @@ int main() {
         for(size_t i=0;i<points.size();++i) if(std::abs(identity[i].left-points[i].left)>.0001f)
             throw std::runtime_error("Opening/saving the editor must not move current samples");
         Json settings=processingDefaults();settings["smoothing_ms"]=140;validateProcessing(settings);
+        if(!settings.value("follow_display_brightness",false)) throw std::runtime_error("New and legacy maps must follow main-display dimming by default without rewriting the brightness baseline");
         if(smoothingWeight(settings,67,256)!=1) throw std::runtime_error("Scene-cut bypass failed");
         settings["smoothing_mode"]="ema";auto a=smoothingWeight(settings,40,0),b=smoothingWeight(settings,80,0);
         if(std::abs((1-a)*(1-a)-(1-b))>.0001) throw std::runtime_error("EMA changes with output FPS");

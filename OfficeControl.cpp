@@ -437,6 +437,8 @@ class Panel : public QMainWindow {
     std::map<std::string,QDoubleSpinBox*> numbers;
     std::map<std::string,QComboBox*> choices;
     QCheckBox* blackBars=new officeui::Switch("Black bar detect");
+    QCheckBox* followBrightness=new officeui::Switch("Follow main display brightness");
+    QLabel* brightnessStatus=new QLabel;
     QLabel* deviceSummary=new QLabel;
     QLabel* inventorySummary=new QLabel;
     QLabel* pageTitle=new QLabel;
@@ -580,6 +582,7 @@ class Panel : public QMainWindow {
             for(auto& [key,box]:numbers) box->setValue(settings.value(key,office::processingDefaults().at(key)).get<double>());
             for(auto& [key,combo]:choices) combo->setCurrentIndex(combo->findData(text(settings.value(key,office::processingDefaults().at(key)))));
             blackBars->setChecked(settings.value("black_bar_detect",false));
+            followBrightness->setChecked(settings.value("follow_display_brightness",true));
             effectCenter[0]->setValue(settings.value("effect_center_x",.5)*100);effectCenter[1]->setValue(settings.value("effect_center_y",.5)*100);map->effectCenter={effectCenter[0]->value()/100,effectCenter[1]->value()/100};
             map->blur=settings.value("blur",0.f)/100;map->resetHistory();
             map->layout=&layout;map->device=map->group=0;map->led=-1;buildTree();buildDevices();
@@ -587,6 +590,8 @@ class Panel : public QMainWindow {
             map->zones=selectedZones;restoreTreeSelection(selectedDevice,selectedGroup);
         }
         auto s=snapshot.at("status");
+        brightnessStatus->setText(QString("Applied display factor: %1% · %2").arg(s.value("display_brightness_factor",1.)*100,0,'f',1).arg(!snapshot.at("settings").value("follow_display_brightness",true)?"off":s.value("display_brightness_error",std::string()).empty()?"following":s.value("display_brightness_valid",false)?"read unavailable; retaining last factor":"read unavailable; using baseline"));
+        brightnessStatus->setToolTip(text(s.value("display_brightness_error",std::string())));
         deviceSummary->setText(QString("%1 / %2 devices online  ·  %3 mapped LEDs").arg(s.at("online_devices").get<int>()).arg(layout.size()).arg(s.at("leds").get<int>()));
         inventorySummary->setText(deviceSummary->text());
         totalDevices->setText(QString::number(layout.size()));mappedDevices->setText(QString::number(layout.size()));
@@ -742,6 +747,7 @@ class Panel : public QMainWindow {
         for(auto& [key,box]:numbers) settings[key]=box->value();
         for(auto& [key,combo]:choices) settings[key]=combo->currentData().toString().toStdString();
         settings["black_bar_detect"]=blackBars->isChecked();
+        settings["follow_display_brightness"]=followBrightness->isChecked();
         settings["effect_center_x"]=effectCenter[0]->value()/100;settings["effect_center_y"]=effectCenter[1]->value()/100;
         pending=true;save->setEnabled(false);
         client.send({{"command","save"},{"revision",revision},{"settings",settings},{"layout",layout}},[this](const Json& r){
