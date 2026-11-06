@@ -36,6 +36,23 @@ struct Api : StubOpenRGBPluginAPIInterface {
 void require(bool value,const char* message) {if(!value) throw std::runtime_error(message);}
 
 struct OfficeLifecycleTest {
+    static void restPolicy(){
+        QTemporaryDir dir;auto root=std::filesystem::path(dir.path().toStdWString());
+        office::OfficeRest rest(root);require(!rest.active(),"New profile must not be asleep");
+        rest.observe(true,false,100);require(rest.active(),"Saver did not latch rest");
+        rest.observe(false,true,100);require(rest.active(),"Default desktop resumed without new input");
+        office::OfficeRest restarted(root);restarted.observe(false,true,100);require(restarted.active(),"Cold restart lost held rest");
+        restarted.observe(false,false,101);require(restarted.active(),"Input on unavailable desktop resumed");
+        restarted.observe(false,true,101);require(!restarted.active(),"New input on usable desktop failed to resume");
+        office::OfficeRest saved(root);require(!saved.active(),"Released state did not persist");
+        saved.observe(true,false,std::nullopt);saved.observe(false,true,std::nullopt);require(saved.active(),"Query failure resumed output");
+        saved.observe(false,true,200);require(saved.active(),"First successful query fabricated new input");
+        saved.observe(false,true,150);require(!saved.active(),"Non-incremental input token was ignored");
+        saved.observe(true,false,UINT32_MAX);saved.observe(false,true,0);require(!saved.active(),"Wrapped input token failed to resume");
+        office::OfficeRest failing(root/"missing-parent");failing.observe(true,false,10);require(failing.active()&&failing.status().at("error")!="","Storage failure did not remain visibly black");
+        failing.observe(false,true,10);require(failing.active(),"Storage failure cleared without input");
+        QDir().mkpath(QString::fromStdWString((root/"missing-parent").wstring()));failing.observe(false,true,11);require(!failing.active()&&failing.status().at("error")=="","New input did not recover valid state storage");
+    }
     static void savePreservesUntouchedSettings() {
         QTemporaryDir dir;auto path=std::filesystem::path(dir.path().toStdWString())/"office-ambience.json";
         {std::ofstream out(path);out<<Json{{"monitor","\\\\.\\DISPLAY2"},{"fps",15},{"smoothing_ms",140}};}
@@ -211,6 +228,7 @@ struct OfficeLifecycleTest {
         require(SystemParametersInfoW(SPI_GETSCREENSAVEACTIVE,0,&saverAfter,0)&&SystemParametersInfoW(SPI_GETSCREENSAVETIMEOUT,0,&timeoutAfter,0)&&saverBefore==saverAfter&&timeoutBefore==timeoutAfter,"Awake changed screensaver configuration");
     }
     static void run() {
+        restPolicy();
         savePreservesUntouchedSettings();
         hardwareOwnership();
         screensaverSelection();
@@ -296,8 +314,12 @@ struct OfficeLifecycleTest {
         };
         auto beforeRest=owner.config;
         owner.calibration=true;owner.identifyDevice="*";
-        owner.automaticSaver=true;owner.dirty=false;rest("automatic-screensaver");
+        owner.automaticSaver=true;owner.observeRest(true,false,100);owner.dirty=false;rest("automatic-screensaver");
         owner.automaticSaver=false;
+        owner.observeRest(false,true,100);rest("awaiting-user-input");
+        SendMessageW(events,WM_DISPLAYCHANGE,32,MAKELPARAM(5120,2160));owner.tick();rest("awaiting-user-input");
+        require(!owner.awake.active()&&owner.config==beforeRest,"No-input display event resumed Awake or changed settings");
+        owner.observeRest(false,true,101);owner.dirty=false;
         owner.calibration=false;owner.identifyDevice.clear();owner.tick();
         require(owner.devices[0].colors[0]==0,"Idle saver exit must not replay pre-saver colours before a fresh frame");
         owner.latest.assign(314,ToRGBColor(0,255,0));owner.tick();

@@ -25,6 +25,7 @@
 #include "DisplayBrightness.h"
 #include "OfficeScreen.h"
 #include "OfficeAwake.h"
+#include "OfficeRest.h"
 #include "OfficeSamplingShader.h"
 #include <OpenRGBPluginInterface.h>
 #include <ResourceManagerCallback.h>
@@ -647,6 +648,8 @@ struct OfficeAmbience::Impl {
     office::DisplayBrightness displayBrightness;
     std::unique_ptr<office::OfficeScreen> screen;
     office::OfficeAwake awake;
+    office::OfficeRest rest;
+    bool observeNativeInput=true;
     Clock::time_point lastBrightnessRead{};
     std::vector<Device> devices;
     std::unique_ptr<office::HardwareState> hardware;
@@ -931,7 +934,7 @@ struct OfficeAmbience::Impl {
     }
     // Test construction skips only OS event/IPC activation, retaining the actual
     // inventory, map and output implementation used by the installed owner.
-    Impl(OpenRGBPluginAPIInterface* api,const std::filesystem::path& path,bool activate=true):journal(std::make_shared<office::Journal>(path.parent_path()/"logs"/"office-ambience-events.jsonl")),api(api),configPath(path),awake(path.parent_path(),activate) {
+    Impl(OpenRGBPluginAPIInterface* api,const std::filesystem::path& path,bool activate=true):journal(std::make_shared<office::Journal>(path.parent_path()/"logs"/"office-ambience-events.jsonl")),api(api),configPath(path),awake(path.parent_path(),activate),rest(path.parent_path(),activate),observeNativeInput(activate) {
         journal->write("owner_start",{{"executable",QCoreApplication::applicationFilePath().toStdString()}});
         std::ifstream file(path);file>>config;diskConfig=config;
         screen=std::make_unique<office::OfficeScreen>(path.parent_path(),activate);
@@ -1058,6 +1061,15 @@ struct OfficeAmbience::Impl {
             d.controller=found;
         }
     }
+    static std::optional<uint32_t> lastInput(){
+        LASTINPUTINFO value{sizeof(value)};
+        return GetLastInputInfo(&value)?std::optional<uint32_t>(value.dwTime):std::nullopt;
+    }
+    void observeRest(bool saver,bool normal,std::optional<uint32_t> input){
+        const auto before=rest.status();rest.observe(saver,normal,input);const auto after=rest.status();
+        if((before.at("held")==true||after.at("held")==true)&&before!=after)journal->write("rest_resume_gate",after);
+        if(before.at("held")==true&&after.at("held")==false){latest.clear();invalidate=true;dirty=true;}
+    }
     void chooseSource() {
         chooseSource(primaryMonitor());
     }
@@ -1069,8 +1081,10 @@ struct OfficeAmbience::Impl {
         // availability may leave the previous wallpaper colours illuminated.
         // Shortcut-started .scr windows do not set this state and remain sources.
         automaticSaver=desktop.screensaver();
+        observeRest(automaticSaver,!desktopUnavailable&&!sessionLocked&&!displayOff&&!powerSuspended&&!monitorMissing,
+                    observeNativeInput?lastInput():std::nullopt);
         if(inputDesktop!=loggedDesktop) {journal->write("input_desktop",{{"desktop",inputDesktop},{"secure",desktopUnavailable},{"automatic_saver",automaticSaver}});loggedDesktop=inputDesktop;}
-        if(monitorMissing || desktopUnavailable || automaticSaver || sessionLocked || displayOff || powerSuspended) {awake.setContext(false,!monitorMissing&&!desktopUnavailable&&!automaticSaver&&!sessionLocked&&!powerSuspended,!displayOff);return;}
+        if(monitorMissing || desktopUnavailable || automaticSaver || rest.active() || sessionLocked || displayOff || powerSuspended) {awake.setContext(false,!monitorMissing&&!desktopUnavailable&&!automaticSaver&&!rest.active()&&!sessionLocked&&!powerSuspended,!displayOff);return;}
         // After checking the input desktop's security/rest state, inspect the
         // same normal desktop used by EnumWindows for application selection.
         HWND candidate=screensaverWindow(GetThreadDesktop(GetCurrentThreadId()),monitor,false);
@@ -1097,13 +1111,16 @@ struct OfficeAmbience::Impl {
         status();
     }
     std::string restReason() const {
-        return sessionLocked?"session-locked":displayOff?"display-asleep":automaticSaver?"automatic-screensaver":desktopUnavailable?"secure-desktop":monitorMissing?"monitor-disconnected":"";
+        return sessionLocked?"session-locked":displayOff?"display-asleep":automaticSaver?"automatic-screensaver":desktopUnavailable?"secure-desktop":monitorMissing?"monitor-disconnected":rest.active()?"awaiting-user-input":"";
     }
     void tick() {
         // Persistent tray pause is independent of capture, screen adjustment,
         // and per-device hardware ownership. Native tests cannot override it.
         const bool paused=outputPaused||screen->lightingPaused();
-        if(sessionLocked||powerSuspended)awake.setContext(false,false);
+        // There is no session last-input change notification. Observe its token
+        // on the existing output cadence only while the resume gate is held.
+        if(observeNativeInput&&rest.active()&&rest.inputChanged(lastInput()))dirty=true;
+        if(sessionLocked||powerSuspended||rest.active())awake.setContext(false,false);
         else if(displayOff)awake.setContext(false,!desktopUnavailable&&!automaticSaver&&!monitorMissing,false);
         if(!sessionLocked && !displayOff && !powerSuspended && dirty.exchange(false)) chooseSource();
         awake.tick();
@@ -1214,7 +1231,7 @@ struct OfficeAmbience::Impl {
     Json report() const {
         std::lock_guard lock(controllersMutex);
         return {{"mode",mode},{"standby",!restReason().empty() || standbyPreview},{"rest_reason",restReason()},{"input_desktop",inputDesktop},{"source_hwnd",reinterpret_cast<uintptr_t>(source)},
-            {"monitor_policy","primary"},{"capture_display",selectedMonitor.name},{"awake",awake.status()},
+            {"monitor_policy","primary"},{"capture_display",selectedMonitor.name},{"awake",awake.status()},{"rest_resume",rest.status()},
             {"display_brightness_factor",displayBrightness.applied(config.at("follow_display_brightness").get<bool>())},
             {"display_brightness_valid",displayBrightness.valid},{"display_brightness_error",displayBrightness.error},
             {"display_brightness_display",displayBrightness.display},
