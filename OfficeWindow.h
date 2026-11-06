@@ -9,6 +9,7 @@
 #include <windows.h>
 #include <windowsx.h>
 #include <dwmapi.h>
+#include <OfficeWindowActions.h>
 #endif
 
 namespace officeui {
@@ -71,19 +72,19 @@ public:
     // the same Windows system-command path; Qt observes the resulting WM_SIZE.
     void showNormal(){
 #ifdef Q_OS_WIN
-        if(caption&&QGuiApplication::platformName()=="windows"){QMainWindow::show();SendMessageW(reinterpret_cast<HWND>(winId()),WM_SYSCOMMAND,SC_RESTORE,0);return;}
+        if(caption&&QGuiApplication::platformName()=="windows"){office::showWindow(this,SC_RESTORE);return;}
 #endif
         QMainWindow::showNormal();
     }
     void showMaximized(){
 #ifdef Q_OS_WIN
-        if(caption&&QGuiApplication::platformName()=="windows"){QMainWindow::show();SendMessageW(reinterpret_cast<HWND>(winId()),WM_SYSCOMMAND,SC_MAXIMIZE,0);return;}
+        if(caption&&QGuiApplication::platformName()=="windows"){office::showWindow(this,SC_MAXIMIZE);return;}
 #endif
         QMainWindow::showMaximized();
     }
     void showMinimized(){
 #ifdef Q_OS_WIN
-        if(caption&&QGuiApplication::platformName()=="windows"){QMainWindow::show();SendMessageW(reinterpret_cast<HWND>(winId()),WM_SYSCOMMAND,SC_MINIMIZE,0);return;}
+        if(caption&&QGuiApplication::platformName()=="windows"){office::showWindow(this,SC_MINIMIZE);return;}
 #endif
         QMainWindow::showMinimized();
     }
