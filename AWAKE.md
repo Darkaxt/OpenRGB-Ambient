@@ -34,3 +34,11 @@ system request, including while the monitor is off. Display-off releases
 Automatic and manual display-on requests. Explicit timed/expiration deadlines return to Off and survive
 restart in office-awake.json. Private preferences are imported without changing
 PowerToys' files; its other utilities and runner remain independent.
+
+Automatic screensaver rest holds both RGB output and Awake released until a new
+Windows session input-event timestamp is observed on a usable normal desktop.
+Returning to Default, display/topology changes and fresh wallpaper frames alone
+cannot resume output. The gate survives process restart in private
+office-rest.json. GetLastInputInfo supplies a session input signal (including
+injected input), not physical-user attestation; only timestamps are retained.
+Reference: https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-getlastinputinfo

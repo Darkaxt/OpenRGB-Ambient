@@ -219,6 +219,17 @@ struct OfficeLifecycleTest {
                 command({{"action","mode"},{"mode","expiration"},{"until_ms",QDateTime::currentMSecsSinceEpoch()+1000}});awaitExpiry();
                 bool rejected=false;try{command({{"action","mode"},{"mode","expiration"},{"until_ms",QDateTime::currentMSecsSinceEpoch()-1}});}catch(const std::exception&){rejected=true;}require(rejected,"Past expiration was accepted");
                 command({{"action","mode"},{"mode","automatic"}});expect(false,"Automatic without qualifying app held a request");
+                // Replay the recorded OS observations without changing global
+                // screensaver/input state; native request handles remain real.
+                owner.observeNativeInput=false;
+                window=CreateWindowW(L"STATIC",L"Resume replay",WS_POPUP|WS_VISIBLE,r.left,r.top,r.right-r.left,r.bottom-r.top,nullptr,nullptr,GetModuleHandleW(nullptr),nullptr);
+                require(window!=nullptr,"Create resume replay app");expect(true,"Replay app failed to acquire native request");
+                owner.latest.assign(314,ToRGBColor(0,0,255));owner.observeRest(true,false,100);owner.automaticSaver=true;owner.dirty=false;owner.tick();
+                require(!owner.awake.active()&&requests().find(reason)==std::string::npos,"Screensaver gate did not release actual native requests");
+                owner.automaticSaver=false;owner.observeRest(false,true,100);owner.chooseSource(main);owner.tick();
+                require(owner.report().at("rest_reason")=="awaiting-user-input"&&!owner.awake.active()&&!owner.capture,"No-input desktop return resumed capture or Awake");
+                for(auto& device:owner.devices)require(std::all_of(device.colors.begin(),device.colors.end(),[](auto c){return c==0;}),"No-input desktop return relit a mapped device");
+                owner.observeRest(false,true,101);owner.chooseSource(main);require(owner.awake.active(),"New session input did not reacquire eligible app request");
                 std::cout<<"Actual main-display window eligibility, native DISPLAY/SYSTEM request inventory, lifecycle release and manual saver behavior passed\n";
             }catch(...){failure=std::current_exception();}
             if(saver)DestroyWindow(saver);if(floating)DestroyWindow(floating);if(window)DestroyWindow(window);UnregisterClassW(saverClass,GetModuleHandleW(nullptr));
