@@ -197,7 +197,7 @@ void screenEditor(QApplication& app){
     auto slider=panel.findChild<QSlider*>("screen-slider-NightConfiguration/Brightness");require(slider&&slider->value()==85,"Screen slider not synchronized on reload");
     slider->setValue(72);require(brightness->value()==72,"Screen slider did not update exact field");brightness->setValue(81);require(slider->value()==81,"Exact field did not update slider");
     panel.findChild<QPushButton*>("screenSave")->click();require(sent.at("settings").at("NightConfiguration").at("Brightness")==.81,"Slider companion changed save semantics");
-    auto dial=panel.findChild<officeui::Sundial*>("screenSundial");require(dial&&dial->markerSeconds()==43200,"Sundial is disconnected from owner's effective clock");
+    auto dial=dynamic_cast<officeui::Sundial*>(panel.findChild<QWidget*>("screenSundial"));require(dial&&dial->markerSeconds()==43200,"Sundial is disconnected from owner's effective clock");
     value["preview"]=true;value["cycle_seconds"]=43800.;panel.fixtureScreen(value);require(dial->animating(),"Visible owner preview samples do not animate");
     QSignalSpy frames(dial->findChild<QVariantAnimation*>(),&QVariantAnimation::valueChanged);
     QEventLoop loop;QObject::connect(dial->findChild<QVariantAnimation*>(),&QVariantAnimation::finished,&loop,&QEventLoop::quit);loop.exec();
