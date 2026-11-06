@@ -34,10 +34,11 @@ void Panel::buildViews() {
     rail->addStretch();auto versionLabel=label(version,"hint");versionLabel->setAlignment(Qt::AlignCenter);versionLabel->setFont(body(11));versionLabel->setFixedHeight(36);rail->addWidget(divider());rail->addWidget(versionLabel);
     outer->addWidget(navigation);
     auto workspace=new QWidget;auto main=new QVBoxLayout(workspace);main->setContentsMargins(0,0,0,0);main->setSpacing(0);
-    auto header=new QWidget;header->setFixedHeight(48);auto headerRow=new QHBoxLayout(header);headerRow->setContentsMargins(28,0,20,0);headerRow->setSpacing(12);
+    auto header=new QWidget;header->setFixedHeight(48);auto headerRow=new QHBoxLayout(header);headerRow->setContentsMargins(28,0,0,0);headerRow->setSpacing(12);
     auto rule=label("—");rule->setStyleSheet("color:#14f5ff");headerRow->addWidget(rule);pageTitle->setFont(display(15));headerRow->addWidget(pageTitle);
     auto rule2=label("—");rule2->setStyleSheet("color:#14f5ff");headerRow->addWidget(rule2);pageSubtitle->setFont(body(11,QFont::Bold));pageSubtitle->setStyleSheet("color:#8a9aa9");headerRow->addWidget(pageSubtitle,1);
     connection->setFont(body(12));headerRow->addWidget(connection);auto diagnosticButton=button("", "memory");diagnosticButton->setToolTip("Capture diagnostics");diagnosticButton->setAccessibleName("Capture diagnostics");diagnosticButton->setFixedSize(32,32);headerRow->addWidget(diagnosticButton);connect(diagnosticButton,&QPushButton::clicked,this,[this]{pages->setCurrentIndex(5);});
+    auto captionControls=new QWidget;auto captionRow=new QHBoxLayout(captionControls);captionRow->setContentsMargins(0,0,0,0);captionRow->setSpacing(0);integrateCaption(header,captionRow);headerRow->addWidget(captionControls);
     main->addWidget(header);main->addWidget(divider());
     auto content=new QWidget;auto inset=new QVBoxLayout(content);inset->setContentsMargins(14,10,14,10);inset->addWidget(pages);main->addWidget(content,1);
     footer=new QWidget;auto footerRow=new QHBoxLayout(footer);footerRow->setContentsMargins(20,4,20,12);footerRow->addWidget(dirtyLabel,1);auto reload=button("Reload saved map","refresh");save->setIcon(icon("save"));save->setProperty("primary",true);save->setMinimumHeight(34);footerRow->addWidget(reload);footerRow->addWidget(save);main->addWidget(footer);

@@ -209,6 +209,9 @@ public:
         for(auto& display:displays)if(QString::fromStdWString(display.name).toStdString()==name&&display.appliedValid&&lastApplied)return lastApplied->brightness;
         return {};
     }
+    QDateTime cycleInstant(const QDateTime& real) const {
+        return preview&&previewClock.elapsed()<14400?QDateTime::fromMSecsSinceEpoch(previewStart+previewClock.elapsed()*6000).toLocalTime():real;
+    }
     void tick(){
         if(closed||!active)return;auto real=QDateTime::currentDateTime();auto now=real.toMSecsSinceEpoch();
         auto next=document;bool expired=false;for(auto key:{"lighting_pause","screen_pause"}){auto p=pause(key);if(p.kind!="none"&&p.kind!="forever"&&!p.active(now)){p.clear();next[key]=p.json();expired=true;}}if(expired)persist(next);
@@ -219,8 +222,7 @@ public:
         // react only to an actual changed ramp, rather than a timed retry window.
         const auto observedTime=monotonic.elapsed();
         if(observedTime-lastObservation>=1000){lastObservation=observedTime;for(auto& d:displays)if(d.owned){std::array<std::array<WORD,256>,3> observed{};if(GetDeviceGammaRamp(d.dc,observed.data())&&observed!=d.observed){d.observed=observed;int difference=0;for(size_t c=0;c<3;++c)for(size_t i=0;i<256;++i)difference=std::max(difference,std::abs(int(observed[c][i])-int(d.applied[c][i])));if(difference>8)refreshGamma=true;}}}
-        updateForeground();auto instant=real;
-        if(preview){if(previewClock.elapsed()>=14400)preview=false;else instant=QDateTime::fromMSecsSinceEpoch(previewStart+previewClock.elapsed()*6000).toLocalTime();}
+        updateForeground();if(preview&&previewClock.elapsed()>=14400)preview=false;auto instant=cycleInstant(real);
         auto times=solarAt(instant);const auto& s=document.at("settings");
         bool on=!pause("screen_pause").active(now)&&pauseReason.empty();auto previousTarget=target,previousCurrent=current;
         target=(on||preview)?screen::cycle(QTime(0,0).secsTo(instant.time()),times.first,times.second,duration(s.at("ConfigurationTransitionDuration")),s.at("ConfigurationTransitionOffset"),color(s.at("DayConfiguration")),color(s.at("NightConfiguration"))):s.at("IsDefaultToDayConfigurationEnabled").get<bool>()?color(s.at("DayConfiguration")):screen::Color{};
@@ -233,10 +235,18 @@ public:
         applyGamma(current);
     }
     Json status() const {
-        auto real=QDateTime::currentDateTime();auto times=solarAt(real);auto p=pause("screen_pause"),rgb=pause("lighting_pause");
+        auto real=QDateTime::currentDateTime();auto instant=cycleInstant(real);auto times=solarAt(instant);auto p=pause("screen_pause"),rgb=pause("lighting_pause");
         return {{"managed",document.value("managed",false)},{"screen_disabled",p.active(real.toMSecsSinceEpoch())},{"lighting_disabled",rgb.active(real.toMSecsSinceEpoch())},{"screen_pause",p.json()},{"lighting_pause",rgb.json()},{"automatic_pause",pauseReason},{"temperature",appliedValid&&lastApplied?lastApplied->temperature:current.temperature},{"brightness",appliedValid&&lastApplied?lastApplied->brightness:current.brightness},{"target_temperature",target.temperature},{"target_brightness",target.brightness},{"gamma_valid",appliedValid},{"display_count",displays.size()},{"error",error},{"hotkey_error",hotkeyError},{"preview",preview},{"sunrise",QTime(0,0).addSecs(qRound(times.first)).toString("HH:mm").toStdString()},{"sunset",QTime(0,0).addSecs(qRound(times.second)).toString("HH:mm").toStdString()},{"revision",revision}};
     }
-    Json snapshot() const {auto result=status();result["settings"]=document.at("settings");result["temperature_offset"]=document.value("temperature_offset",0.);result["brightness_offset"]=document.value("brightness_offset",0.);result["imported"]=document.value("imported",false);return result;}
+    Json snapshot() const {
+        auto result=status();const auto& s=document.at("settings");result["settings"]=s;result["temperature_offset"]=document.value("temperature_offset",0.);result["brightness_offset"]=document.value("brightness_offset",0.);result["imported"]=document.value("imported",false);
+        auto instant=cycleInstant(QDateTime::currentDateTime());auto solar=solarAt(instant);auto t=screen::cycleTimes(solar.first,solar.second,duration(s.at("ConfigurationTransitionDuration")),s.at("ConfigurationTransitionOffset"));
+        double seconds=QTime(0,0).msecsTo(instant.time())/1000.;
+        result["cycle_seconds"]=seconds;result["cycle_times"]={{"sunrise_start",t.riseStart},{"sunrise_end",t.riseEnd},{"sunset_start",t.setStart},{"sunset_end",t.setEnd}};
+        result["cycle_state"]=!document.value("managed",false)?"disabled":!preview&&(result.at("screen_disabled").get<bool>()||!pauseReason.empty())?"paused":current!=target?"transition":
+            screen::wrap(seconds-t.riseEnd,86400)<screen::wrap(t.setStart-t.riseEnd,86400)?"day":screen::wrap(seconds-t.setEnd,86400)<screen::wrap(t.riseStart-t.setEnd,86400)?"night":"transition";
+        return result;
+    }
     Json command(const Json& request){
         auto action=request.at("action").get<std::string>();
         if(action=="pause"){

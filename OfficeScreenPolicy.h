@@ -14,10 +14,14 @@ using Json=nlohmann::json;
 constexpr double pi=3.14159265358979323846;
 inline double wrap(double n,double range){return n-std::floor(n/range)*range;}
 struct Color {double temperature=6600,brightness=1;bool operator==(const Color&) const=default;};
+struct CycleTimes {double riseStart,riseEnd,setStart,setEnd;};
+inline CycleTimes cycleTimes(double sunrise,double sunset,double duration,double offset){
+    return {wrap(sunrise-duration*(1-offset),86400),wrap(sunrise+duration*offset,86400),
+        wrap(sunset-duration*offset,86400),wrap(sunset+duration*(1-offset),86400)};
+}
 inline Color cycle(double seconds,double sunrise,double sunset,double duration,double offset,Color day,Color night){
     seconds=wrap(seconds,86400);
-    const double riseStart=wrap(sunrise-duration*(1-offset),86400),riseEnd=wrap(sunrise+duration*offset,86400);
-    const double setStart=wrap(sunset-duration*offset,86400),setEnd=wrap(sunset+duration*(1-offset),86400);
+    const auto [riseStart,riseEnd,setStart,setEnd]=cycleTimes(sunrise,sunset,duration,offset);
     auto blend=[&](double weight){return Color{day.temperature+(night.temperature-day.temperature)*weight,day.brightness+(night.brightness-day.brightness)*weight};};
     if(duration>0 && wrap(seconds-riseStart,86400)+wrap(riseEnd-seconds,86400)<=duration+.000001)
         return blend(std::cos(wrap(seconds-riseStart,86400)/duration*pi/2));

@@ -5,6 +5,8 @@
 #include "OfficeStyle.h"
 #include "OfficePanel.h"
 #include "OfficeScreenPolicy.h"
+#include "OfficeSundial.h"
+#include "OfficeWindow.h"
 #include <QTimeEdit>
 #include <QKeySequenceEdit>
 #include <QPointer>
@@ -420,7 +422,7 @@ public:
     }
 };
 
-class Panel : public QMainWindow {
+class Panel : public officeui::OfficeWindow {
     std::string decodedPreview;
     bool wantsPreview() const {return !exportPath.isEmpty() || (isVisible() && !isMinimized() && (pages->currentIndex()==1 || pages->currentIndex()==4));}
     Client client;
@@ -790,6 +792,16 @@ class Panel : public QMainWindow {
         resize(1440,900);result["states"]=Json::array();result["hardware_views"]=Json::array();
         result["screen_views"]=Json::array();pages->setCurrentIndex(7);
         for(int tab=0;tab<screenTabs->count();++tab){screenTabs->setCurrentIndex(tab);QApplication::sendPostedEvents();centralWidget()->layout()->activate();auto file=exportPath+"/screen-tab-"+QString::number(tab)+".png";if(!grab().save(file))throw std::runtime_error("Cannot export Screen tab");result["screen_views"].push_back({{"tab",screenTabs->tabText(tab).toStdString()},{"path",file.toStdString()}});}screenTabs->setCurrentIndex(0);
+        result["screen_cycle_views"]=Json::array();auto savedScreen=screenState;
+        for(auto state:{"day","night","transition","paused","disabled"}){
+            auto fixture=savedScreen;fixture["cycle_state"]=state;fixture["cycle_seconds"]=QString(state)=="night"?0.:QString(state)=="transition"?64800.:43200.;fixture["preview"]=false;loadScreen(fixture);
+            auto file=exportPath+"/screen-cycle-"+state+".png";if(!grab().save(file))throw std::runtime_error("Cannot export sundial state");
+            result["screen_cycle_views"].push_back({{"state",state},{"path",file.toStdString()},{"fixture",true},{"marker_seconds",screenSundial->markerSeconds()}});
+        }loadScreen(savedScreen);
+        result["caption_controls"]=Json::array();for(auto name:{"windowMinimize","windowMaximize","windowClose"}){
+            auto button=findChild<QToolButton*>(name);auto origin=button->mapTo(this,QPoint());
+            result["caption_controls"].push_back({{"name",name},{"accessible_name",button->accessibleName().toStdString()},{"x",origin.x()},{"y",origin.y()},{"width",button->width()},{"height",button->height()},{"hit",captionHit(origin+button->rect().center())}});
+        }
         result["tray"]=Json::array();
         for(auto action:trayMenu->actions())if(action->isVisible()){
             Json item={{"text",action->text().toStdString()},{"separator",action->isSeparator()}};
@@ -899,7 +911,7 @@ public:
         action({{"command","stop_test"}});event->accept();
         if(client.direct) QCoreApplication::quit();
     }
-    void resizeEvent(QResizeEvent* e) override {QMainWindow::resizeEvent(e);arrangeDashboard();pageSubtitle->setVisible(width()>=1200);}
+    void resizeEvent(QResizeEvent* e) override {officeui::OfficeWindow::resizeEvent(e);arrangeDashboard();pageSubtitle->setVisible(width()>=1200);}
 };
 }
 

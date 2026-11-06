@@ -3,6 +3,8 @@ Json screenState,screenDraft;
 uint64_t screenRevision=0;
 bool screenDirty=false,screenUpdating=false;
 QLabel* screenStatus=new QLabel;
+officeui::Sundial* screenSundial=new officeui::Sundial;
+QLabel *screenSunrise=new QLabel,*screenSunset=new QLabel;
 QLabel* screenMessage=new QLabel;
 QCheckBox* screenManaged=new officeui::Switch("Manage screen adjustments");
 QPushButton* screenSave=new QPushButton("Save screen settings");
@@ -27,11 +29,12 @@ void loadScreen(const Json& value){
     if(!value.is_object()||!value.contains("settings"))return;screenState=value;
     bool lightingOff=value.value("lighting_disabled",false),screenOff=value.value("screen_disabled",false);
     if(lightingEnable){lightingEnable->setVisible(lightingOff);lightingPauseMenu->menuAction()->setVisible(!lightingOff);screenEnable->setVisible(screenOff);screenPauseMenu->menuAction()->setVisible(!screenOff);}
-    screenUpdating=true;screenManaged->setChecked(value.value("managed",false));
+    screenUpdating=true;screenManaged->setChecked(value.value("managed",false));screenSundial->setSnapshot(value);
+    screenSunrise->setText(QString("SUNRISE\n%1").arg(text(value.value("sunrise",std::string("—")))));
+    screenSunset->setText(QString("SUNSET\n%1").arg(text(value.value("sunset",std::string("—")))));
+    refresh.setInterval(isVisible()&&pages->currentIndex()==7&&value.value("preview",false)?100:(pages->currentIndex()==1||pages->currentIndex()==4)?200:1000);
     auto reason=value.value("automatic_pause",std::string());
-    screenStatus->setText(QString("%1 K   ·   %2% brightness\nSunrise %3   ·   Sunset %4\n%5")
-        .arg(value.value("temperature",6600.),0,'f',0).arg(value.value("brightness",1.)*100,0,'f',1)
-        .arg(text(value.value("sunrise",std::string("—")))).arg(text(value.value("sunset",std::string("—"))))
+    screenStatus->setText(QString("%1")
         .arg(!value.value("managed",false)?"Ready to replace standalone LightBulb":screenOff?"Screen adjustments disabled":!reason.empty()?QString("Paused: ")+text(reason):value.value("gamma_valid",false)?QString("Verified on %1 displays").arg(value.value("display_count",0)):"Waiting for verified display gamma"));
     screenPreview->setText(value.value("preview",false)?"Stop preview":"Preview full day");
     screenPreview->setEnabled(value.value("managed",false));
@@ -80,11 +83,19 @@ QWidget* buildScreenPage(){
     using namespace officeui;
     auto divider=[](){auto line=new QFrame;line->setFrameShape(QFrame::HLine);line->setStyleSheet("color:#1a303d;max-height:1px;");return line;};
     auto page=new QWidget;page->setObjectName("screenPage");auto outer=new QVBoxLayout(page);outer->setContentsMargins(24,16,24,16);outer->setSpacing(14);
-    auto stateCard=new Card("Screen adjustment","settings_brightness");auto stateRow=new QHBoxLayout;screenStatus->setObjectName("screenStatus");screenStatus->setFont(body(16));screenStatus->setWordWrap(true);stateRow->addWidget(screenStatus,1);auto controls=new QVBoxLayout;screenManaged->setObjectName("screenManaged");controls->addWidget(screenManaged);screenPreview->setObjectName("screenCyclePreview");controls->addWidget(screenPreview);stateRow->addLayout(controls);stateCard->content->addLayout(stateRow);outer->addWidget(stateCard);
+    auto stateCard=new Card;auto stateRow=new QHBoxLayout;stateRow->setSpacing(12);
+    for(auto l:{screenSunset,screenSunrise}){l->setFont(body(15));l->setAlignment(Qt::AlignCenter);l->setMinimumWidth(74);}
+    stateRow->addWidget(screenSunset);stateRow->addWidget(screenSundial);stateRow->addWidget(screenSunrise);stateRow->addSpacing(12);
+    auto controls=new QVBoxLayout;controls->addWidget(label("Screen adjustment","eyebrow"));screenStatus->setObjectName("screenStatus");screenStatus->setFont(body(15));screenStatus->setWordWrap(true);controls->addWidget(screenStatus);screenManaged->setObjectName("screenManaged");controls->addWidget(screenManaged);screenPreview->setObjectName("screenCyclePreview");controls->addWidget(screenPreview);stateRow->addLayout(controls,1);stateCard->content->addLayout(stateRow);outer->addWidget(stateCard);
     screenTabs->setObjectName("screenTabs");outer->addWidget(screenTabs,1);
     auto tab=[&](const QString& title){auto body=new QWidget;auto column=new QVBoxLayout(body);column->setContentsMargins(16,16,16,16);column->setSpacing(14);auto scroll=new QScrollArea;scroll->setFrameShape(QFrame::NoFrame);scroll->setWidgetResizable(true);scroll->setWidget(body);screenTabs->addTab(scroll,title);return column;};
     auto number=[&](QVBoxLayout* parent,const QString& caption,const std::string& key,double minimum,double maximum,double step,const QString& suffix){
-        auto row=new QWidget;auto l=new QHBoxLayout(row);l->setContentsMargins(0,0,0,0);l->addWidget(label(caption),1);auto spin=new Stepper<QDoubleSpinBox>;spin->setRange(minimum,maximum);spin->setDecimals(step<.01?6:step<1?2:0);spin->setSingleStep(step);spin->setSuffix(suffix);spin->setMinimumWidth(160);spin->setAccessibleName(caption);spin->setObjectName(QString::fromStdString("screen-"+key));screenNumbers[key]=spin;l->addWidget(spin);parent->addWidget(row);connect(spin,&QDoubleSpinBox::valueChanged,this,[this]{screenChanged();});
+        auto row=new QWidget;auto l=new QHBoxLayout(row);l->setContentsMargins(0,0,0,0);auto captionLabel=label(caption);l->addWidget(captionLabel,1);auto spin=new Stepper<QDoubleSpinBox>;spin->setRange(minimum,maximum);spin->setDecimals(step<.01?6:step<1?2:0);spin->setSingleStep(step);spin->setSuffix(suffix);spin->setMinimumWidth(160);spin->setAccessibleName(caption);spin->setObjectName(QString::fromStdString("screen-"+key));screenNumbers[key]=spin;
+        if(key.starts_with("DayConfiguration/")||key.starts_with("NightConfiguration/")){
+            auto slider=new Slider;slider->setObjectName(QString::fromStdString("screen-slider-"+key));slider->setAccessibleName(caption);slider->setRange(int(minimum),int(maximum));slider->setSingleStep(int(step));slider->setPageStep(int(step*5));slider->setMinimumWidth(140);l->addWidget(slider,2);
+            connect(slider,&QSlider::valueChanged,spin,[spin](int n){spin->setValue(n);});connect(spin,&QDoubleSpinBox::valueChanged,slider,[slider](double n){QSignalBlocker blocked(slider);slider->setValue(qRound(n));});
+        }
+        l->addWidget(spin);parent->addWidget(row);connect(spin,&QDoubleSpinBox::valueChanged,this,[this]{screenChanged();});
     };
     auto check=[&](QVBoxLayout* parent,const QString& caption,const char* key){auto c=new Switch(caption);c->setObjectName(QString::fromLatin1(key));screenChecks[key]=c;parent->addWidget(c);connect(c,&QCheckBox::toggled,this,[this]{screenChanged();});};
     auto general=tab("Day and night");

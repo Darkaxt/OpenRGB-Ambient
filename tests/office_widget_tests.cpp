@@ -6,6 +6,8 @@
 #include <QRawFont>
 #include <QTest>
 #include <QBuffer>
+#include <QSignalSpy>
+#include <QEventLoop>
 void require(bool condition,const char* message) {if(!condition) throw std::runtime_error(message);}
 void mouse(QWidget& widget,QEvent::Type type,QPointF point,Qt::MouseButton button,Qt::MouseButtons buttons,Qt::KeyboardModifiers modifiers=Qt::NoModifier) {
     QMouseEvent event(type,point,point,button,buttons,modifiers);QApplication::sendEvent(&widget,&event);
@@ -181,7 +183,7 @@ void hardwareEditor(QApplication& app) {
 void screenEditor(QApplication& app){
     Json sent;Panel panel("unused-screen-fixture",{},false,false,[&](Json request,OfficeReply reply){if(request.at("command")=="snapshot")reply({{"ok",false},{"error","No capture in Screen widget fixture"}});else{sent=request;reply({{"ok",true},{"result",Json::object()}});}});
     Json settings={{"DayConfiguration",{{"Temperature",6600},{"Brightness",1.}}},{"NightConfiguration",{{"Temperature",6600},{"Brightness",.85}}},{"ConfigurationTransitionDuration","03:00:00"},{"ConfigurationSmoothingMaxDuration","00:00:05"},{"ConfigurationTransitionOffset",0.},{"Location",{{"Latitude",50.},{"Longitude",30.}}},{"ManualSunriseTime","07:20:00"},{"ManualSunsetTime","16:30:00"},{"WhitelistedApplications",Json::array()}};
-    Json value={{"settings",settings},{"revision",3},{"managed",true},{"temperature",6600},{"brightness",.85},{"gamma_valid",true},{"display_count",2},{"sunrise","07:00"},{"sunset","17:00"}};
+    Json value={{"settings",settings},{"revision",3},{"managed",true},{"temperature",6600},{"brightness",.85},{"gamma_valid",true},{"display_count",2},{"sunrise","07:00"},{"sunset","17:00"},{"cycle_seconds",43200.},{"cycle_state","day"},{"cycle_times",{{"sunrise_start",14400.},{"sunrise_end",25200.},{"sunset_start",61200.},{"sunset_end",72000.}}}};
     panel.fixtureScreen(value);panel.show();app.processEvents();auto menu=panel.findChild<QMenu*>("officeTrayMenu");require(menu,"Real tray menu missing");
     QStringList entries;for(auto action:menu->actions())if(action->isVisible()&&!action->isSeparator())entries<<action->text();
     require(entries==QStringList{"Open","Disable lighting","Disable screen adjustments","Exit"},"Tray menu differs from exact agreed root structure");
@@ -192,6 +194,21 @@ void screenEditor(QApplication& app){
     require(sent.at("action")=="save"&&sent.at("revision")==3&&sent.at("settings").at("NightConfiguration").at("Brightness")==.8,"Real Screen save did not send edited settings");
     value["screen_disabled"]=true;value["lighting_disabled"]=false;panel.fixtureScreen(value);entries.clear();for(auto action:menu->actions())if(action->isVisible()&&!action->isSeparator())entries<<action->text();require(entries.contains("Enable screen adjustments")&&entries.contains("Disable lighting"),"Independent enable menu state failed");
     require(panel.findChild<QTabWidget*>("screenTabs")->count()==4,"Screen feature tabs incomplete");
+    auto slider=panel.findChild<QSlider*>("screen-slider-NightConfiguration/Brightness");require(slider&&slider->value()==85,"Screen slider not synchronized on reload");
+    slider->setValue(72);require(brightness->value()==72,"Screen slider did not update exact field");brightness->setValue(81);require(slider->value()==81,"Exact field did not update slider");
+    panel.findChild<QPushButton*>("screenSave")->click();require(sent.at("settings").at("NightConfiguration").at("Brightness")==.81,"Slider companion changed save semantics");
+    auto dial=panel.findChild<officeui::Sundial*>("screenSundial");require(dial&&dial->markerSeconds()==43200,"Sundial is disconnected from owner's effective clock");
+    value["preview"]=true;value["cycle_seconds"]=43800.;panel.fixtureScreen(value);require(dial->animating(),"Visible owner preview samples do not animate");
+    QSignalSpy frames(dial->findChild<QVariantAnimation*>(),&QVariantAnimation::valueChanged);
+    QEventLoop loop;QObject::connect(dial->findChild<QVariantAnimation*>(),&QVariantAnimation::finished,&loop,&QEventLoop::quit);loop.exec();
+    require(frames.count()>1,"Sundial did not render intermediate owner-clock positions");
+    require(std::abs(dial->markerSeconds()-43800)<.001,"Sundial preview did not reach owner's sample");
+    auto first=dial->grab().toImage();qApp->setProperty("officeReducedMotion",true);value["cycle_seconds"]=44400.;panel.fixtureScreen(value);require(!dial->animating()&&dial->markerSeconds()==44400,"Reduced motion did not bypass interpolation");
+    value["cycle_seconds"]=0.;value["cycle_state"]="night";panel.fixtureScreen(value);require(first!=dial->grab().toImage(),"Day/night sundial did not change its real rendered state");
+    qApp->setProperty("officeReducedMotion",false);value["cycle_seconds"]=600.;panel.fixtureScreen(value);require(dial->animating(),"Preview motion failed after midnight wrap");panel.hide();app.processEvents();require(!dial->animating(),"Hidden Screen page retained animation");
+    auto minimize=panel.findChild<QToolButton*>("windowMinimize"),maximize=panel.findChild<QToolButton*>("windowMaximize"),close=panel.findChild<QToolButton*>("windowClose");require(minimize&&maximize&&close,"Integrated caption controls missing");
+    require(panel.captionHit(maximize->mapTo(&panel,maximize->rect().center()))==HTMAXBUTTON,"Maximize does not expose Windows snap hit target");
+    require(panel.captionHit(close->mapTo(&panel,close->rect().center()))==HTCLIENT,"Close button became a drag region");
 }
 int main(int argc,char** argv) {
     QApplication app(argc,argv);
