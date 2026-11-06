@@ -6,7 +6,6 @@
 #include <condition_variable>
 #include <iostream>
 #include <thread>
-#include <QThread>
 #include <cstdio>
 #include <QEventLoop>
 
@@ -141,7 +140,10 @@ struct OfficeLifecycleTest {
         HDESK desktop=CreateDesktopW(name.c_str(),nullptr,nullptr,0,GENERIC_ALL,nullptr);
         require(desktop!=nullptr,"Create private awake test desktop");
         std::exception_ptr failure;
-        auto thread=QThread::create([&]{
+        // QThread initializes its Windows dispatcher before run(), creating a
+        // hidden HWND that prevents SetThreadDesktop. Bind a native thread
+        // before its first Qt object/dispatcher is constructed.
+        std::thread thread([&]{
             HWND window{},floating{},saver{};const wchar_t* saverClass=L"WindowsScreenSaverClass";
             try {
                 require(SetThreadDesktop(desktop)!=FALSE,"Bind test thread to private desktop");
@@ -189,6 +191,8 @@ struct OfficeLifecycleTest {
                 require(requests().find(reason)==std::string::npos,"Final request remained registered with Windows");
                 auto command=[&](Json request){request["command"]="awake";return owner.command(request);};
                 command({{"action","mode"},{"mode","indefinite"}});require(owner.awake.active()&&!owner.awake.status().at("display_required").get<bool>(),"Unchecked Keep screen on must hold only system sleep");
+                setting.state=0;OfficeAmbience::Impl::nativeEvent(owner.eventWindow,WM_POWERBROADCAST,PBT_POWERSETTINGCHANGE,reinterpret_cast<LPARAM>(&setting));owner.chooseSource(main);require(owner.awake.active()&&!owner.awake.status().at("display_required").get<bool>(),"Manual system-only Awake must survive display sleep");
+                setting.state=1;OfficeAmbience::Impl::nativeEvent(owner.eventWindow,WM_POWERBROADCAST,PBT_POWERSETTINGCHANGE,reinterpret_cast<LPARAM>(&setting));owner.chooseSource(main);
                 command({{"action","display"},{"enabled",true}});require(owner.awake.status().at("display_required")==true,"Keep screen on did not acquire display request");
                 command({{"action","mode"},{"mode","off"}});require(!owner.awake.active(),"Off retained a manual request");
                 auto timed=command({{"action","mode"},{"mode","interval"},{"seconds",1}});
@@ -202,7 +206,7 @@ struct OfficeLifecycleTest {
             }catch(...){failure=std::current_exception();}
             if(saver)DestroyWindow(saver);if(floating)DestroyWindow(floating);if(window)DestroyWindow(window);UnregisterClassW(saverClass,GetModuleHandleW(nullptr));
         });
-        thread->start();thread->wait();delete thread;CloseDesktop(desktop);if(failure)std::rethrow_exception(failure);
+        thread.join();CloseDesktop(desktop);if(failure)std::rethrow_exception(failure);
         BOOL saverAfter{};UINT timeoutAfter{};
         require(SystemParametersInfoW(SPI_GETSCREENSAVEACTIVE,0,&saverAfter,0)&&SystemParametersInfoW(SPI_GETSCREENSAVETIMEOUT,0,&timeoutAfter,0)&&saverBefore==saverAfter&&timeoutBefore==timeoutAfter,"Awake changed screensaver configuration");
     }

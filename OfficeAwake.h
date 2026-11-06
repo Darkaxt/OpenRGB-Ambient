@@ -18,7 +18,7 @@ class OfficeAwake final {
     Json document={{"mode","automatic"},{"keep_screen_on",false},{"until_ms",int64_t(0)},
         {"intervals",Json::array({{{"label","30 minutes"},{"seconds",1800}},{{"label","1 hour"},{"seconds",3600}},{{"label","2 hours"},{"seconds",7200}}})}};
     HANDLE request=INVALID_HANDLE_VALUE;
-    bool enabled=true,eligible=false,allowed=false,wantedSystem=false,wantedDisplay=false,display=false,system=false;
+    bool enabled=true,eligible=false,allowed=false,displayOn=true,wantedSystem=false,wantedDisplay=false,display=false,system=false;
     std::string error,storageError;
     static bool validMode(const std::string& mode){return mode=="automatic"||mode=="off"||mode=="interval"||mode=="expiration"||mode=="indefinite";}
     static Json read(const QString& name){QFile f(name);if(!f.open(QIODevice::ReadOnly))throw std::runtime_error("Cannot read awake settings");auto bytes=f.readAll();return Json::parse(bytes.constData(),bytes.constData()+bytes.size());}
@@ -67,10 +67,11 @@ public:
             // The expired on-disk deadline cannot rearm the request on restart.
             try{save(next);}catch(const std::exception& e){document=next;storageError=e.what();}mode="off";
         }
-        bool needed=enabled&&allowed&&(mode=="automatic"?eligible:mode!="off");
-        apply(needed,needed&&(mode=="automatic"||document.at("keep_screen_on").get<bool>()));
+        bool wantsDisplay=mode=="automatic"||document.at("keep_screen_on").get<bool>();
+        bool needed=enabled&&allowed&&(!wantsDisplay||displayOn)&&(mode=="automatic"?eligible:mode!="off");
+        apply(needed,needed&&wantsDisplay);
     }
-    void setContext(bool appEligible,bool sessionAllowed){eligible=appEligible;allowed=sessionAllowed;tick();}
+    void setContext(bool appEligible,bool sessionAllowed,bool screenOn=true){eligible=appEligible;allowed=sessionAllowed;displayOn=screenOn;tick();}
     bool active() const {return system;}
     Json status() const {auto out=document;out.update({{"required",wantedSystem},{"active",active()},{"display_required",display},{"system_required",system},{"error",storageError.empty()?error:storageError}});return out;}
     Json command(const Json& request){

@@ -30,6 +30,7 @@ Automatic, interval (30 minutes/1 hour/2 hours or imported custom choices), loca
 date/time expiration, indefinitely, Off and Keep screen on. Automatic is the
 initial mode and always requires the display; manual modes explicitly override it.
 Off releases every Office request. Manual display-off preference holds only the
-system request. Explicit timed/expiration deadlines return to Off and survive
+system request, including while the monitor is off. Display-off releases
+Automatic and manual display-on requests. Explicit timed/expiration deadlines return to Off and survive
 restart in office-awake.json. Private preferences are imported without changing
 PowerToys' files; its other utilities and runner remain independent.

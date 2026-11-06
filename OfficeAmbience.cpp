@@ -1070,7 +1070,7 @@ struct OfficeAmbience::Impl {
         // Shortcut-started .scr windows do not set this state and remain sources.
         automaticSaver=desktop.screensaver();
         if(inputDesktop!=loggedDesktop) {journal->write("input_desktop",{{"desktop",inputDesktop},{"secure",desktopUnavailable},{"automatic_saver",automaticSaver}});loggedDesktop=inputDesktop;}
-        if(monitorMissing || desktopUnavailable || automaticSaver || sessionLocked || displayOff || powerSuspended) {awake.setContext(false,false);return;}
+        if(monitorMissing || desktopUnavailable || automaticSaver || sessionLocked || displayOff || powerSuspended) {awake.setContext(false,!monitorMissing&&!desktopUnavailable&&!automaticSaver&&!sessionLocked&&!powerSuspended,!displayOff);return;}
         // After checking the input desktop's security/rest state, inspect the
         // same normal desktop used by EnumWindows for application selection.
         HWND candidate=screensaverWindow(GetThreadDesktop(GetCurrentThreadId()),monitor,false);
@@ -1103,7 +1103,8 @@ struct OfficeAmbience::Impl {
         // Persistent tray pause is independent of capture, screen adjustment,
         // and per-device hardware ownership. Native tests cannot override it.
         const bool paused=outputPaused||screen->lightingPaused();
-        if(sessionLocked||displayOff||powerSuspended)awake.setContext(false,false);
+        if(sessionLocked||powerSuspended)awake.setContext(false,false);
+        else if(displayOff)awake.setContext(false,!desktopUnavailable&&!automaticSaver&&!monitorMissing,false);
         if(!sessionLocked && !displayOff && !powerSuspended && dirty.exchange(false)) chooseSource();
         awake.tick();
         const bool resting=!restReason().empty();
