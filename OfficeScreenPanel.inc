@@ -78,6 +78,7 @@ void saveScreen(){
 }
 QWidget* buildScreenPage(){
     using namespace officeui;
+    auto divider=[](){auto line=new QFrame;line->setFrameShape(QFrame::HLine);line->setStyleSheet("color:#1a303d;max-height:1px;");return line;};
     auto page=new QWidget;page->setObjectName("screenPage");auto outer=new QVBoxLayout(page);outer->setContentsMargins(24,16,24,16);outer->setSpacing(14);
     auto stateCard=new Card("Screen adjustment","settings_brightness");auto stateRow=new QHBoxLayout;screenStatus->setObjectName("screenStatus");screenStatus->setFont(body(16));screenStatus->setWordWrap(true);stateRow->addWidget(screenStatus,1);auto controls=new QVBoxLayout;screenManaged->setObjectName("screenManaged");controls->addWidget(screenManaged);screenPreview->setObjectName("screenCyclePreview");controls->addWidget(screenPreview);stateRow->addLayout(controls);stateCard->content->addLayout(stateRow);outer->addWidget(stateCard);
     screenTabs->setObjectName("screenTabs");outer->addWidget(screenTabs,1);
