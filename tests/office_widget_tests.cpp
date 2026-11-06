@@ -178,10 +178,26 @@ void hardwareEditor(QApplication& app) {
     dialog->findChild<QPushButton*>("hardwareAmbience")->click();require(sent.at("action")=="ambience","Return to ambience not wired");
     dialog->close();app.processEvents();
 }
+void screenEditor(QApplication& app){
+    Json sent;Panel panel("unused-screen-fixture",{},false,false,[&](Json request,OfficeReply reply){if(request.at("command")=="snapshot")reply({{"ok",false},{"error","No capture in Screen widget fixture"}});else{sent=request;reply({{"ok",true},{"result",Json::object()}});}});
+    Json settings={{"DayConfiguration",{{"Temperature",6600},{"Brightness",1.}}},{"NightConfiguration",{{"Temperature",6600},{"Brightness",.85}}},{"ConfigurationTransitionDuration","03:00:00"},{"ConfigurationSmoothingMaxDuration","00:00:05"},{"ConfigurationTransitionOffset",0.},{"Location",{{"Latitude",50.},{"Longitude",30.}}},{"ManualSunriseTime","07:20:00"},{"ManualSunsetTime","16:30:00"},{"WhitelistedApplications",Json::array()}};
+    Json value={{"settings",settings},{"revision",3},{"managed",true},{"temperature",6600},{"brightness",.85},{"gamma_valid",true},{"display_count",2},{"sunrise","07:00"},{"sunset","17:00"}};
+    panel.fixtureScreen(value);panel.show();app.processEvents();auto menu=panel.findChild<QMenu*>("officeTrayMenu");require(menu,"Real tray menu missing");
+    QStringList entries;for(auto action:menu->actions())if(action->isVisible()&&!action->isSeparator())entries<<action->text();
+    require(entries==QStringList{"Open","Disable lighting","Disable screen adjustments","Exit"},"Tray menu differs from exact agreed root structure");
+    auto lighting=panel.findChild<QMenu*>("lightingPauseMenu"),screen=panel.findChild<QMenu*>("screenPauseMenu");require(lighting&&screen&&lighting->actions().size()==11&&screen->actions().size()==11,"Pause choices missing");
+    lighting->actions().at(2)->trigger();require(sent.at("target")=="lighting"&&sent.at("mode")=="duration"&&sent.at("minutes")==1,"Real RGB pause action dispatch failed");
+    screen->actions().at(1)->trigger();require(sent.at("target")=="screen"&&sent.at("mode")=="sunrise","Real Screen pause action dispatch failed");
+    auto brightness=panel.findChild<QDoubleSpinBox*>("screen-NightConfiguration/Brightness");require(brightness&&brightness->value()==85,"Imported brightness not rendered");brightness->setValue(80);panel.findChild<QPushButton*>("screenSave")->click();
+    require(sent.at("action")=="save"&&sent.at("revision")==3&&sent.at("settings").at("NightConfiguration").at("Brightness")==.8,"Real Screen save did not send edited settings");
+    value["screen_disabled"]=true;value["lighting_disabled"]=false;panel.fixtureScreen(value);entries.clear();for(auto action:menu->actions())if(action->isVisible()&&!action->isSeparator())entries<<action->text();require(entries.contains("Enable screen adjustments")&&entries.contains("Disable lighting"),"Independent enable menu state failed");
+    require(panel.findChild<QTabWidget*>("screenTabs")->count()==4,"Screen feature tabs incomplete");
+}
 int main(int argc,char** argv) {
     QApplication app(argc,argv);
     try {
         officeui::loadFonts();
+        screenEditor(app);
         hardwareEditor(app);
         trayMenuBackground();
         invertedGrid(app);

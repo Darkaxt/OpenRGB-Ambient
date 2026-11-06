@@ -23,6 +23,7 @@
 #include "OfficeJournal.h"
 #include "OfficeHardware.h"
 #include "DisplayBrightness.h"
+#include "OfficeScreen.h"
 #include "OfficeSamplingShader.h"
 #include <OpenRGBPluginInterface.h>
 #include <ResourceManagerCallback.h>
@@ -643,6 +644,7 @@ struct OfficeAmbience::Impl {
     std::filesystem::path configPath,statusPath;
     Monitor selectedMonitor;
     office::DisplayBrightness displayBrightness;
+    std::unique_ptr<office::OfficeScreen> screen;
     Clock::time_point lastBrightnessRead{};
     std::vector<Device> devices;
     std::unique_ptr<office::HardwareState> hardware;
@@ -693,6 +695,7 @@ struct OfficeAmbience::Impl {
             self=static_cast<Impl*>(reinterpret_cast<CREATESTRUCTW*>(l)->lpCreateParams);
             SetWindowLongPtrW(window,GWLP_USERDATA,reinterpret_cast<LONG_PTR>(self));
         }
+        if(self && self->screen)try {self->screen->nativeEvent(message,w,l);}catch(const std::exception& e){self->journal->write("screen_event_error",{{"message",e.what()}});}
         if(self && message==WM_WTSSESSION_CHANGE) {
             self->journal->write("session_event",{{"notification",w},{"session_id",l}});
             if(w==WTS_SESSION_LOCK) {self->sessionLocked=true;self->standbyBegan=Clock::now();}
@@ -778,7 +781,7 @@ struct OfficeAmbience::Impl {
         Json settings={{"monitor",config.at("monitor")},{"enabled",config.at("enabled")},{"fps",config.at("fps")},{"smoothing_ms",config.at("smoothing_ms")}};
         const auto defaults=office::processingDefaults();for(auto& [key,value]:defaults.items()) settings[key]=config.at(key);
         return {{"revision",revision},{"online",online},{"settings",settings},
-                {"layout",layout},{"default_layout",factoryLayout},{"status",report()},{"colors",colours},{"effective_regions",effective},{"preview_png",image},{"preview_generation",previewKey},{"preview_blur",previewBlur},{"preview_encodes",encodes},{"preview_encode_ms",encodeMs},{"preview_error",previewError},
+                {"layout",layout},{"default_layout",factoryLayout},{"status",report()},{"screen",screen->snapshot()},{"colors",colours},{"effective_regions",effective},{"preview_png",image},{"preview_generation",previewKey},{"preview_blur",previewBlur},{"preview_encodes",encodes},{"preview_encode_ms",encodeMs},{"preview_error",previewError},
                 {"test_mode",standbyPreview?"standby":calibration?"calibration":identifyDevice.empty()?"none":"identify"}};
     }
     Json command(const Json& request) {
@@ -796,8 +799,9 @@ struct OfficeAmbience::Impl {
             return result;
         }
         journal->write("control_action",{{"command",name}});
+        if(name=="screen")return screen->command(request);
         if(name=="recover") {outputPaused=false;invalidate=true;dirty=true;return {{"accepted",true}};}
-        if(name=="pause_output") {outputPaused=!outputPaused;return {{"paused",outputPaused}};}
+        if(name=="pause_output") {screen->command({{"action","pause"},{"target","lighting"},{"mode",screen->lightingPaused()?"enable":"forever"}});return {{"paused",screen->lightingPaused()}};}
         if(name=="hardware")return hardwareCommand(request);
         if(name=="stop_test") {calibration=false;standbyPreview=false;identifyDevice.clear();return {{"accepted",true}};}
         if(name=="preview_standby") {calibration=false;identifyDevice.clear();standbyPreview=true;standbyBegan=Clock::now();return {{"accepted",true}};}
@@ -869,7 +873,7 @@ struct OfficeAmbience::Impl {
             if(name.empty() || name.size()>100 || name.find_first_of("\\/:*?\"<>|.")!=std::string::npos)throw std::runtime_error("Use a profile name without path characters or dots");
             {
             std::lock_guard lock(controllersMutex);if(detectionActive)throw std::runtime_error("Wait for discovery before using profiles");
-            if(!restReason().empty() || outputPaused || calibration || !identifyDevice.empty())throw std::runtime_error("End temporary tests and resume lighting before using native profiles");
+            if(!restReason().empty() || outputPaused || screen->lightingPaused() || calibration || !identifyDevice.empty())throw std::runtime_error("End temporary tests and resume lighting before using native profiles");
             if(action=="profile_save") {if(!api->SaveProfile(name))throw std::runtime_error("Native profile save failed");}
             else {
                 auto profiles=api->GetProfileList();if(std::find(profiles.begin(),profiles.end(),name)==profiles.end())throw std::runtime_error("Native profile no longer exists");
@@ -886,7 +890,7 @@ struct OfficeAmbience::Impl {
         auto key=request.at("device").get<std::string>();auto found=nativeControllers.find(key);
         if(found==nativeControllers.end() || detectionActive)throw std::runtime_error("Device is offline or discovery is in progress");
         auto* c=found->second;hardware->checkIdentity(c,request.at("identity"));
-        if(!restReason().empty() || outputPaused || calibration || !identifyDevice.empty())throw std::runtime_error("End temporary tests and resume lighting before changing hardware settings");
+        if(!restReason().empty() || outputPaused || screen->lightingPaused() || calibration || !identifyDevice.empty())throw std::runtime_error("End temporary tests and resume lighting before changing hardware settings");
         if(action=="ambience") {hardware->ambience(key,c);for(auto& d:devices)if(d.key==key)d.delivered=false;}
         else if(action=="mode")hardware->setMode(key,c,request.at("identity"),request.at("mode"));
         else if(action=="save_mode") {
@@ -907,9 +911,10 @@ struct OfficeAmbience::Impl {
         return hardware->describe(key,c,std::any_of(devices.begin(),devices.end(),[&](auto& d){return d.key==key;}));
     }
 
-    static void CALLBACK winEvent(HWINEVENTHOOK hook,DWORD event,HWND,LONG object,LONG,DWORD,DWORD) {
+    static void CALLBACK winEvent(HWINEVENTHOOK hook,DWORD event,HWND window,LONG object,LONG,DWORD,DWORD) {
         if(event!=EVENT_SYSTEM_DESKTOPSWITCH && object!=OBJID_WINDOW) return;
         auto found=hooks.find(hook); if(found!=hooks.end()) {
+            if(found->second->screen && (event==EVENT_SYSTEM_FOREGROUND||event==EVENT_SYSTEM_DESKTOPSWITCH||(event==EVENT_OBJECT_LOCATIONCHANGE&&window==GetForegroundWindow())))found->second->screen->foregroundChanged(event==EVENT_SYSTEM_FOREGROUND||event==EVENT_SYSTEM_DESKTOPSWITCH);
             if(event==EVENT_SYSTEM_DESKTOPSWITCH) found->second->journal->write("desktop_switch");
             found->second->dirty=true;
             if(event==EVENT_SYSTEM_DESKTOPSWITCH) found->second->invalidate=true;
@@ -920,6 +925,7 @@ struct OfficeAmbience::Impl {
     Impl(OpenRGBPluginAPIInterface* api,const std::filesystem::path& path,bool activate=true):journal(std::make_shared<office::Journal>(path.parent_path()/"logs"/"office-ambience-events.jsonl")),api(api),configPath(path) {
         journal->write("owner_start",{{"executable",QCoreApplication::applicationFilePath().toStdString()}});
         std::ifstream file(path);file>>config;diskConfig=config;
+        screen=std::make_unique<office::OfficeScreen>(path.parent_path(),activate);
         hardware=std::make_unique<office::HardwareState>(QString::fromStdWString((path.parent_path()/"office-hardware.json").wstring()));
         bindHardware(api->GetRGBControllers());
         // Legacy display names are accepted on disk but never pin capture to
@@ -982,6 +988,7 @@ struct OfficeAmbience::Impl {
         if(!RegisterClassW(&cls) && GetLastError()!=ERROR_CLASS_ALREADY_EXISTS) throw std::runtime_error("Cannot register capture lifecycle events");
         eventWindow=CreateWindowW(cls.lpszClassName,L"",0,0,0,0,0,nullptr,nullptr,cls.hInstance,this);
         if(!eventWindow || !WTSRegisterSessionNotification(eventWindow,NOTIFY_FOR_THIS_SESSION)) throw std::runtime_error("Cannot register session capture events");
+        screen->attach(eventWindow,[]{auto pid=GetCurrentProcessId();auto name=L"Local\\OpenRGB.Office.Show."+std::to_wstring(pid);HANDLE event=OpenEventW(EVENT_MODIFY_STATE,FALSE,name.c_str());if(event){SetEvent(event);CloseHandle(event);}});
         displayNotification=RegisterPowerSettingNotification(eventWindow,&sessionDisplayState,DEVICE_NOTIFY_WINDOW_HANDLE);
         if(!displayNotification) throw std::runtime_error("Cannot register session display power events");
         // WTS notifications cover subsequent transitions; query the initial
@@ -1010,6 +1017,7 @@ struct OfficeAmbience::Impl {
         journal->write("owner_stop_begin");
         control.reset();
         output.stop();
+        screen->shutdown();
         releaseEvents();
         capture.reset();
         mode="stopped"; status();
@@ -1078,6 +1086,9 @@ struct OfficeAmbience::Impl {
         return sessionLocked?"session-locked":displayOff?"display-asleep":automaticSaver?"automatic-screensaver":desktopUnavailable?"secure-desktop":monitorMissing?"monitor-disconnected":"";
     }
     void tick() {
+        // Persistent tray pause is independent of capture, screen adjustment,
+        // and per-device hardware ownership. Native tests cannot override it.
+        const bool paused=outputPaused||screen->lightingPaused();
         if(!sessionLocked && !displayOff && dirty.exchange(false)) chooseSource();
         const bool resting=!restReason().empty();
         if(restReason()!=loggedRest) {journal->write("rest_transition",{{"previous",loggedRest},{"reason",restReason()}});loggedRest=restReason();}
@@ -1086,7 +1097,9 @@ struct OfficeAmbience::Impl {
             inputFrames=deliveredFrames=0;changedInputFrames=skippedInputFrames=samplingPasses=0;received={};error.clear();
         }
         auto now=Clock::now();
-        if(!resting && config.at("follow_display_brightness").get<bool>() &&
+        auto managedBrightness=screen->appliedBrightness(selectedMonitor.name);
+        if(managedBrightness){displayBrightness.display=selectedMonitor.name;displayBrightness.factor=*managedBrightness;displayBrightness.valid=true;displayBrightness.error.clear();}
+        if(!managedBrightness && !resting && config.at("follow_display_brightness").get<bool>() &&
            (lastBrightnessRead==Clock::time_point{} || displayBrightness.display!=selectedMonitor.name || now-lastBrightnessRead>=std::chrono::seconds(1))) {
             // Gamma has no change-notification API. Sample at 1 Hz independently
             // of capture; this observation period is not a recovery deadline.
@@ -1115,7 +1128,7 @@ struct OfficeAmbience::Impl {
         }
         if(!identifyDevice.empty() && now>=identifyUntil) identifyDevice.clear();
         bool standby=resting || standbyPreview;
-        if(!latest.empty() || calibration || !identifyDevice.empty() || standby || outputPaused || hardware->any()) {
+        if(!latest.empty() || calibration || !identifyDevice.empty() || standby || paused || hardware->any()) {
             auto submitBegan=Clock::now();
             auto sentBefore=deviceSubmissions;
             double elapsedMs=std::chrono::duration<double,std::milli>(now-lastOutput).count();
@@ -1123,7 +1136,7 @@ struct OfficeAmbience::Impl {
             {std::lock_guard lock(controllersMutex);
             for(auto& device:devices) {
                 bool changed=false;
-                bool overrideHardware=resting || standbyPreview || outputPaused || !config.at("enabled").get<bool>() || calibration || !identifyDevice.empty();
+                bool overrideHardware=resting || standbyPreview || paused || !config.at("enabled").get<bool>() || calibration || !identifyDevice.empty();
                 try {if(hardware->output(device.key,device.controller,overrideHardware,true)){++deviceIndex;continue;}}
                 catch(const std::exception& e){controllerError=e.what();++deviceIndex;continue;}
                 if(hardware->consumeReset(device.key))device.delivered=false;
@@ -1146,7 +1159,7 @@ struct OfficeAmbience::Impl {
                         double gain=displayBrightness.applied(config.at("follow_display_brightness").get<bool>());
                         target=ToRGBColor(office::dimChannel(RGBGetRValue(target),gain),office::dimChannel(RGBGetGValue(target),gain),office::dimChannel(RGBGetBValue(target),gain));
                     }
-                    if(resting || outputPaused) target=0;
+                    if(resting || paused) target=0;
                     auto previous=device.colors[index];
                     double delta=std::max({std::abs(int(RGBGetRValue(target))-int(RGBGetRValue(previous))),std::abs(int(RGBGetGValue(target))-int(RGBGetGValue(previous))),std::abs(int(RGBGetBValue(target))-int(RGBGetBValue(previous)))});
                     auto weight=office::smoothingWeight(config,elapsedMs,delta);
@@ -1154,7 +1167,7 @@ struct OfficeAmbience::Impl {
                         office::adaptedChannel(RGBGetRValue(target),RGBGetRValue(previous),weight),
                         office::adaptedChannel(RGBGetGValue(target),RGBGetGValue(previous),weight),
                         office::adaptedChannel(RGBGetBValue(target),RGBGetBValue(previous),weight)):target;
-                    if(testing || !enabled || resting || outputPaused) color=target;
+                    if(testing || !enabled || resting || paused) color=target;
                     device.colors[index]=color;
                     if(device.controller && (!device.delivered || previous!=color)) {
                         device.controller->SetColor(static_cast<unsigned>(index),color);changed=true;++ledWrites;
@@ -1164,7 +1177,7 @@ struct OfficeAmbience::Impl {
                 ++deviceIndex;
             }
             for(auto& [key,c]:nativeControllers)if(std::none_of(devices.begin(),devices.end(),[&](auto& d){return d.key==key;}) && hardware->hardware(key)) {
-                try {bool over=resting || outputPaused || !config.at("enabled").get<bool>();if(!hardware->output(key,c,over,false) && over && hardware->consumeReset(key)){c->SetAllColors(0);c->UpdateLEDs();}}
+                try {bool over=resting || paused || !config.at("enabled").get<bool>();if(!hardware->output(key,c,over,false) && over && hardware->consumeReset(key)){c->SetAllColors(0);c->UpdateLEDs();}}
                 catch(const std::exception& e){controllerError=e.what();}
             }}
             initialized=true; ++outputFrames;
@@ -1190,7 +1203,7 @@ struct OfficeAmbience::Impl {
             {"display_brightness_display",displayBrightness.display},
             {"capture_bounds",{selectedMonitor.bounds.left,selectedMonitor.bounds.top,selectedMonitor.bounds.right,selectedMonitor.bounds.bottom}},
             {"source_generation",sourceGeneration},
-            {"application_model","unified"},{"output_thread",GetCurrentThreadId()},{"output_paused",outputPaused},
+            {"application_model","unified"},{"output_thread",GetCurrentThreadId()},{"output_paused",outputPaused||screen->lightingPaused()},{"screen",screen->status()},
             {"devices",devices.size()},{"leds",samples.size()},{"output_frames",outputFrames},
             {"input_frames",inputFrames},{"gpu_processing_ms",processingMs},
             {"changed_input_frames",changedInputFrames},{"skipped_input_frames",skippedInputFrames},{"sampling_passes",samplingPasses},

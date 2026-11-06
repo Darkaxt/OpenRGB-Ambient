@@ -73,6 +73,15 @@ struct OfficeLifecycleTest {
         auto key=owner.nativeKey(&keys),identity=office::HardwareState::identity(&keys);auto request=Json{{"command","hardware"},{"action","mode"},{"device",key},{"identity",identity},{"mode",office::HardwareState::mode(&keys,1)}};
         owner.command(request);auto writes=keys.writes,updates=keys.updates;owner.latest.assign(314,ToRGBColor(60,40,20));owner.tick();
         require(keys.writes==writes && keys.updates==updates,"Ambience overwrote the explicit native effect");
+        owner.command({{"command","screen"},{"action","pause"},{"target","lighting"},{"mode","forever"}});owner.tick();
+        require(owner.devices[2].colors[0]==0&&owner.report().at("output_paused")==true,"Tray pause did not black native effects and ambience");
+        owner.command({{"command","identify_all"}});owner.tick();require(owner.devices[2].colors[0]==0,"Identify overrode explicit lighting pause");owner.command({{"command","stop_test"}});
+        owner.command({{"command","screen"},{"action","pause"},{"target","lighting"},{"mode","enable"}});owner.tick();
+        require(keys.active==1&&!owner.report().at("output_paused").get<bool>(),"Native effect failed to resume after RGB pause");
+        owner.command({{"command","screen"},{"action","pause"},{"target","screen"},{"mode","forever"}});owner.tick();
+        require(!owner.report().at("output_paused").get<bool>()&&owner.screen->status().at("screen_disabled")==true,"Screen pause disabled RGB");
+        owner.command({{"command","screen"},{"action","pause"},{"target","screen"},{"mode","enable"}});
+        writes=keys.writes;updates=keys.updates;
         owner.command({{"command","hardware"},{"action","save_mode"},{"device",key},{"identity",identity},{"mode",1},{"name","Pulse"}});require(keys.saves==1,"Native SaveMode did not reach hardware API");
         owner.command({{"command","identify_all"}});owner.tick();require(keys.writes>writes,"Temporary Identify did not take over native hardware");
         bool rejected=false;try{owner.command({{"command","hardware"},{"action","profile_load"},{"name","Test"}});}catch(const std::exception&){rejected=true;}

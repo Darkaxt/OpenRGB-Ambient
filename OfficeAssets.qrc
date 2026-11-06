@@ -1,4 +1,5 @@
 <RCC><qresource prefix="/office">
+<file alias="lightbulb.ico">assets/office/lightbulb.ico</file>
 <file alias="LICENSE-Material-Symbols.txt">assets/office/LICENSE-Material-Symbols.txt</file>
 <file alias="LICENSE-Orbitron.txt">assets/office/LICENSE-Orbitron.txt</file>
 <file alias="LICENSE-Rajdhani.txt">assets/office/LICENSE-Rajdhani.txt</file>

@@ -166,7 +166,7 @@ QPushButton{background:#0a1b25;border:1px solid #23525b;border-radius:9px;paddin
 QPushButton[primary='true']{background:#07323a;border-color:#008d9c;color:#14f5ff;}
 QPushButton:hover{background:#10333e;border-color:#14f5ff;} QPushButton:pressed{background:#0b4650;}
 QPushButton:focus{outline:1px dotted #cdd6e0;} QPushButton:disabled{color:#637486;border-color:#25323d;}
-QLineEdit,QSpinBox,QDoubleSpinBox,QComboBox{background:#020b12;border:1px solid #16414a;border-radius:9px;padding:7px 10px;min-height:22px;selection-background-color:#106878;}
+QLineEdit,QSpinBox,QDoubleSpinBox,QComboBox,QTimeEdit,QKeySequenceEdit{background:#020b12;border:1px solid #16414a;border-radius:9px;padding:7px 10px;min-height:22px;selection-background-color:#106878;}
 QLineEdit:focus,QSpinBox:focus,QDoubleSpinBox:focus,QComboBox:focus{border-color:#14f5ff;}
 QAbstractSpinBox[readout='true']{font-family:'Office Display';font-weight:700;font-size:17px;color:#14f5ff;background:transparent;border:0;padding:0;}
 QComboBox{padding-right:26px;} QComboBox::drop-down{width:25px;border:0;}

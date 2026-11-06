@@ -4,6 +4,9 @@
 #include "OfficeProcessing.h"
 #include "OfficeStyle.h"
 #include "OfficePanel.h"
+#include "OfficeScreenPolicy.h"
+#include <QTimeEdit>
+#include <QKeySequenceEdit>
 #include <QPointer>
 #include <QDialog>
 #include <QDialogButtonBox>
@@ -491,6 +494,7 @@ class Panel : public QMainWindow {
         if(!file.open(QIODevice::WriteOnly) || file.write(data)!=data.size() || !file.commit()) {failure("Could not save panel preferences");return;}panelOptions=next;
     }
     #include "OfficeHardwarePanel.inc"
+    #include "OfficeScreenPanel.inc"
     void buildViews();
     void arrangeDashboard();
     void mapToEdge(int edge) {
@@ -564,6 +568,7 @@ class Panel : public QMainWindow {
     void load(const Json& snapshot,bool force=false) {
         trace("snapshot-accepted");
         lastSnapshot=snapshot;
+        if(snapshot.contains("screen"))loadScreen(snapshot.at("screen"));
         bool newHardware=false;
         if(snapshot.contains("hardware")) {
             auto before=hardwareData.value("devices",Json::array()),after=snapshot.at("hardware").at("devices");
@@ -783,6 +788,14 @@ class Panel : public QMainWindow {
         // Supplemental presentations are local UI fixtures, never saved to the
         // hardware owner. They expose states absent from the live gallery.
         resize(1440,900);result["states"]=Json::array();result["hardware_views"]=Json::array();
+        result["screen_views"]=Json::array();pages->setCurrentIndex(7);
+        for(int tab=0;tab<screenTabs->count();++tab){screenTabs->setCurrentIndex(tab);QApplication::sendPostedEvents();centralWidget()->layout()->activate();auto file=exportPath+"/screen-tab-"+QString::number(tab)+".png";if(!grab().save(file))throw std::runtime_error("Cannot export Screen tab");result["screen_views"].push_back({{"tab",screenTabs->tabText(tab).toStdString()},{"path",file.toStdString()}});}screenTabs->setCurrentIndex(0);
+        result["tray"]=Json::array();
+        for(auto action:trayMenu->actions())if(action->isVisible()){
+            Json item={{"text",action->text().toStdString()},{"separator",action->isSeparator()}};
+            if(action->menu()){item["children"]=Json::array();for(auto child:action->menu()->actions())item["children"].push_back(child->text().toStdString());}result["tray"].push_back(item);
+        }
+        for(auto menu:{trayMenu,lightingPauseMenu,screenPauseMenu}){menu->ensurePolished();menu->resize(menu->sizeHint());QImage image(menu->size(),QImage::Format_ARGB32_Premultiplied);image.fill(Qt::transparent);menu->render(&image);if(!image.save(exportPath+"/"+menu->objectName()+".png"))throw std::runtime_error("Cannot export real tray menu");}
         if(hardwareData.contains("devices"))for(const auto& device:hardwareData.at("devices")) {
             hardwareDialog(device);auto dialog=findChild<QDialog*>("hardwareDialog");auto tabs=dialog->findChild<QTabWidget*>("hardwareTabs");
             for(int tab=0;tab<tabs->count();++tab){tabs->setCurrentIndex(tab);QApplication::sendPostedEvents();dialog->layout()->activate();
@@ -850,6 +863,7 @@ class Panel : public QMainWindow {
 public:
 #ifdef OFFICE_WIDGET_TEST
     void fixtureHardware(const Json& value) {refresh.stop();client.connected={};hardwareDialog(value);}
+    void fixtureScreen(const Json& value) {refresh.stop();client.connected={};loadScreen(value);shellPages->setCurrentIndex(0);pages->setCurrentIndex(7);}
     bool fixtureWantsPreview() const {return wantsPreview();}
     Json fixturePreviewRequest() const {return previewRequest();}
     void fixturePreviewReply(const Json& reply) {loadPreview(reply);}
@@ -881,7 +895,7 @@ public:
         // Do not open an invisible unsaved-draft dialog on diagnostic shutdown.
         if(exported && !exportPath.isEmpty()){event->accept();return;}
         if(tray && !quitRequested && panelOptions.value("close_to_tray",true)) {hide();event->ignore();return;}
-        if(dirty && QMessageBox::question(this,"Unsaved map","Close without saving your changes?")!=QMessageBox::Yes) {event->ignore();return;}
+        if((dirty || screenDirty) && QMessageBox::question(this,"Unsaved settings","Close without saving your changes?")!=QMessageBox::Yes) {event->ignore();return;}
         action({{"command","stop_test"}});event->accept();
         if(client.direct) QCoreApplication::quit();
     }
