@@ -6,6 +6,9 @@
 #include <condition_variable>
 #include <iostream>
 #include <thread>
+#include <QThread>
+#include <cstdio>
+#include <QEventLoop>
 
 struct Controller : StubRGBControllerInterface {
     std::string name, description;
@@ -131,10 +134,83 @@ struct OfficeLifecycleTest {
         require(passed,"Screensaver enumeration selects full LG window from another desktop, excluding floating windows");
         require(ordinaryRejected && manualRecognized,"Recognize manually launched screensaver tool window without SPI flag; reject an ordinary fullscreen app");
     }
+    static void awakePolicy() {
+        BOOL saverBefore{};UINT timeoutBefore{};
+        require(SystemParametersInfoW(SPI_GETSCREENSAVEACTIVE,0,&saverBefore,0)&&SystemParametersInfoW(SPI_GETSCREENSAVETIMEOUT,0,&timeoutBefore,0),"Read original screensaver settings");
+        auto name=L"OfficeAwakeTest-"+std::to_wstring(GetCurrentProcessId());
+        HDESK desktop=CreateDesktopW(name.c_str(),nullptr,nullptr,0,GENERIC_ALL,nullptr);
+        require(desktop!=nullptr,"Create private awake test desktop");
+        std::exception_ptr failure;
+        auto thread=QThread::create([&]{
+            HWND window{},floating{},saver{};const wchar_t* saverClass=L"WindowsScreenSaverClass";
+            try {
+                require(SetThreadDesktop(desktop)!=FALSE,"Bind test thread to private desktop");
+                QTemporaryDir dir;require(dir.isValid(),"Awake fixture directory");
+                auto path=std::filesystem::path(dir.path().toStdWString())/"office-ambience.json";
+                {std::ofstream out(path);out<<Json{{"monitor","primary"},{"fps",15},{"smoothing_ms",0}};}
+                {std::ofstream out(path.parent_path()/"office-screen.json");out<<Json{{"settings",Json::object()},{"managed",false}};}
+                Controller strip("Govee H6609",20),bars("Govee H8048",20),keys("Keychron Q6 HE ISO",109),laptop("Lenovo Legion 7 Gen 8",109),desk("Secretlab",48,"NL72S2"),mouse("G502 X PLUS",8);
+                Api api;api.controllers={&strip,&bars,&keys,&laptop,&desk,&mouse};
+                OfficeAmbience::Impl owner(&api,path,true);auto main=primaryMonitor();auto r=main.bounds;
+                auto requests=[](){
+                    FILE* pipe=_popen("powercfg.exe /requests","r");require(pipe!=nullptr,"Query native power request inventory");
+                    std::string value;char buffer[4096];while(std::fgets(buffer,sizeof(buffer),pipe))value+=buffer;
+                    require(_pclose(pipe)==0,"Native power request query must succeed on hosted Windows runner");return value;
+                };
+                const std::string reason="Office Ambilight: automatic or manual keep awake";
+                auto expect=[&](bool on,const char* message){owner.chooseSource(main);require(owner.awake.active()==on,message);require(owner.awake.status().at("error")=="","Native awake request rejected");};
+                window=CreateWindowW(L"STATIC",L"Ordinary app",WS_OVERLAPPEDWINDOW|WS_VISIBLE,r.left+40,r.top+40,240,160,nullptr,nullptr,GetModuleHandleW(nullptr),nullptr);
+                require(window!=nullptr,"Create isolated app");expect(false,"Floating app kept display awake");
+                ShowWindow(window,SW_MAXIMIZE);expect(true,"Maximized main-display app did not acquire awake requests");
+                auto native=requests();auto first=native.find(reason);require(first!=native.npos&&native.find(reason,first+reason.size())!=native.npos,"Windows must independently report display and system requests");
+                floating=CreateWindowW(L"STATIC",L"Floating overlay",WS_OVERLAPPEDWINDOW|WS_VISIBLE,r.left+20,r.top+20,200,150,nullptr,nullptr,GetModuleHandleW(nullptr),nullptr);
+                expect(true,"Non-foreground maximized app lost its awake lease");
+                ShowWindow(window,SW_RESTORE);expect(false,"Restored window retained request");require(requests().find(reason)==std::string::npos,"Windows retained cleared power request");
+                ShowWindow(window,SW_MAXIMIZE);expect(true,"Maximize failed to reacquire");ShowWindow(window,SW_MINIMIZE);expect(false,"Minimized app retained request");
+                DestroyWindow(window);window=CreateWindowW(L"STATIC",L"Fullscreen app",WS_POPUP|WS_VISIBLE,r.left,r.top,r.right-r.left,r.bottom-r.top,nullptr,nullptr,GetModuleHandleW(nullptr),nullptr);
+                require(window&&!IsZoomed(window),"Create borderless fullscreen app");expect(true,"Borderless fullscreen app did not acquire request");
+                MONITORINFO secondary{};secondary.cbSize=sizeof(secondary);
+                EnumDisplayMonitors(nullptr,nullptr,[](HMONITOR h,HDC,LPRECT,LPARAM p)->BOOL{MONITORINFO info{sizeof(info)};if(GetMonitorInfoW(h,&info)&&!(info.dwFlags&MONITORINFOF_PRIMARY)){*reinterpret_cast<MONITORINFO*>(p)=info;return FALSE;}return TRUE;},reinterpret_cast<LPARAM>(&secondary));
+                auto other=secondary.rcMonitor;if(other.right==other.left)other={r.right+100,r.top,r.right+500,r.top+300};
+                SetWindowPos(window,nullptr,other.left,other.top,other.right-other.left,other.bottom-other.top,SWP_NOACTIVATE|SWP_NOZORDER);expect(false,"App outside main display retained request");
+                SetWindowPos(window,nullptr,r.left,r.top,r.right-r.left,r.bottom-r.top,SWP_NOACTIVATE|SWP_NOZORDER);expect(true,"Return to main display failed to reacquire");
+                OfficeAmbience::Impl::nativeEvent(owner.eventWindow,WM_WTSSESSION_CHANGE,WTS_SESSION_LOCK,0);require(!owner.awake.active(),"Lock did not release native request");expect(false,"Locked session reacquired request");
+                OfficeAmbience::Impl::nativeEvent(owner.eventWindow,WM_WTSSESSION_CHANGE,WTS_SESSION_UNLOCK,0);expect(true,"Unlock failed to reacquire");
+                OfficeAmbience::Impl::nativeEvent(owner.eventWindow,WM_POWERBROADCAST,PBT_APMSUSPEND,0);expect(false,"Suspended session retained request");
+                OfficeAmbience::Impl::nativeEvent(owner.eventWindow,WM_POWERBROADCAST,PBT_APMRESUMEAUTOMATIC,0);expect(true,"Resume failed to reacquire");
+                struct Setting {GUID guid;DWORD length;DWORD state;} setting{OfficeAmbience::Impl::sessionDisplayState,sizeof(DWORD),0};
+                OfficeAmbience::Impl::nativeEvent(owner.eventWindow,WM_POWERBROADCAST,PBT_POWERSETTINGCHANGE,reinterpret_cast<LPARAM>(&setting));expect(false,"Display off retained request");
+                setting.state=1;OfficeAmbience::Impl::nativeEvent(owner.eventWindow,WM_POWERBROADCAST,PBT_POWERSETTINGCHANGE,reinterpret_cast<LPARAM>(&setting));expect(true,"Display on failed to reacquire");
+                WNDCLASSW cls{};cls.lpfnWndProc=DefWindowProcW;cls.lpszClassName=saverClass;cls.hInstance=GetModuleHandleW(nullptr);require(RegisterClassW(&cls)!=0,"Register manual saver fixture");
+                saver=CreateWindowExW(WS_EX_TOOLWINDOW,saverClass,L"Manual saver",WS_POPUP|WS_VISIBLE,r.left,r.top,r.right-r.left,r.bottom-r.top,nullptr,nullptr,cls.hInstance,nullptr);
+                require(saver!=nullptr,"Create manual saver");expect(false,"Manual screensaver retained application awake request");
+                DestroyWindow(saver);saver=nullptr;expect(true,"Leaving manual saver failed to reacquire app request");
+                DestroyWindow(window);window=nullptr;expect(false,"Closed app retained request");
+                require(requests().find(reason)==std::string::npos,"Final request remained registered with Windows");
+                auto command=[&](Json request){request["command"]="awake";return owner.command(request);};
+                command({{"action","mode"},{"mode","indefinite"}});require(owner.awake.active()&&!owner.awake.status().at("display_required").get<bool>(),"Unchecked Keep screen on must hold only system sleep");
+                command({{"action","display"},{"enabled",true}});require(owner.awake.status().at("display_required")==true,"Keep screen on did not acquire display request");
+                command({{"action","mode"},{"mode","off"}});require(!owner.awake.active(),"Off retained a manual request");
+                auto timed=command({{"action","mode"},{"mode","interval"},{"seconds",1}});
+                {office::OfficeAwake restored(path.parent_path(),false);require(restored.status().at("mode")=="interval"&&restored.status().at("until_ms")==timed.at("until_ms"),"Restart lost active interval deadline");}
+                auto awaitExpiry=[&]{QEventLoop loop;QTimer observation;QObject::connect(&observation,&QTimer::timeout,[&]{owner.awake.tick();if(owner.awake.status().at("mode")=="off")loop.quit();});observation.start(20);loop.exec();require(!owner.awake.active(),"Deadline did not release actual request");};
+                awaitExpiry();require(requests().find(reason)==std::string::npos,"Interval expiry left native requests");
+                command({{"action","mode"},{"mode","expiration"},{"until_ms",QDateTime::currentMSecsSinceEpoch()+1000}});awaitExpiry();
+                bool rejected=false;try{command({{"action","mode"},{"mode","expiration"},{"until_ms",QDateTime::currentMSecsSinceEpoch()-1}});}catch(const std::exception&){rejected=true;}require(rejected,"Past expiration was accepted");
+                command({{"action","mode"},{"mode","automatic"}});expect(false,"Automatic without qualifying app held a request");
+                std::cout<<"Actual main-display window eligibility, native DISPLAY/SYSTEM request inventory, lifecycle release and manual saver behavior passed\n";
+            }catch(...){failure=std::current_exception();}
+            if(saver)DestroyWindow(saver);if(floating)DestroyWindow(floating);if(window)DestroyWindow(window);UnregisterClassW(saverClass,GetModuleHandleW(nullptr));
+        });
+        thread->start();thread->wait();delete thread;CloseDesktop(desktop);if(failure)std::rethrow_exception(failure);
+        BOOL saverAfter{};UINT timeoutAfter{};
+        require(SystemParametersInfoW(SPI_GETSCREENSAVEACTIVE,0,&saverAfter,0)&&SystemParametersInfoW(SPI_GETSCREENSAVETIMEOUT,0,&timeoutAfter,0)&&saverBefore==saverAfter&&timeoutBefore==timeoutAfter,"Awake changed screensaver configuration");
+    }
     static void run() {
         savePreservesUntouchedSettings();
         hardwareOwnership();
         screensaverSelection();
+        awakePolicy();
         auto primary=primaryMonitor();MONITORINFO primaryInfo{};primaryInfo.cbSize=sizeof(primaryInfo);
         require(primary.handle && GetMonitorInfoW(primary.handle,&primaryInfo) && (primaryInfo.dwFlags&MONITORINFOF_PRIMARY),"Resolve Windows main display, not enumeration order or saved DISPLAY name");
         require(EqualRect(&primary.bounds,&primaryInfo.rcMonitor) && !primary.name.empty(),"Primary capture uses actual native display bounds and identity");

@@ -186,7 +186,7 @@ void screenEditor(QApplication& app){
     Json value={{"settings",settings},{"revision",3},{"managed",true},{"temperature",6600},{"brightness",.85},{"gamma_valid",true},{"display_count",2},{"sunrise","07:00"},{"sunset","17:00"},{"cycle_seconds",43200.},{"cycle_state","day"},{"cycle_times",{{"sunrise_start",14400.},{"sunrise_end",25200.},{"sunset_start",61200.},{"sunset_end",72000.}}}};
     panel.fixtureScreen(value);panel.show();app.processEvents();auto menu=panel.findChild<QMenu*>("officeTrayMenu");require(menu,"Real tray menu missing");
     QStringList entries;for(auto action:menu->actions())if(action->isVisible()&&!action->isSeparator())entries<<action->text();
-    require(entries==QStringList{"Open","Disable lighting","Disable screen adjustments","Exit"},"Tray menu differs from exact agreed root structure");
+    require(entries==QStringList{"Open","Disable lighting","Disable screen adjustments","Awake","Exit"},"Tray menu differs from agreed root structure with Awake addition");
     auto lighting=panel.findChild<QMenu*>("lightingPauseMenu"),screen=panel.findChild<QMenu*>("screenPauseMenu");require(lighting&&screen&&lighting->actions().size()==11&&screen->actions().size()==11,"Pause choices missing");
     lighting->actions().at(2)->trigger();require(sent.at("target")=="lighting"&&sent.at("mode")=="duration"&&sent.at("minutes")==1,"Real RGB pause action dispatch failed");
     screen->actions().at(1)->trigger();require(sent.at("target")=="screen"&&sent.at("mode")=="sunrise","Real Screen pause action dispatch failed");
@@ -210,11 +210,24 @@ void screenEditor(QApplication& app){
     require(panel.captionHit(maximize->mapTo(&panel,maximize->rect().center()))==HTMAXBUTTON,"Maximize does not expose Windows snap hit target");
     require(panel.captionHit(close->mapTo(&panel,close->rect().center()))==HTCLIENT,"Close button became a drag region");
 }
+void awakeEditor(QApplication& app){
+    Json sent;Panel panel("unused-awake-fixture",{},false,false,[&](Json request,OfficeReply reply){if(request.at("command")=="snapshot")reply({{"ok",false},{"error","No capture in awake widget fixture"}});else{sent=request;reply({{"ok",true},{"result",Json::object()}});}});
+    Json value={{"mode","automatic"},{"keep_screen_on",false},{"until_ms",0},{"intervals",Json::array({{{"label","30 minutes"},{"seconds",1800}},{{"label","1 hour"},{"seconds",3600}},{{"label","2 hours"},{"seconds",7200}}})}};
+    panel.fixtureAwake(value);auto automatic=panel.findChild<QAction*>("awakeAutomatic"),indefinite=panel.findChild<QAction*>("awakeIndefinite"),off=panel.findChild<QAction*>("awakeOff"),display=panel.findChild<QAction*>("awakeKeepScreenOn");
+    require(automatic&&automatic->isChecked()&&display->isChecked()&&!display->isEnabled(),"Automatic mode must visibly require display awake");
+    auto intervals=panel.findChild<QMenu*>("awakeIntervalMenu");require(intervals&&intervals->actions().size()==3,"PowerToys default intervals missing");intervals->actions()[1]->trigger();require(sent.at("command")=="awake"&&sent.at("mode")=="interval"&&sent.at("seconds")==3600,"Interval action did not dispatch to real owner path");
+    indefinite->trigger();require(sent.at("mode")=="indefinite","Indefinite action failed");
+    value["mode"]="indefinite";panel.fixtureAwake(value);require(display->isEnabled()&&!display->isChecked(),"Manual Keep screen on preference lost");display->trigger();require(sent.at("action")=="display"&&sent.at("enabled")==true,"Keep screen on action failed");
+    off->trigger();require(sent.at("mode")=="off","Off action failed");value["mode"]="off";panel.fixtureAwake(value);require(off->isChecked()&&!display->isEnabled(),"Off did not disable display preference control");
+    panel.findChild<QAction*>("awakeExpiration")->trigger();app.processEvents();auto dialog=panel.findChild<QDialog*>("awakeExpirationDialog");require(dialog,"Expiration chooser missing");auto time=dialog->findChild<QDateTimeEdit*>("awakeExpirationTime");auto target=QDateTime::currentDateTime().addSecs(7200);time->setDateTime(target);dialog->findChild<QDialogButtonBox*>()->button(QDialogButtonBox::Save)->click();
+    require(sent.at("mode")=="expiration"&&std::abs(sent.at("until_ms").get<int64_t>()-target.toMSecsSinceEpoch())<1000,"Expiration chooser did not submit its selected native date/time");
+}
 int main(int argc,char** argv) {
     QApplication app(argc,argv);
     try {
         officeui::loadFonts();
         screenEditor(app);
+        awakeEditor(app);
         hardwareEditor(app);
         trayMenuBackground();
         invertedGrid(app);

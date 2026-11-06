@@ -8,6 +8,8 @@
 #include "OfficeSundial.h"
 #include "OfficeWindow.h"
 #include <QTimeEdit>
+#include <QDateTimeEdit>
+#include <QActionGroup>
 #include <QKeySequenceEdit>
 #include <QPointer>
 #include <QDialog>
@@ -497,6 +499,7 @@ class Panel : public officeui::OfficeWindow {
     }
     #include "OfficeHardwarePanel.inc"
     #include "OfficeScreenPanel.inc"
+    #include "OfficeAwakePanel.inc"
     void buildViews();
     void arrangeDashboard();
     void mapToEdge(int edge) {
@@ -571,6 +574,7 @@ class Panel : public officeui::OfficeWindow {
         trace("snapshot-accepted");
         lastSnapshot=snapshot;
         if(snapshot.contains("screen"))loadScreen(snapshot.at("screen"));
+        if(snapshot.at("status").contains("awake"))loadAwake(snapshot.at("status").at("awake"));
         bool newHardware=false;
         if(snapshot.contains("hardware")) {
             auto before=hardwareData.value("devices",Json::array()),after=snapshot.at("hardware").at("devices");
@@ -807,7 +811,8 @@ class Panel : public officeui::OfficeWindow {
             Json item={{"text",action->text().toStdString()},{"separator",action->isSeparator()}};
             if(action->menu()){item["children"]=Json::array();for(auto child:action->menu()->actions())item["children"].push_back(child->text().toStdString());}result["tray"].push_back(item);
         }
-        for(auto menu:{trayMenu,lightingPauseMenu,screenPauseMenu}){menu->ensurePolished();menu->resize(menu->sizeHint());QImage image(menu->size(),QImage::Format_ARGB32_Premultiplied);image.fill(Qt::transparent);menu->render(&image);if(!image.save(exportPath+"/"+menu->objectName()+".png"))throw std::runtime_error("Cannot export real tray menu");}
+        for(auto menu:{trayMenu,lightingPauseMenu,screenPauseMenu,awakeMenu,awakeIntervalMenu}){menu->ensurePolished();menu->resize(menu->sizeHint());QImage image(menu->size(),QImage::Format_ARGB32_Premultiplied);image.fill(Qt::transparent);menu->render(&image);if(!image.save(exportPath+"/"+menu->objectName()+".png"))throw std::runtime_error("Cannot export real tray menu");}
+        showAwakeExpiration();QApplication::sendPostedEvents();auto expiry=findChild<QDialog*>("awakeExpirationDialog");expiry->layout()->activate();if(!expiry->grab().save(exportPath+"/awake-expiration.png"))throw std::runtime_error("Cannot export awake expiration picker");expiry->reject();
         if(hardwareData.contains("devices"))for(const auto& device:hardwareData.at("devices")) {
             hardwareDialog(device);auto dialog=findChild<QDialog*>("hardwareDialog");auto tabs=dialog->findChild<QTabWidget*>("hardwareTabs");
             for(int tab=0;tab<tabs->count();++tab){tabs->setCurrentIndex(tab);QApplication::sendPostedEvents();dialog->layout()->activate();
@@ -876,6 +881,7 @@ public:
 #ifdef OFFICE_WIDGET_TEST
     void fixtureHardware(const Json& value) {refresh.stop();client.connected={};hardwareDialog(value);}
     void fixtureScreen(const Json& value) {refresh.stop();client.connected={};loadScreen(value);shellPages->setCurrentIndex(0);pages->setCurrentIndex(7);}
+    void fixtureAwake(const Json& value) {refresh.stop();client.connected={};loadAwake(value);}
     bool fixtureWantsPreview() const {return wantsPreview();}
     Json fixturePreviewRequest() const {return previewRequest();}
     void fixturePreviewReply(const Json& reply) {loadPreview(reply);}

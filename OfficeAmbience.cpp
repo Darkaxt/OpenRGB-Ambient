@@ -24,6 +24,7 @@
 #include "OfficeHardware.h"
 #include "DisplayBrightness.h"
 #include "OfficeScreen.h"
+#include "OfficeAwake.h"
 #include "OfficeSamplingShader.h"
 #include <OpenRGBPluginInterface.h>
 #include <ResourceManagerCallback.h>
@@ -645,6 +646,7 @@ struct OfficeAmbience::Impl {
     Monitor selectedMonitor;
     office::DisplayBrightness displayBrightness;
     std::unique_ptr<office::OfficeScreen> screen;
+    office::OfficeAwake awake;
     Clock::time_point lastBrightnessRead{};
     std::vector<Device> devices;
     std::unique_ptr<office::HardwareState> hardware;
@@ -673,7 +675,7 @@ struct OfficeAmbience::Impl {
     std::unique_ptr<OfficeControlServer> control;
     std::string identifyDevice;
     bool calibration=false;
-    bool sessionLocked=false,displayOff=false,standbyPreview=false;
+    bool sessionLocked=false,displayOff=false,standbyPreview=false,powerSuspended=false;
     bool desktopUnavailable=false,monitorMissing=false,automaticSaver=false;
     std::string inputDesktop;
     Clock::time_point standbyBegan=Clock::now();
@@ -696,10 +698,15 @@ struct OfficeAmbience::Impl {
             SetWindowLongPtrW(window,GWLP_USERDATA,reinterpret_cast<LONG_PTR>(self));
         }
         if(self && self->screen)try {self->screen->nativeEvent(message,w,l);}catch(const std::exception& e){self->journal->write("screen_event_error",{{"message",e.what()}});}
+        if(self && message==WM_ENDSESSION && w)self->awake.reset();
         if(self && message==WM_WTSSESSION_CHANGE) {
             self->journal->write("session_event",{{"notification",w},{"session_id",l}});
-            if(w==WTS_SESSION_LOCK) {self->sessionLocked=true;self->standbyBegan=Clock::now();}
+            if(w==WTS_SESSION_LOCK) {self->sessionLocked=true;self->standbyBegan=Clock::now();self->awake.reset();}
             if(w==WTS_SESSION_UNLOCK) {self->sessionLocked=false;self->desktopUnavailable=false;}
+        }
+        if(self && message==WM_POWERBROADCAST){
+            if(w==PBT_APMSUSPEND){self->powerSuspended=true;self->awake.reset();}
+            if(w==PBT_APMRESUMEAUTOMATIC||w==PBT_APMRESUMESUSPEND||w==PBT_APMPOWERSTATUSCHANGE){self->powerSuspended=false;self->awake.reset();self->dirty=true;}
         }
         if(self && message==WM_POWERBROADCAST && w==PBT_POWERSETTINGCHANGE) {
             auto* setting=reinterpret_cast<POWERBROADCAST_SETTING*>(l);
@@ -708,6 +715,7 @@ struct OfficeAmbience::Impl {
                 self->journal->write("display_power",{{"state",state}});
                 if(state==0 && !self->displayOff) self->standbyBegan=Clock::now();
                 self->displayOff=state==0;
+                if(self->displayOff)self->awake.reset();
                 if(!self->displayOff) {self->invalidate=true;self->dirty=true;}
             }
         }
@@ -800,6 +808,7 @@ struct OfficeAmbience::Impl {
         }
         journal->write("control_action",{{"command",name}});
         if(name=="screen")return screen->command(request);
+        if(name=="awake")return awake.command(request);
         if(name=="recover") {outputPaused=false;invalidate=true;dirty=true;return {{"accepted",true}};}
         if(name=="pause_output") {screen->command({{"action","pause"},{"target","lighting"},{"mode",screen->lightingPaused()?"enable":"forever"}});return {{"paused",screen->lightingPaused()}};}
         if(name=="hardware")return hardwareCommand(request);
@@ -922,7 +931,7 @@ struct OfficeAmbience::Impl {
     }
     // Test construction skips only OS event/IPC activation, retaining the actual
     // inventory, map and output implementation used by the installed owner.
-    Impl(OpenRGBPluginAPIInterface* api,const std::filesystem::path& path,bool activate=true):journal(std::make_shared<office::Journal>(path.parent_path()/"logs"/"office-ambience-events.jsonl")),api(api),configPath(path) {
+    Impl(OpenRGBPluginAPIInterface* api,const std::filesystem::path& path,bool activate=true):journal(std::make_shared<office::Journal>(path.parent_path()/"logs"/"office-ambience-events.jsonl")),api(api),configPath(path),awake(path.parent_path(),activate) {
         journal->write("owner_start",{{"executable",QCoreApplication::applicationFilePath().toStdString()}});
         std::ifstream file(path);file>>config;diskConfig=config;
         screen=std::make_unique<office::OfficeScreen>(path.parent_path(),activate);
@@ -1007,6 +1016,7 @@ struct OfficeAmbience::Impl {
         } catch(...) {control.reset();releaseEvents();throw;}
     }
     void releaseEvents() noexcept {
+        awake.reset();
         if(displayNotification) {UnregisterPowerSettingNotification(displayNotification);displayNotification=nullptr;}
         if(eventWindow) {WTSUnRegisterSessionNotification(eventWindow);DestroyWindow(eventWindow);eventWindow=nullptr;}
         UnregisterClassW(L"OpenRGBOfficeCaptureEvents",GetModuleHandleW(nullptr));
@@ -1060,10 +1070,14 @@ struct OfficeAmbience::Impl {
         // Shortcut-started .scr windows do not set this state and remain sources.
         automaticSaver=desktop.screensaver();
         if(inputDesktop!=loggedDesktop) {journal->write("input_desktop",{{"desktop",inputDesktop},{"secure",desktopUnavailable},{"automatic_saver",automaticSaver}});loggedDesktop=inputDesktop;}
-        if(monitorMissing || desktopUnavailable || automaticSaver) return;
-        HWND candidate=screensaverWindow(desktop.handle,monitor,false);
+        if(monitorMissing || desktopUnavailable || automaticSaver || sessionLocked || displayOff || powerSuspended) {awake.setContext(false,false);return;}
+        // After checking the input desktop's security/rest state, inspect the
+        // same normal desktop used by EnumWindows for application selection.
+        HWND candidate=screensaverWindow(GetThreadDesktop(GetCurrentThreadId()),monitor,false);
         bool saver=candidate!=nullptr;
         if(!saver) candidate=maximizedApp(monitor);
+        const auto previousAwake=awake.status();awake.setContext(!saver&&candidate!=nullptr,!saver);
+        if(previousAwake!=awake.status())journal->write("awake_transition",awake.status());
         std::string selected=saver?"screensaver":candidate?"app":"wallpaper";
         if(!candidate && !saver) candidate=wallpaperHost(monitor);
         RECT bounds{}; if(candidate) GetWindowRect(candidate,&bounds);
@@ -1089,7 +1103,9 @@ struct OfficeAmbience::Impl {
         // Persistent tray pause is independent of capture, screen adjustment,
         // and per-device hardware ownership. Native tests cannot override it.
         const bool paused=outputPaused||screen->lightingPaused();
-        if(!sessionLocked && !displayOff && dirty.exchange(false)) chooseSource();
+        if(sessionLocked||displayOff||powerSuspended)awake.setContext(false,false);
+        if(!sessionLocked && !displayOff && !powerSuspended && dirty.exchange(false)) chooseSource();
+        awake.tick();
         const bool resting=!restReason().empty();
         if(restReason()!=loggedRest) {journal->write("rest_transition",{{"previous",loggedRest},{"reason",restReason()}});loggedRest=restReason();}
         if(resting) {
@@ -1197,7 +1213,7 @@ struct OfficeAmbience::Impl {
     Json report() const {
         std::lock_guard lock(controllersMutex);
         return {{"mode",mode},{"standby",!restReason().empty() || standbyPreview},{"rest_reason",restReason()},{"input_desktop",inputDesktop},{"source_hwnd",reinterpret_cast<uintptr_t>(source)},
-            {"monitor_policy","primary"},{"capture_display",selectedMonitor.name},
+            {"monitor_policy","primary"},{"capture_display",selectedMonitor.name},{"awake",awake.status()},
             {"display_brightness_factor",displayBrightness.applied(config.at("follow_display_brightness").get<bool>())},
             {"display_brightness_valid",displayBrightness.valid},{"display_brightness_error",displayBrightness.error},
             {"display_brightness_display",displayBrightness.display},

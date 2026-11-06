@@ -120,5 +120,5 @@ void buildTrayMenu(){
         for(int minutes:{1,5,15,30,60,180,360,720,1440}){auto label=minutes<60?QString("For %1 minute%2").arg(minutes).arg(minutes==1?"":"s"):minutes<1440?QString("For %1 hour%2").arg(minutes/60).arg(minutes==60?"":"s"):QString("For 1 day");auto action=menu->addAction(label,this,[this,target,minutes]{screenRequest({{"action","pause"},{"target",target},{"mode","duration"},{"minutes",minutes}});});action->setData(minutes);}
         return menu;
     };
-    lightingPauseMenu=pauseMenu("Disable lighting","lighting",lightingEnable);screenPauseMenu=pauseMenu("Disable screen adjustments","screen",screenEnable);trayMenu->addSeparator();trayMenu->addAction("Exit",this,[this]{quitRequested=true;close();});
+    lightingPauseMenu=pauseMenu("Disable lighting","lighting",lightingEnable);screenPauseMenu=pauseMenu("Disable screen adjustments","screen",screenEnable);buildAwakeMenu();trayMenu->addSeparator();trayMenu->addAction("Exit",this,[this]{quitRequested=true;close();});
 }
