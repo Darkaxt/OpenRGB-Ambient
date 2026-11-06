@@ -65,6 +65,28 @@ protected:
     }
 #endif
 public:
+    // Qt 6.8's frameless setWindowState_sys uses MoveWindow rather than
+    // restoring WS_MAXIMIZE. Mixing that emulation with native snap/system-menu
+    // commands leaves two state owners. All visible caption/tray actions use
+    // the same Windows system-command path; Qt observes the resulting WM_SIZE.
+    void showNormal(){
+#ifdef Q_OS_WIN
+        if(caption&&QGuiApplication::platformName()=="windows"){QMainWindow::show();SendMessageW(reinterpret_cast<HWND>(winId()),WM_SYSCOMMAND,SC_RESTORE,0);return;}
+#endif
+        QMainWindow::showNormal();
+    }
+    void showMaximized(){
+#ifdef Q_OS_WIN
+        if(caption&&QGuiApplication::platformName()=="windows"){QMainWindow::show();SendMessageW(reinterpret_cast<HWND>(winId()),WM_SYSCOMMAND,SC_MAXIMIZE,0);return;}
+#endif
+        QMainWindow::showMaximized();
+    }
+    void showMinimized(){
+#ifdef Q_OS_WIN
+        if(caption&&QGuiApplication::platformName()=="windows"){QMainWindow::show();SendMessageW(reinterpret_cast<HWND>(winId()),WM_SYSCOMMAND,SC_MINIMIZE,0);return;}
+#endif
+        QMainWindow::showMinimized();
+    }
     void integrateCaption(QWidget* header,QHBoxLayout* row){
         caption=header;caption->setObjectName("windowHeader");
         for(int i=0;i<3;++i){auto b=new CaptionButton(i,header);row->addWidget(b);if(i==1)maximize=b;

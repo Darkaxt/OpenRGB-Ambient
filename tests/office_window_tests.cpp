@@ -27,6 +27,7 @@ int main(int argc,char** argv){
         RECT client{};GetClientRect(hwnd,&client);MONITORINFO monitor{sizeof(monitor)};GetMonitorInfoW(MonitorFromWindow(hwnd,MONITOR_DEFAULTTONEAREST),&monitor);
         require(client.right==monitor.rcWork.right-monitor.rcWork.left&&client.bottom==monitor.rcWork.bottom-monitor.rcWork.top,"Maximized client extends beyond work area");
         require(max->accessibleName()=="Restore","Maximized button did not become Restore");max->click();app.processEvents();require(!IsZoomed(hwnd)&&!window.isMaximized(),"Restore button failed");
+        max->click();app.processEvents();require(IsZoomed(hwnd)&&window.isMaximized(),"Maximize button failed");window.hide();app.processEvents();window.showNormal();app.processEvents();require(!IsZoomed(hwnd)&&!window.isMaximized()&&window.isVisible(),"Tray-style reopen did not restore the native window");
         min->click();app.processEvents();require(IsIconic(hwnd),"Minimize button failed");window.showNormal();app.processEvents();
         SendMessageW(hwnd,WM_NCLBUTTONDBLCLK,HTCAPTION,0);app.processEvents();require(IsZoomed(hwnd),"Caption double-click did not maximize");window.showNormal();app.processEvents();close->click();app.processEvents();require(!window.isVisible(),"Close button did not dispatch normal close lifecycle");
         std::cout<<"Native caption hit regions, snap, maximize/work-area, restore, minimize and close passed\n";return 0;
