@@ -140,6 +140,9 @@ HWND wallpaperHost(const Monitor& monitor) {
 }
 bool fullscreenApp(HWND window,const Monitor& monitor) {
     if(!window)return false;
+    // A normal maximized window can cover the monitor when the taskbar hides.
+    // Its normal caption distinguishes it from a borderless fullscreen app.
+    if(IsZoomed(window)&&(GetWindowLongPtrW(window,GWL_STYLE)&WS_CAPTION)==WS_CAPTION)return false;
     RECT r{};if(FAILED(DwmGetWindowAttribute(window,DWMWA_EXTENDED_FRAME_BOUNDS,&r,sizeof(r)))&&!GetWindowRect(window,&r))return false;
     const auto m=monitor.bounds;
     return r.left<=m.left+2&&r.top<=m.top+2&&r.right>=m.right-2&&r.bottom>=m.bottom-2;

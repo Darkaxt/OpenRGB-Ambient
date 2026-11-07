@@ -1,5 +1,26 @@
 # Main-monitor office ambience
 
+Left-click the tray icon for the lighting mixer. Its top slider sets all mapped
+lights together; each physical device has its own slider and mute/restore icon.
+Offline devices keep their settings and use them when reconnected. Levels save
+immediately. The pin keeps the flyout open; the chevron collapses the controls.
+Escape or clicking elsewhere closes an unpinned flyout. Double-click or Open
+opens the full panel; its Output card also has a Lighting mixer button.
+
+Fullscreen intensity is a single percentage shared by all fullscreen apps on the
+main display (default50%). It multiplies master/device intensity and the existing
+brightness baseline/display-follow factor; exiting fullscreen restores normal
+levels. Ordinary maximized windows and other displays do not activate this dimming.
+Master/device defaults are100%;0 mutes. Master mute releases image capture;
+screen adjustment and Awake remain independent. Calibration/identify reference
+colours and the existing pause/rest off policy are preserved.
+
+The mixer adapts BetterTrumpet's accented header, icon/slider/value rows, pinning,
+collapse and dismissal interactions to light-emitting devices. It adds no sound,
+per-app profiles, external control process or second RGB writer. A pending draft
+in the full editor is retained; reload before saving if immediate slider changes
+made that draft's saved revision stale.
+
 Capture always follows the display marked as main in Windows. The primary flag,
 device name and current bounds are resolved again on source selection and display
 change/resume events; no DISPLAY number or physical LG identity is pinned. Legacy

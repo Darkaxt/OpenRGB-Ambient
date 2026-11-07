@@ -1,5 +1,6 @@
 // Exercise the actual output owner against OpenRGB's synchronous removal contract.
 #include "../OfficeAmbience.cpp"
+#include "../OfficeLightController.h"
 #include "interface_stubs.h"
 #include <QCoreApplication>
 #include <QTemporaryDir>
@@ -43,10 +44,18 @@ struct OfficeLifecycleTest {
         Controller strip("Govee H6609",20),bars("Govee H8048",20),keys("Keychron Q6 HE ISO",109),laptop("Lenovo Legion 7 Gen 8",109),desk("Secretlab",48,"NL72S2"),mouse("G502 X PLUS",8);
         Api api;api.controllers={&strip,&bars,&keys,&laptop,&desk,&mouse};OfficeAmbience::Impl owner(&api,path,false);
         auto map=owner.layout;owner.dirty=false;
-        auto level=[&](const char* target,double value,const char* id=""){return owner.command({{"command","intensity"},{"target",target},{"value",value},{"device",id}});};
+        officeui::LightController mixer(nullptr,[&](Json request,OfficeReply reply){
+            try{auto result=owner.command(request);reply({{"ok",true},{"result",result}});}catch(const std::exception& e){reply({{"ok",false},{"error",e.what()}});}
+        },{});mixer.setState(owner.intensitySnapshot());
+        auto level=[&](const char* target,double value,const char* id=""){
+            auto key=std::string(target)=="device"?id:target;auto slider=mixer.findChild<QSlider*>(QString("lightSlider-")+key);
+            require(slider!=nullptr,"Integrated intensity widget missing");slider->setValue(qRound(value));return owner.intensitySnapshot();
+        };
         auto fresh=[&]{owner.latest.assign(314,ToRGBColor(200,100,40));owner.tick();};
         require(owner.config.at("lighting_intensity")==100&&owner.config.at("fullscreen_intensity")==50,"Mixer defaults differ");
-        level("master",50);level("device",40,"H6609");fresh();
+        auto draft=owner.snapshot();level("master",50);level("device",40,"H6609");fresh();
+        bool staleRejected=false;try{owner.command({{"command","save"},{"revision",draft.at("revision")},{"settings",draft.at("settings")},{"layout",draft.at("layout")}});}catch(const std::exception&){staleRejected=true;}
+        require(staleRejected&&owner.config.at("lighting_intensity")==50,"Stale editor draft overwrote immediate mixer preferences");
         require(owner.devices[0].colors[0]==ToRGBColor(40,20,8)&&owner.devices[1].colors[0]==ToRGBColor(100,50,20),"Master and stable device gain must multiply independently");
         owner.fullscreenActive=true;fresh();
         require(owner.devices[0].colors[0]==ToRGBColor(20,10,4)&&owner.devices[1].colors[0]==ToRGBColor(50,25,10),"Fullscreen percentage must multiply master and device levels");
@@ -67,7 +76,7 @@ struct OfficeLifecycleTest {
         owner.sessionLocked=true;owner.tick();for(auto& d:owner.devices)require(d.colors[0]==0,"Intensity bypassed rest gate");owner.sessionLocked=false;
         require(owner.layout==map,"Intensity changed topology");
         auto external=owner.diskConfig;external["fps"]=20;{std::ofstream out(path);out<<external;}
-        bool rejected=false;try{level("master",80);}catch(const std::exception&){rejected=true;}require(rejected&&owner.config.at("lighting_intensity")==100,"Intensity overwrote an external config edit");
+        level("master",80);require(owner.config.at("lighting_intensity")==100&&!mixer.findChild<QLabel*>("lightError")->text().isEmpty(),"Intensity overwrote an external config edit or failed silently");
         {std::ofstream out(path);out<<owner.diskConfig;}
         OfficeAmbience::Impl restarted(&api,path,false);require(restarted.config.at("device_intensity").at("H6609")==25,"Per-device intensity did not survive restart");
     }
@@ -260,7 +269,7 @@ struct OfficeLifecycleTest {
                 }
                 std::cout<<"Event-free private-desktop source discovery and native Awake recovered; capture_created="<<(owner.capture!=nullptr)<<'\n';
                 ShowWindow(window,SW_RESTORE);expect(false,"Recovered source retained Awake after restore");
-                ShowWindow(window,SW_MAXIMIZE);expect(true,"Maximized main-display app did not acquire awake requests");
+                ShowWindow(window,SW_MAXIMIZE);expect(true,"Maximized main-display app did not acquire awake requests");require(!owner.fullscreenActive,"Ordinary maximized window triggered fullscreen dimming");
                 owner.latest.assign(314,ToRGBColor(20,40,60));
                 owner.command({{"command","screen"},{"action","pause"},{"target","lighting"},{"mode","forever"}});owner.tick();
                 auto pausedGeneration=owner.sourceGeneration;
@@ -274,6 +283,8 @@ struct OfficeLifecycleTest {
                 owner.config["enabled"]=false;owner.tick();
                 require(owner.report().at("capture_paused")==true&&!owner.capture&&owner.latest.empty()&&owner.awake.active(),"Global ambience disable retained GPU input or disabled Awake");
                 owner.config["enabled"]=true;owner.tick();
+                owner.command({{"command","intensity"},{"target","master"},{"value",0}});owner.tick();require(owner.capturePaused&&!owner.capture&&owner.awake.active(),"Master mute retained capture or released independent Awake");
+                owner.command({{"command","intensity"},{"target","master"},{"value",100}});owner.tick();
                 auto native=requests();auto first=native.find(reason);require(first!=native.npos&&native.find(reason,first+reason.size())!=native.npos,"Windows must independently report display and system requests");
                 floating=CreateWindowW(L"STATIC",L"Floating overlay",WS_OVERLAPPEDWINDOW|WS_VISIBLE,r.left+20,r.top+20,200,150,nullptr,nullptr,GetModuleHandleW(nullptr),nullptr);
                 expect(true,"Non-foreground maximized app lost its awake lease");
@@ -526,7 +537,7 @@ struct OfficeLifecycleTest {
     }
 };
 int main(int argc,char** argv) {
-    QCoreApplication app(argc,argv);
+    QApplication app(argc,argv);
     try {OfficeLifecycleTest::run();std::cout<<"PASS: removal barrier, offline inventory, reconnect, persisted bootstrap and rescan\n";return 0;}
     catch(std::exception const& e) {std::cerr<<e.what()<<'\n';return 1;}
 }
