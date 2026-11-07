@@ -130,7 +130,10 @@ struct OfficeLifecycleTest {
         owner.command({{"command","hardware"},{"action","profile_save"},{"name","Test"}});owner.command({{"command","hardware"},{"action","profile_load"},{"name","Test"}});
         require(api.saved==1 && api.loaded==1 && owner.hardware->hardware(key),"Native profile API or retained ownership not wired");
         owner.command({{"command","pause_output"}});owner.tick();require(owner.devices[2].colors[0]==0,"Pause did not rest a native-owned device");
-        owner.command({{"command","pause_output"}});owner.tick();require(keys.active==1,"Resume did not restore the native mode");
+        owner.command({{"command","pause_output"}});
+        // Pause deliberately discarded the previous input. This output fixture
+        // supplies a fresh post-resume row instead of replaying the old one.
+        owner.latest.assign(314,ToRGBColor(60,40,20));owner.tick();require(keys.active==1,"Resume did not restore the native mode");
         owner.command({{"command","hardware"},{"action","ambience"},{"device",key},{"identity",identity}});owner.tick();require(!owner.hardware->hardware(key) && owner.devices[2].colors[0]==ToRGBColor(60,40,20),"Return to ambience did not restore mapped colour output");
     }
     static void screensaverSelection() {
