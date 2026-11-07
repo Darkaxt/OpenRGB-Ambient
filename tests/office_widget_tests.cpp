@@ -27,11 +27,11 @@ void productIcons(){
         auto full=QImage::fromData(bytes);require(full.hasAlphaChannel()&&full.width()==full.height(),"Product icon must preserve square transparent source");
         for(auto corner:{QPoint(0,0),QPoint(full.width()-1,0),QPoint(0,full.height()-1),QPoint(full.width()-1,full.height()-1)})
             require(full.pixelColor(corner).alpha()==0,"Product icon has an opaque background");
-        const auto small=officeui::deviceIcon(id).pixmap(QSize(40,40)).toImage();
-        require(!small.isNull()&&small.width()==40&&small.height()==40,"Product icon failed at actual controller size");
-        int visible=0,transparent=0;for(int y=0;y<40;++y)for(int x=0;x<40;++x){auto alpha=small.pixelColor(x,y).alpha();visible+=alpha>100;transparent+=alpha==0;}
+        const auto miniature=officeui::deviceIcon(id).pixmap(QSize(40,40)).toImage();
+        require(!miniature.isNull()&&miniature.width()==40&&miniature.height()==40,"Product icon failed at actual controller size");
+        int visible=0,transparent=0;for(int y=0;y<40;++y)for(int x=0;x<40;++x){auto alpha=miniature.pixelColor(x,y).alpha();visible+=alpha>100;transparent+=alpha==0;}
         require(visible>25&&transparent>25,"Product miniature is empty or lost its cutout at controller size");
-        fingerprints.insert(QCryptographicHash::hash(QByteArray::fromRawData(reinterpret_cast<const char*>(small.constBits()),small.sizeInBytes()),QCryptographicHash::Sha256));
+        fingerprints.insert(QCryptographicHash::hash(QByteArray::fromRawData(reinterpret_cast<const char*>(miniature.constBits()),miniature.sizeInBytes()),QCryptographicHash::Sha256));
     }
     require(fingerprints.size()==6&&officeui::deviceIcon("unknown-device").isNull(),"Device identities reuse artwork or unknown identity is misrepresented");
 }
