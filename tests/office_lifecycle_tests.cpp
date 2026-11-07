@@ -188,7 +188,12 @@ struct OfficeLifecycleTest {
                 // No Qt/WinEvent dispatch or explicit invalidation between the
                 // waiting observation and the production tick discovering it.
                 ShowWindow(window,SW_MAXIMIZE);owner.tick();
-                require(owner.source==window&&owner.capture&&owner.awake.active(),"Available source did not recover without another window notification");
+                if(owner.source!=window||!owner.capture||!owner.awake.active()) {
+                    auto status=owner.report();
+                    throw std::runtime_error("Event-free recovery: "+Json{{"expected_hwnd",reinterpret_cast<uintptr_t>(window)},
+                        {"source_hwnd",status.at("source_hwnd")},{"mode",status.at("mode")},{"rest_reason",status.at("rest_reason")},
+                        {"capture_created",owner.capture!=nullptr},{"awake",owner.awake.active()},{"error",status.at("error")}}.dump());
+                }
                 ShowWindow(window,SW_RESTORE);expect(false,"Recovered source retained Awake after restore");
                 ShowWindow(window,SW_MAXIMIZE);expect(true,"Maximized main-display app did not acquire awake requests");
                 auto native=requests();auto first=native.find(reason);require(first!=native.npos&&native.find(reason,first+reason.size())!=native.npos,"Windows must independently report display and system requests");
