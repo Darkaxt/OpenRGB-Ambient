@@ -41,7 +41,9 @@ struct OfficeLifecycleTest {
     static void statusCheckpoints(){
         QTemporaryDir dir;auto root=std::filesystem::path(dir.path().toStdWString()),path=root/"office-ambience.json";
         {std::ofstream out(path);out<<Json{{"monitor","primary"},{"fps",15}};}
-        Controller strip("Govee H6609",20);Api api;api.controllers={&strip};
+        Controller strip("Govee H6609",20),bars("Govee H8048",20),keys("Keychron Q6 HE ISO",109),
+            laptop("Lenovo Legion 7 Gen 8",109),desk("Secretlab",48,"NL72S2"),mouse("G502 X PLUS",8);
+        Api api;api.controllers={&strip,&bars,&keys,&laptop,&desk,&mouse};
         OfficeAmbience::Impl owner(&api,path,false);owner.rest.observe(false,true,1);owner.status();
         auto bytes=[&]{QFile f(QString::fromStdWString(owner.statusPath.wstring()));require(f.open(QIODevice::ReadOnly),"Missing status checkpoint");return f.readAll();};
         const auto initial=bytes();
