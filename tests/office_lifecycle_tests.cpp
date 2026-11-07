@@ -36,6 +36,41 @@ struct Api : StubOpenRGBPluginAPIInterface {
 void require(bool value,const char* message) {if(!value) throw std::runtime_error(message);}
 
 struct OfficeLifecycleTest {
+    static void intensityPolicy(){
+        QTemporaryDir dir;auto path=std::filesystem::path(dir.path().toStdWString())/"office-ambience.json";
+        const Json original={{"monitor","primary"},{"fps",15},{"smoothing_ms",0},{"follow_display_brightness",false}};
+        {std::ofstream out(path);out<<original;}
+        Controller strip("Govee H6609",20),bars("Govee H8048",20),keys("Keychron Q6 HE ISO",109),laptop("Lenovo Legion 7 Gen 8",109),desk("Secretlab",48,"NL72S2"),mouse("G502 X PLUS",8);
+        Api api;api.controllers={&strip,&bars,&keys,&laptop,&desk,&mouse};OfficeAmbience::Impl owner(&api,path,false);
+        auto map=owner.layout;owner.dirty=false;
+        auto level=[&](const char* target,double value,const char* id=""){return owner.command({{"command","intensity"},{"target",target},{"value",value},{"device",id}});};
+        auto fresh=[&]{owner.latest.assign(314,ToRGBColor(200,100,40));owner.tick();};
+        require(owner.config.at("lighting_intensity")==100&&owner.config.at("fullscreen_intensity")==50,"Mixer defaults differ");
+        level("master",50);level("device",40,"H6609");fresh();
+        require(owner.devices[0].colors[0]==ToRGBColor(40,20,8)&&owner.devices[1].colors[0]==ToRGBColor(100,50,20),"Master and stable device gain must multiply independently");
+        owner.fullscreenActive=true;fresh();
+        require(owner.devices[0].colors[0]==ToRGBColor(20,10,4)&&owner.devices[1].colors[0]==ToRGBColor(50,25,10),"Fullscreen percentage must multiply master and device levels");
+        owner.fullscreenActive=false;fresh();require(owner.devices[0].colors[0]==ToRGBColor(40,20,8),"Leaving fullscreen did not restore normal intensity");
+        auto revision=owner.revision;level("device",40,"H6609");require(owner.revision==revision,"Unchanged slider value rewrote settings");
+        api.controllers.erase(api.controllers.begin());owner.resourcesUpdated(RESOURCEMANAGER_UPDATE_REASON_DEVICE_LIST_UPDATED);
+        level("device",25,"H6609");fresh();require(!owner.devices[0].controller,"Offline intensity changed controller ownership");
+        api.controllers.insert(api.controllers.begin(),&strip);owner.resourcesUpdated(RESOURCEMANAGER_UPDATE_REASON_DEVICE_LIST_UPDATED);fresh();
+        require(owner.devices[0].colors[0]==ToRGBColor(25,13,5),"Reconnected device did not use its saved intensity");
+        auto saved=owner.diskConfig;
+        for(auto request:{Json{{"command","intensity"},{"target","device"},{"device","unknown"},{"value",20}},Json{{"command","intensity"},{"target","master"},{"value",101}},Json{{"command","intensity"},{"target","fullscreen"},{"value",-1}},Json{{"command","intensity"},{"target","master"},{"value",true}},Json{{"command","intensity"},{"target","anything"},{"value",20}}}){
+            bool rejected=false;try{owner.command(request);}catch(const std::exception&){rejected=true;}require(rejected&&owner.diskConfig==saved,"Invalid intensity changed durable settings");
+        }
+        owner.command({{"command","identify_all"}});fresh();require(owner.devices[0].colors[0]==ToRGBColor(255,255,255),"Mixer dimmed calibration reference");owner.command({{"command","stop_test"}});
+        level("master",0);owner.tick();require(owner.captureSuppressed()&&owner.latest.empty()&&!owner.capture,"Global mute retained capture/input");
+        for(auto& d:owner.devices)require(std::all_of(d.colors.begin(),d.colors.end(),[](auto c){return c==0;}),"Global mute did not black every light");
+        level("master",100);fresh();require(owner.devices[0].colors[0]==ToRGBColor(50,25,10),"Unmute did not acquire fresh imagery with saved per-device level");
+        owner.sessionLocked=true;owner.tick();for(auto& d:owner.devices)require(d.colors[0]==0,"Intensity bypassed rest gate");owner.sessionLocked=false;
+        require(owner.layout==map,"Intensity changed topology");
+        auto external=owner.diskConfig;external["fps"]=20;{std::ofstream out(path);out<<external;}
+        bool rejected=false;try{level("master",80);}catch(const std::exception&){rejected=true;}require(rejected&&owner.config.at("lighting_intensity")==100,"Intensity overwrote an external config edit");
+        {std::ofstream out(path);out<<owner.diskConfig;}
+        OfficeAmbience::Impl restarted(&api,path,false);require(restarted.config.at("device_intensity").at("H6609")==25,"Per-device intensity did not survive restart");
+    }
     static void wallpaperImagePolicy(){
         QTemporaryDir dir;auto path=std::filesystem::path(dir.path().toStdWString())/"office-ambience.json";
         {std::ofstream out(path);out<<Json{{"monitor","primary"},{"fps",15},{"smoothing_ms",0},{"follow_display_brightness",false}};}
@@ -245,11 +280,11 @@ struct OfficeLifecycleTest {
                 ShowWindow(window,SW_RESTORE);expect(false,"Restored window retained request");require(requests().find(reason)==std::string::npos,"Windows retained cleared power request");
                 ShowWindow(window,SW_MAXIMIZE);expect(true,"Maximize failed to reacquire");ShowWindow(window,SW_MINIMIZE);expect(false,"Minimized app retained request");
                 DestroyWindow(window);window=CreateWindowW(L"STATIC",L"Fullscreen app",WS_POPUP|WS_VISIBLE,r.left,r.top,r.right-r.left,r.bottom-r.top,nullptr,nullptr,GetModuleHandleW(nullptr),nullptr);
-                require(window&&!IsZoomed(window),"Create borderless fullscreen app");expect(true,"Borderless fullscreen app did not acquire request");
+                require(window&&!IsZoomed(window),"Create borderless fullscreen app");expect(true,"Borderless fullscreen app did not acquire request");require(owner.fullscreenActive,"Fullscreen lighting policy did not recognize main-display app");
                 MONITORINFO secondary{};secondary.cbSize=sizeof(secondary);
                 EnumDisplayMonitors(nullptr,nullptr,[](HMONITOR h,HDC,LPRECT,LPARAM p)->BOOL{MONITORINFO info{sizeof(info)};if(GetMonitorInfoW(h,&info)&&!(info.dwFlags&MONITORINFOF_PRIMARY)){*reinterpret_cast<MONITORINFO*>(p)=info;return FALSE;}return TRUE;},reinterpret_cast<LPARAM>(&secondary));
                 auto other=secondary.rcMonitor;if(other.right==other.left)other={r.right+100,r.top,r.right+500,r.top+300};
-                SetWindowPos(window,nullptr,other.left,other.top,other.right-other.left,other.bottom-other.top,SWP_NOACTIVATE|SWP_NOZORDER);expect(false,"App outside main display retained request");
+                SetWindowPos(window,nullptr,other.left,other.top,other.right-other.left,other.bottom-other.top,SWP_NOACTIVATE|SWP_NOZORDER);expect(false,"App outside main display retained request");require(!owner.fullscreenActive,"Other-display app retained fullscreen dimming");
                 SetWindowPos(window,nullptr,r.left,r.top,r.right-r.left,r.bottom-r.top,SWP_NOACTIVATE|SWP_NOZORDER);expect(true,"Return to main display failed to reacquire");
                 OfficeAmbience::Impl::nativeEvent(owner.eventWindow,WM_WTSSESSION_CHANGE,WTS_SESSION_LOCK,0);require(!owner.awake.active(),"Lock did not release native request");expect(false,"Locked session reacquired request");
                 OfficeAmbience::Impl::nativeEvent(owner.eventWindow,WM_WTSSESSION_CHANGE,WTS_SESSION_UNLOCK,0);expect(true,"Unlock failed to reacquire");
@@ -297,6 +332,7 @@ struct OfficeLifecycleTest {
         require(SystemParametersInfoW(SPI_GETSCREENSAVEACTIVE,0,&saverAfter,0)&&SystemParametersInfoW(SPI_GETSCREENSAVETIMEOUT,0,&timeoutAfter,0)&&saverBefore==saverAfter&&timeoutBefore==timeoutAfter,"Awake changed screensaver configuration");
     }
     static void run() {
+        intensityPolicy();
         wallpaperImagePolicy();
         restPolicy();
         savePreservesUntouchedSettings();

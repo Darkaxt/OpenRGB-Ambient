@@ -36,6 +36,8 @@ int main() {
         for(size_t i=0;i<points.size();++i) if(std::abs(identity[i].left-points[i].left)>.0001f)
             throw std::runtime_error("Opening/saving the editor must not move current samples");
         Json settings=processingDefaults();settings["smoothing_ms"]=140;validateProcessing(settings);
+        settings["device_intensity"]={{"H6609",101}};rejected=false;try{validateProcessing(settings);}catch(const std::exception&){rejected=true;}
+        if(!rejected)throw std::runtime_error("Invalid persisted device intensity accepted");settings["device_intensity"]=Json::object();
         if(!settings.value("follow_display_brightness",false)) throw std::runtime_error("New and legacy maps must follow main-display dimming by default without rewriting the brightness baseline");
         if(smoothingWeight(settings,67,256)!=1) throw std::runtime_error("Scene-cut bypass failed");
         settings["smoothing_mode"]="ema";auto a=smoothingWeight(settings,40,0),b=smoothingWeight(settings,80,0);

@@ -138,6 +138,12 @@ HWND wallpaperHost(const Monitor& monitor) {
     },reinterpret_cast<LPARAM>(&search));
     return search.host;
 }
+bool fullscreenApp(HWND window,const Monitor& monitor) {
+    if(!window)return false;
+    RECT r{};if(FAILED(DwmGetWindowAttribute(window,DWMWA_EXTENDED_FRAME_BOUNDS,&r,sizeof(r)))&&!GetWindowRect(window,&r))return false;
+    const auto m=monitor.bounds;
+    return r.left<=m.left+2&&r.top<=m.top+2&&r.right>=m.right-2&&r.bottom>=m.bottom-2;
+}
 HWND maximizedApp(const Monitor& monitor) {
     struct Search { const Monitor& monitor; HWND app{}; } search{monitor};
     EnumWindows([](HWND window,LPARAM data)->BOOL {
@@ -148,11 +154,7 @@ HWND maximizedApp(const Monitor& monitor) {
         if(GetWindowLongPtrW(window,GWL_EXSTYLE)&WS_EX_TOOLWINDOW) return TRUE;
         DWORD cloaked{}; DwmGetWindowAttribute(window,DWMWA_CLOAKED,&cloaked,sizeof(cloaked));
         if(cloaked || isRenderer(window)) return TRUE;
-        RECT r{};
-        if(FAILED(DwmGetWindowAttribute(window,DWMWA_EXTENDED_FRAME_BOUNDS,&r,sizeof(r)))) GetWindowRect(window,&r);
-        const auto m=s.monitor.bounds;
-        bool fullscreen=r.left<=m.left+2 && r.top<=m.top+2 && r.right>=m.right-2 && r.bottom>=m.bottom-2;
-        if(IsZoomed(window) || fullscreen) { s.app=window; return FALSE; }
+        if(IsZoomed(window) || fullscreenApp(window,s.monitor)) { s.app=window; return FALSE; }
         return TRUE;
     },reinterpret_cast<LPARAM>(&search));
     return search.app;
@@ -657,7 +659,7 @@ struct OfficeAmbience::Impl {
     office::OfficeAwake awake;
     office::OfficeRest rest;
     bool observeNativeInput=true;
-    bool observeNativeSources=true,capturePaused=false;
+    bool observeNativeSources=true,capturePaused=false,fullscreenActive=false;
     bool observeWallpaper=true,wallpaperImageRequested=true,wallpaperImageActive=false,wallpaperImageSubmitted=false;
     std::string wallpaperImageError;
     double wallpaperImageLoadMs=0;
@@ -804,7 +806,7 @@ struct OfficeAmbience::Impl {
         auto online=Json::array();{std::lock_guard lock(controllersMutex);for(auto& d:devices) online.push_back(d.controller!=nullptr);}
         Json settings={{"monitor",config.at("monitor")},{"enabled",config.at("enabled")},{"fps",config.at("fps")},{"smoothing_ms",config.at("smoothing_ms")}};
         const auto defaults=office::processingDefaults();for(auto& [key,value]:defaults.items()) settings[key]=config.at(key);
-        return {{"revision",revision},{"online",online},{"settings",settings},
+        return {{"revision",revision},{"online",online},{"settings",settings},{"intensity",intensitySnapshot()},
                 {"layout",layout},{"default_layout",factoryLayout},{"status",report()},{"screen",screen->snapshot()},{"colors",colours},{"effective_regions",effective},{"preview_png",image},{"preview_generation",previewKey},{"preview_blur",previewBlur},{"preview_encodes",encodes},{"preview_encode_ms",encodeMs},{"preview_error",previewError},
                 {"test_mode",standbyPreview?"standby":calibration?"calibration":identifyDevice.empty()?"none":"identify"}};
     }
@@ -825,6 +827,24 @@ struct OfficeAmbience::Impl {
         journal->write("control_action",{{"command",name}});
         if(name=="screen")return screen->command(request);
         if(name=="awake")return awake.command(request);
+        if(name=="intensity") {
+            const auto target=request.at("target").get<std::string>();const auto value=request.at("value");
+            if(!value.is_number()||!std::isfinite(value.get<double>())||value<0||value>100)throw std::runtime_error("Intensity must be 0-100 percent");
+            auto next=config;std::string key;
+            if(target=="master")key="lighting_intensity";
+            else if(target=="fullscreen")key="fullscreen_intensity";
+            else if(target=="device") {
+                key="device_intensity";const auto id=request.at("device").get<std::string>();
+                if(std::none_of(devices.begin(),devices.end(),[&](auto& d){return d.key==id;}))throw std::runtime_error("Unknown physical device");
+                next[key][id]=value;
+            }else throw std::runtime_error("Unknown intensity target");
+            if(target!="device")next[key]=value;
+            if(next.at(key)==config.at(key))return intensitySnapshot();
+            validateSettings(next);auto document=diskConfig;document[key]=next.at(key);saveDocument(document);
+            config=std::move(next);diskConfig=std::move(document);++revision;dirty=true;
+            journal->write("intensity_applied",{{"target",target},{"value",value},{"revision",revision}});
+            return intensitySnapshot();
+        }
         if(name=="recover") {outputPaused=false;invalidate=true;dirty=true;return {{"accepted",true}};}
         if(name=="pause_output") {screen->command({{"action","pause"},{"target","lighting"},{"mode",screen->lightingPaused()?"enable":"forever"}});return {{"paused",screen->lightingPaused()}};}
         if(name=="hardware")return hardwareCommand(request);
@@ -852,21 +872,11 @@ struct OfficeAmbience::Impl {
         for(auto& [key,value]:request.at("settings").items())
             if(next.contains(key) && config.contains(key) && next.at(key)!=config.at(key)) document[key]=next.at(key);
         document["layout"]=proposed;
-        // Detect external edits before replacing a private configuration file.
-        std::ifstream currentFile(configPath);Json onDisk;currentFile>>onDisk;
-        // MSVC's stream handle does not share delete access. Release it before
-        // QSaveFile atomically replaces the file identity on Windows.
-        currentFile.close();
-        // Compare against the exact loaded document, including its original defaults.
-        if(onDisk!=diskConfig) throw std::runtime_error("The private config was edited externally; restart the owner to reload it");
         std::unique_lock<std::mutex> lock;
         com_ptr<ID3D11Buffer> newRegions;
         com_ptr<ID3D11Buffer> newOptions;
         if(capture) {lock=std::unique_lock(capture->state->mutex);newRegions=capture->state->makeRegions(points);newOptions=capture->state->makeOptions(next);}
-        QSaveFile file(QString::fromStdWString(configPath.wstring()));
-        auto bytes=document.dump(2);
-        if(!file.open(QIODevice::WriteOnly) || file.write(bytes.data(),bytes.size())!=static_cast<qint64>(bytes.size()) || !file.commit())
-            throw std::runtime_error("Could not save settings; the active map is unchanged");
+        saveDocument(document);
         if(capture) {capture->state->regions=std::move(newRegions);capture->state->options=std::move(newOptions);capture->state->sampleRetained();}
         samples=std::move(points);layout=std::move(proposed);config=next;diskConfig=document;smoothingMs=config["smoothing_ms"].get<double>();
         output.setInterval(std::max(1,static_cast<int>(std::round(1000.0/config["fps"].get<int>()))));
@@ -877,6 +887,22 @@ struct OfficeAmbience::Impl {
     }
     Json diskConfig;
     Json factoryLayout;
+
+    void saveDocument(const Json& document) {
+        std::ifstream currentFile(configPath);Json onDisk;currentFile>>onDisk;currentFile.close();
+        if(onDisk!=diskConfig)throw std::runtime_error("The private config was edited externally; restart the owner to reload it");
+        QSaveFile file(QString::fromStdWString(configPath.wstring()));auto bytes=document.dump(2);
+        if(!file.open(QIODevice::WriteOnly)||file.write(bytes.data(),bytes.size())!=static_cast<qint64>(bytes.size())||!file.commit())throw std::runtime_error("Could not save settings; the active map is unchanged");
+    }
+    bool intensityMuted() const {return config.at("lighting_intensity")==0||(fullscreenActive&&config.at("fullscreen_intensity")==0);}
+    double intensityGain(const std::string& id) const {
+        return config.at("lighting_intensity").get<double>()/100*(fullscreenActive?config.at("fullscreen_intensity").get<double>()/100:1)*config.at("device_intensity").value(id,100.0)/100;
+    }
+    Json intensitySnapshot() const {
+        std::lock_guard lock(controllersMutex);auto rows=Json::array();
+        for(auto& d:devices)rows.push_back({{"id",d.key},{"name",d.name},{"online",d.controller!=nullptr},{"value",config.at("device_intensity").value(d.key,100.0)}});
+        return {{"revision",revision},{"master",config.at("lighting_intensity")},{"fullscreen",config.at("fullscreen_intensity")},{"fullscreen_active",fullscreenActive},{"devices",rows}};
+    }
 
     std::string nativeKey(RGBControllerInterface* c) {
         auto key=deviceKey(c);return key.empty()?"native-"+office::HardwareState::identity(c):key;
@@ -1087,7 +1113,7 @@ struct OfficeAmbience::Impl {
     void chooseSource() {
         chooseSource(primaryMonitor());
     }
-    bool captureSuppressed() const {return outputPaused||screen->lightingPaused()||!config.at("enabled").get<bool>();}
+    bool captureSuppressed() const {return outputPaused||screen->lightingPaused()||!config.at("enabled").get<bool>()||intensityMuted();}
     void releaseCaptureInput() {
         capture.reset();source=nullptr;latest.clear();received={};error.clear();
         inputFrames=deliveredFrames=changedInputFrames=skippedInputFrames=samplingPasses=0;
@@ -1108,6 +1134,7 @@ struct OfficeAmbience::Impl {
         wallpaperImageActive=true;wallpaperImageSubmitted=false;wallpaperImageRequested=false;wallpaperImageError.clear();
     }
     void chooseSource(const Monitor& monitor) {
+        fullscreenActive=false;
         selectedMonitor=monitor;
         monitorMissing=!monitor.handle;
         InputDesktop desktop;inputDesktop=to_string(desktop.name);desktopUnavailable=desktop.secure();
@@ -1124,6 +1151,7 @@ struct OfficeAmbience::Impl {
         HWND candidate=screensaverWindow(GetThreadDesktop(GetCurrentThreadId()),monitor,false);
         bool saver=candidate!=nullptr;
         if(!saver) candidate=maximizedApp(monitor);
+        fullscreenActive=!saver&&candidate&&fullscreenApp(candidate,monitor);
         const auto previousAwake=awake.status();awake.setContext(!saver&&candidate!=nullptr,!saver);
         if(previousAwake!=awake.status())journal->write("awake_transition",awake.status());
         std::string selected=saver?"screensaver":candidate?"app":"wallpaper";
@@ -1194,6 +1222,7 @@ struct OfficeAmbience::Impl {
         const bool resting=!restReason().empty();
         if(restReason()!=loggedRest) {journal->write("rest_transition",{{"previous",loggedRest},{"reason",restReason()}});loggedRest=restReason();}
         if(resting) {
+            fullscreenActive=false;
             capture.reset();source=nullptr;mode="resting";latest.clear();
             wallpaperImageRequested=true;wallpaperImageActive=false;wallpaperImageSubmitted=false;
             inputFrames=deliveredFrames=0;changedInputFrames=skippedInputFrames=samplingPasses=0;received={};error.clear();
@@ -1231,7 +1260,7 @@ struct OfficeAmbience::Impl {
         }
         if(!identifyDevice.empty() && now>=identifyUntil) identifyDevice.clear();
         bool standby=resting || standbyPreview;
-        if(!latest.empty() || calibration || !identifyDevice.empty() || standby || paused || hardware->any()) {
+        if(!latest.empty() || calibration || !identifyDevice.empty() || standby || paused || intensityMuted() || hardware->any()) {
             auto submitBegan=Clock::now();
             auto sentBefore=deviceSubmissions;
             double elapsedMs=std::chrono::duration<double,std::milli>(now-lastOutput).count();
@@ -1239,7 +1268,7 @@ struct OfficeAmbience::Impl {
             {std::lock_guard lock(controllersMutex);
             for(auto& device:devices) {
                 bool changed=false;
-                bool overrideHardware=resting || standbyPreview || paused || !config.at("enabled").get<bool>() || calibration || !identifyDevice.empty();
+                bool overrideHardware=resting || standbyPreview || paused || intensityMuted() || !config.at("enabled").get<bool>() || calibration || !identifyDevice.empty();
                 try {if(hardware->output(device.key,device.controller,overrideHardware,true)){++deviceIndex;continue;}}
                 catch(const std::exception& e){controllerError=e.what();++deviceIndex;continue;}
                 if(hardware->consumeReset(device.key))device.delivered=false;
@@ -1259,10 +1288,10 @@ struct OfficeAmbience::Impl {
                     } else if(!identifyDevice.empty()) target=device.key==identifyDevice || identifyDevice=="*"?ToRGBColor(255,255,255):0;
                     else if(!enabled) target=0;
                     if(!testing) {
-                        double gain=displayBrightness.applied(config.at("follow_display_brightness").get<bool>());
+                        double gain=displayBrightness.applied(config.at("follow_display_brightness").get<bool>())*intensityGain(device.key);
                         target=ToRGBColor(office::dimChannel(RGBGetRValue(target),gain),office::dimChannel(RGBGetGValue(target),gain),office::dimChannel(RGBGetBValue(target),gain));
                     }
-                    if(resting || paused) target=0;
+                    if(resting || paused || intensityMuted()) target=0;
                     auto previous=device.colors[index];
                     double delta=std::max({std::abs(int(RGBGetRValue(target))-int(RGBGetRValue(previous))),std::abs(int(RGBGetGValue(target))-int(RGBGetGValue(previous))),std::abs(int(RGBGetBValue(target))-int(RGBGetBValue(previous)))});
                     auto weight=office::smoothingWeight(config,elapsedMs,delta);
@@ -1270,7 +1299,7 @@ struct OfficeAmbience::Impl {
                         office::adaptedChannel(RGBGetRValue(target),RGBGetRValue(previous),weight),
                         office::adaptedChannel(RGBGetGValue(target),RGBGetGValue(previous),weight),
                         office::adaptedChannel(RGBGetBValue(target),RGBGetBValue(previous),weight)):target;
-                    if(testing || !enabled || resting || paused) color=target;
+                    if(testing || !enabled || resting || paused || intensityMuted()) color=target;
                     device.colors[index]=color;
                     if(device.controller && (!device.delivered || previous!=color)) {
                         device.controller->SetColor(static_cast<unsigned>(index),color);changed=true;++ledWrites;
@@ -1280,7 +1309,7 @@ struct OfficeAmbience::Impl {
                 ++deviceIndex;
             }
             for(auto& [key,c]:nativeControllers)if(std::none_of(devices.begin(),devices.end(),[&](auto& d){return d.key==key;}) && hardware->hardware(key)) {
-                try {bool over=resting || paused || !config.at("enabled").get<bool>();if(!hardware->output(key,c,over,false) && over && hardware->consumeReset(key)){c->SetAllColors(0);c->UpdateLEDs();}}
+                try {bool over=resting || paused || intensityMuted() || !config.at("enabled").get<bool>();if(!hardware->output(key,c,over,false) && over && hardware->consumeReset(key)){c->SetAllColors(0);c->UpdateLEDs();}}
                 catch(const std::exception& e){controllerError=e.what();}
             }}
             initialized=true; ++outputFrames;
@@ -1312,6 +1341,7 @@ struct OfficeAmbience::Impl {
             {"capture_bounds",{selectedMonitor.bounds.left,selectedMonitor.bounds.top,selectedMonitor.bounds.right,selectedMonitor.bounds.bottom}},
             {"source_generation",sourceGeneration},
             {"capture_paused",capturePaused},{"capture_active",capture!=nullptr},
+            {"fullscreen_active",fullscreenActive},{"intensity_muted",intensityMuted()},
             {"wallpaper_image_active",wallpaperImageActive},{"wallpaper_image_submitted",wallpaperImageSubmitted},
             {"wallpaper_image_load_ms",wallpaperImageLoadMs},{"wallpaper_image_error",wallpaperImageError},
             {"application_model","unified"},{"output_thread",GetCurrentThreadId()},{"output_paused",outputPaused||screen->lightingPaused()},{"screen",screen->status()},

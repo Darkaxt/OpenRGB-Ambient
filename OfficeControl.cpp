@@ -7,6 +7,7 @@
 #include "OfficeScreenPolicy.h"
 #include "OfficeSundial.h"
 #include "OfficeWindow.h"
+#include "OfficeLightController.h"
 #include <QTimeEdit>
 #include <QDateTimeEdit>
 #include <QActionGroup>
@@ -478,6 +479,7 @@ class Panel : public officeui::OfficeWindow {
     std::array<QWidget*,7> dashboardCards{};
     OutputPreview* livePreview=new OutputPreview;
     QSystemTrayIcon* tray=nullptr;
+    officeui::LightController* lightMixer=nullptr;
     bool quitRequested=false;
     Json panelOptions;
     Json hardwareData=Json::object();
@@ -573,6 +575,7 @@ class Panel : public officeui::OfficeWindow {
     void load(const Json& snapshot,bool force=false) {
         trace("snapshot-accepted");
         lastSnapshot=snapshot;
+        if(lightMixer&&snapshot.contains("intensity"))lightMixer->setState(snapshot.at("intensity"));
         if(snapshot.contains("screen"))loadScreen(snapshot.at("screen"));
         if(snapshot.at("status").contains("awake"))loadAwake(snapshot.at("status").at("awake"));
         bool newHardware=false;

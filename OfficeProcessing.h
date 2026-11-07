@@ -8,6 +8,7 @@ namespace office {
 inline Json processingDefaults() {
     return {{"strategy","mapped"},{"depth",10.0},{"adaptive_min",3.0},{"adaptive_max",20.0},
         {"black_bar_detect",false},{"blur",0.0},{"saturation",1.0},{"brightness",1.0},{"follow_display_brightness",true},
+        {"lighting_intensity",100.0},{"fullscreen_intensity",50.0},{"device_intensity",Json::object()},
         {"min_luminance",0.0},{"ema_alpha",0.35},{"scene_cut",255.0},
         {"smoothing_mode","time"},{"standby","hold"},{"standby_brightness",0.15},
         {"effect_center_x",0.5},{"effect_center_y",0.5}};
@@ -21,13 +22,16 @@ inline void validateProcessing(const Json& c) {
     if(std::find(strategies.begin(),strategies.end(),c.at("strategy").get<std::string>())==strategies.end()) throw std::runtime_error("Unknown sampling algorithm");
     for(auto [key,range]:std::map<std::string,std::pair<double,double>>{
         {"depth",{0.1,50}},{"adaptive_min",{0.1,50}},{"adaptive_max",{0.1,50}},
-        {"blur",{0,10}},{"saturation",{0,2.5}},{"brightness",{0,2}},
+        {"blur",{0,10}},{"saturation",{0,2.5}},{"brightness",{0,2}},{"lighting_intensity",{0,100}},{"fullscreen_intensity",{0,100}},
         {"min_luminance",{0,255}},{"ema_alpha",{0.05,1}},{"scene_cut",{0,255}},
         {"standby_brightness",{0,1}},{"effect_center_x",{0,1}},{"effect_center_y",{0,1}}}) {
         if(!c.at(key).is_number()) throw std::runtime_error("Sampling settings must be numeric");
         double n=c.at(key);if(!std::isfinite(n) || n<range.first || n>range.second) throw std::runtime_error("Sampling setting outside its supported range: "+key);
     }
     if(c.at("adaptive_min")>c.at("adaptive_max")) throw std::runtime_error("Adaptive minimum exceeds maximum depth");
+    if(!c.at("device_intensity").is_object())throw std::runtime_error("Device intensity must be an object");
+    for(auto& [id,value]:c.at("device_intensity").items())
+        if(id.empty()||!value.is_number()||!std::isfinite(value.get<double>())||value<0||value>100)throw std::runtime_error("Device intensity must be 0-100 percent");
     if(!c.at("black_bar_detect").is_boolean()) throw std::runtime_error("Black bar detection must be a boolean");
     if(!c.at("follow_display_brightness").is_boolean()) throw std::runtime_error("Follow display brightness must be a boolean");
     if(c.at("smoothing_mode")!="time" && c.at("smoothing_mode")!="ema") throw std::runtime_error("Unknown smoothing mode");

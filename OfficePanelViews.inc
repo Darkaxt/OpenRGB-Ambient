@@ -52,7 +52,9 @@ void Panel::buildViews() {
     auto fixed=new Card("Sampling area");dashboardCards[3]=fixed;field(fixed->content,"Depth",number("depth",.1,50,.1," %"));fixed->content->addWidget(label("% of screen minor side","hint"));fixed->content->addStretch();
     auto adaptive=new Card("Adaptive area");dashboardCards[4]=adaptive;field(adaptive->content,"Minimum depth",number("adaptive_min",.1,50,.1," %"));field(adaptive->content,"Maximum depth",number("adaptive_max",.1,50,.1," %"));adaptive->content->addStretch();
     auto temporal=new Card("Temporal smoothing");dashboardCards[5]=temporal;field(temporal->content,"EMA alpha",number("ema_alpha",.05,1,.01));field(temporal->content,"Scene-cut",number("scene_cut",0,255,1));temporal->content->addWidget(label("Lower alpha = smoother","hint"));
-    auto output=new Card("Output");dashboardCards[6]=output;field(output->content,"Saturation boost",number("saturation",0,2.5,.05));output->content->addWidget(label("1.0 = original colours","hint"));output->content->addStretch();
+    auto output=new Card("Output");dashboardCards[6]=output;field(output->content,"Saturation boost",number("saturation",0,2.5,.05));output->content->addWidget(label("1.0 = original colours","hint"));
+    lightMixer=new LightController(this,[this](Json request,OfficeReply reply){client.send(std::move(request),[this,reply=std::move(reply)](const Json& result){reply(result);if(result.value("ok",false))poll();});},[this]{showNormal();raise();activateWindow();});
+    auto mixerButton=button("Lighting mixer","settings_brightness");mixerButton->setObjectName("lightingMixerButton");mixerButton->setToolTip("Master, fullscreen and individual device intensity");output->content->addWidget(mixerButton);connect(mixerButton,&QPushButton::clicked,this,[this,mixerButton]{lightMixer->showAt(QRect(mixerButton->mapToGlobal(QPoint()),mixerButton->size()));});output->content->addStretch();
     controls->addLayout(dashboardGrid);arrangeDashboard();
     auto dashboardDeviceCard=new Card("Devices");auto dashScroll=scroll(dashboardDevices);dashScroll->setMinimumHeight(128);dashboardDeviceCard->content->addWidget(dashScroll);dashboardDeviceCard->content->addWidget(label("Configure sampling regions in the Topology Editor. All six office controllers are supported.","hint"));controls->addWidget(dashboardDeviceCard);
     auto presetRow=new QHBoxLayout;presetRow->addWidget(label("Presets","eyebrow"));for(auto name:{"Balanced","Cinema","Gaming","Calm","Reset"}){auto b=button(name);presetRow->addWidget(b);connect(b,&QPushButton::clicked,this,[this,name]{preset(name);});}presetRow->addStretch();controls->addLayout(presetRow);
@@ -138,6 +140,6 @@ void Panel::buildViews() {
         connect(recover,&QPushButton::clicked,this,[this]{action({{"command","recover"}});});
         buildTrayMenu();
         if(exportPath.isEmpty() && QSystemTrayIcon::isSystemTrayAvailable()) {
-            tray=new QSystemTrayIcon(windowIcon(),this);tray->setToolTip("Office Ambilight");tray->setContextMenu(trayMenu);connect(tray,&QSystemTrayIcon::activated,this,[this](auto reason){if(reason==QSystemTrayIcon::Trigger || reason==QSystemTrayIcon::DoubleClick){showNormal();raise();activateWindow();}});tray->show();
+            tray=new QSystemTrayIcon(windowIcon(),this);tray->setToolTip("Office Ambilight · Lighting mixer");tray->setContextMenu(trayMenu);connect(tray,&QSystemTrayIcon::activated,this,[this](auto reason){if(reason==QSystemTrayIcon::Trigger){if(lightMixer->isVisible()&&lightMixer->isActiveWindow())lightMixer->hide();else lightMixer->showAt(tray->geometry());}else if(reason==QSystemTrayIcon::DoubleClick){lightMixer->hide();showNormal();raise();activateWindow();}});tray->show();
         }
 }

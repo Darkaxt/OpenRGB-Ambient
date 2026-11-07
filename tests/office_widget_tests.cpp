@@ -9,6 +9,48 @@
 #include <QSignalSpy>
 #include <QEventLoop>
 void require(bool condition,const char* message) {if(!condition) throw std::runtime_error(message);}
+void lightingMixer(QApplication& app){
+    Json state={{"revision",1},{"master",100},{"fullscreen",50},{"fullscreen_active",false},{"devices",Json::array()}};
+    for(auto [id,name]:std::vector<std::pair<const char*,const char*>>{{"H6609","Govee strip"},{"H8048","Govee light bars"},{"Secretlab","Secretlab desk"},{"Keychron","Keychron Q6 HE"},{"Legion","Legion keyboard"},{"Logitech","G502 X PLUS"}})
+        state["devices"].push_back({{"id",id},{"name",name},{"online",std::string(id)!="Keychron"},{"value",100}});
+    std::vector<Json> requests;std::vector<OfficeReply> replies;bool opened=false;
+    officeui::LightController mixer(nullptr,[&](Json request,OfficeReply reply){requests.push_back(std::move(request));replies.push_back(std::move(reply));},[&]{opened=true;});
+    auto respond=[&](size_t index){auto reply=std::move(replies.at(index));reply({{"ok",true},{"result",state}});};
+    mixer.setState(state);mixer.showAt({780,730,30,30});app.processEvents();
+    auto slider=[&](const char* key){auto value=mixer.findChild<QSlider*>(QString("lightSlider-")+key);require(value!=nullptr,"Lighting slider missing");require(!value->accessibleName().isEmpty()&&value->height()>=44,"Lighting slider lacks accessible name/hit target");return value;};
+    auto master=slider("master");require(master->value()==100&&slider("fullscreen")->value()==50,"Lighting percentages not rendered");
+    master->setValue(50);master->setValue(20);master->setValue(30);require(requests.size()==1&&requests[0].at("target")=="master","Rapid drag did not serialize native writes");
+    state["master"]=50;respond(0);
+    require(master->value()==30&&requests.size()==2&&requests[1].at("value")==30,"Old reply overwrote latest slider intent or intermediate value was replayed");
+    state["master"]=30;respond(1);
+    auto device=slider("H6609");device->setValue(40);require(requests.back().at("target")=="device"&&requests.back().at("device")=="H6609","Device row is not bound to stable physical identity");
+    state["devices"][0]["value"]=40;respond(replies.size()-1);
+    auto mute=mixer.findChild<QToolButton*>("lightMute-H6609");mute->click();require(requests.back().at("value")==0,"Device mute did not reach native command");
+    state["devices"][0]["value"]=0;respond(replies.size()-1);mute->click();require(requests.back().at("value")==40,"Unmute did not restore device level");
+    state["devices"][0]["value"]=40;respond(replies.size()-1);
+    auto offline=mixer.findChild<QLabel*>("lightName-Keychron");require(offline&&offline->text().contains("Offline")&&slider("Keychron")->isEnabled(),"Offline device is missing or cannot retain a future level");
+    state["fullscreen_active"]=true;mixer.setState(state);require(mixer.findChild<QLabel*>("lightFullscreenState")->text().contains("Active"),"Actual fullscreen state missing");
+    const auto output=qEnvironmentVariable("OFFICE_UI_EVIDENCE");Json metrics=Json::array();
+    auto render=[&](const char* name){
+        app.processEvents();
+        for(double scale:{1.,1.5,2.}){
+            QImage image(QSize(qRound(mixer.width()*scale),qRound(mixer.height()*scale)),QImage::Format_ARGB32_Premultiplied);image.setDevicePixelRatio(scale);image.fill(Qt::transparent);mixer.render(&image);
+            require(mixer.width()==420&&image.width()==qRound(420*scale),"Flyout width does not follow reference/DPI contract");
+            if(!output.isEmpty()){QDir().mkpath(output);require(image.save(output+QString("/%1-%2.png").arg(name).arg(qRound(scale*100))),"Could not retain app-owned mixer rendering");}
+        }
+        for(auto widget:mixer.findChildren<QSlider*>()){
+            const auto bounds=QRect(widget->mapTo(&mixer,QPoint()),widget->size());
+            require(widget->width()>=180&&widget->height()>=44,"Mixer slider clipped below usable size");
+            metrics.push_back({{"state",name},{"id",widget->objectName().toStdString()},{"accessible_name",widget->accessibleName().toStdString()},{"bounds",{bounds.x(),bounds.y(),bounds.width(),bounds.height()}},{"visible",widget->isVisible()},{"value",widget->value()}});
+        }
+    };
+    render("expanded");auto height=mixer.height();mixer.findChild<QToolButton*>("lightCollapse")->click();app.processEvents();require(mixer.height()<height&&!mixer.findChild<QScrollArea*>("lightDevices")->isVisible(),"Collapse did not compact the flyout");render("collapsed");mixer.findChild<QToolButton*>("lightCollapse")->click();
+    auto pin=mixer.findChild<QToolButton*>("lightPin");pin->click();app.processEvents();QApplication::setActiveWindow(&mixer);QApplication::setActiveWindow(nullptr);require(mixer.isVisible(),"Pinned flyout dismissed on deactivation");
+    QKeyEvent escape(QEvent::KeyPress,Qt::Key_Escape,Qt::NoModifier);QApplication::sendEvent(&mixer,&escape);require(!mixer.isVisible(),"Escape must dismiss even when pinned");
+    mixer.showAt({780,730,30,30});pin->click();app.processEvents();QApplication::setActiveWindow(&mixer);QApplication::setActiveWindow(nullptr);require(!mixer.isVisible(),"Unpinned flyout did not dismiss on click-away");
+    mixer.showAt({780,730,30,30});mixer.findChild<QPushButton*>("lightOpenPanel")->click();require(opened&&!mixer.isVisible(),"Open panel action failed");
+    if(!output.isEmpty()){QFile file(output+"/metrics.json");require(file.open(QIODevice::WriteOnly),"Cannot save mixer metrics");file.write(QByteArray::fromStdString(metrics.dump(2)));}
+}
 void mouse(QWidget& widget,QEvent::Type type,QPointF point,Qt::MouseButton button,Qt::MouseButtons buttons,Qt::KeyboardModifiers modifiers=Qt::NoModifier) {
     QMouseEvent event(type,point,point,button,buttons,modifiers);QApplication::sendEvent(&widget,&event);
 }
@@ -287,6 +329,7 @@ int main(int argc,char** argv) {
         require(buttons[0]->width()>=26 && buttons[0]->height()>=20,"Step arrow hit target too small");buttons[0]->click();require(spin.value()==1,"Increase arrow not wired");buttons[1]->click();require(spin.value()==0,"Decrease arrow not wired");
         require(edits>=8,"No live editor change notifications");
         multiSelection(app);
+        lightingMixer(app);
         std::cout<<"PASS: production mouse handles, anchors, LED identity, bounds, undo/redo, cancel and vector steppers\n";return 0;
     }catch(std::exception const& e){std::cerr<<e.what()<<'\n';return 1;}
 }

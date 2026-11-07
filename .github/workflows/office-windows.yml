@@ -30,3 +30,8 @@ jobs:
           name: office-ambient-candidate
           path: D:/office-ambient-build/Release
           if-no-files-found: error
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: office-intensity-ui
+          path: D:/office-ambient-build/intensity-ui
+          if-no-files-found: error

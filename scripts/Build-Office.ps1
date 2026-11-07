@@ -16,6 +16,7 @@ if($LASTEXITCODE) { throw 'CMake configure failed' }
 & $cmake --build $BuildRoot --config Release --parallel 2
 if($LASTEXITCODE) { throw 'Plugin build failed' }
 $ctest=Join-Path (Split-Path $cmake) 'ctest.exe'
+$env:OFFICE_UI_EVIDENCE=Join-Path $BuildRoot 'intensity-ui'
 & $ctest --test-dir $BuildRoot -C Release --output-on-failure
 if($LASTEXITCODE) { throw 'GPU regression check failed' }
 Copy-Item (Join-Path $QtRoot 'bin/Qt6*.dll') (Join-Path $BuildRoot 'Release')
