@@ -2,6 +2,7 @@
 #include "OfficePanel.h"
 #include "OfficeStyle.h"
 #include "OfficeDeviceIcons.h"
+#include "OfficeFlyoutMaterial.h"
 #include <QApplication>
 #include <QGuiApplication>
 #include <QScreen>
@@ -13,6 +14,8 @@
 #include <QKeyEvent>
 #include <QWheelEvent>
 #include <QHideEvent>
+#include <QShowEvent>
+#include <QResizeEvent>
 #include <QTimer>
 #include <QStyle>
 #include <QMenu>
@@ -64,12 +67,15 @@ class LightController final : public QFrame {
     OfficeDispatch dispatch;
     Json accepted;
     bool applying=false,busy=false,pinned=false,expanded=true;
+    bool acrylic=false;
+    QString materialReason="hidden";
     QRect placementAnchor;
     QWidget* body=new QWidget;
     QWidget* deviceBody=new QWidget;
     QVBoxLayout* deviceRows=new QVBoxLayout(deviceBody);
     QScrollArea* devices=new QScrollArea;
     QLabel* error=new QLabel;
+    QWidget* header=new QWidget;
     QToolButton *pin=new MixerHeaderButton(true),*collapse=new MixerHeaderButton(false);
     std::function<void()> openPanel;
     Row makeRow(const std::string& key,const QString& title,QVBoxLayout* parent,bool master=false){
@@ -113,15 +119,44 @@ class LightController final : public QFrame {
         const int y=placementAnchor.isEmpty()?available.bottom()-height()-12:placementAnchor.top()-height()-8;
         move(std::clamp(x,available.left(),std::max(available.left(),available.right()-width()+1)),std::clamp(y,available.top(),std::max(available.top(),available.bottom()-height()+1)));
     }
+    void roundMaterial(){
+        if(!acrylic){if(!mask().isEmpty())clearMask();return;}
+        QPainterPath shape;shape.addRoundedRect(QRectF(rect()),12,12);
+        setMask(QRegion(shape.toFillPolygon().toPolygon()));
+    }
+    void updateMaterial(bool visible){
+        bool active=false;materialReason=visible?"unsupported-platform":"hidden";
+#ifdef Q_OS_WIN
+        if(visible){
+            materialReason=flyoutMaterial::unavailableReason();
+            if(materialReason.isEmpty()){
+                active=flyoutMaterial::set(reinterpret_cast<HWND>(winId()),true);
+                materialReason=active?"native-acrylic":"native-acrylic-rejected";
+            }
+        }
+        if(!active&&acrylic)flyoutMaterial::set(reinterpret_cast<HWND>(internalWinId()),false);
+#endif
+        if(active!=acrylic){acrylic=active;header->setStyleSheet(acrylic?"QWidget#lightHeader{background:rgba(16,51,44,90);border-top-left-radius:11px;border-top-right-radius:11px;}":"");roundMaterial();update();}
+    }
 protected:
-    void paintEvent(QPaintEvent*) override {QPainter painter(this);painter.setRenderHint(QPainter::Antialiasing);painter.setPen(QPen(QColor("#28584e"),1));painter.setBrush(QColor("#081b18"));painter.drawRoundedRect(QRectF(rect()).adjusted(.5,.5,-.5,-.5),12,12);}
+    void paintEvent(QPaintEvent*) override {QPainter painter(this);painter.setRenderHint(QPainter::Antialiasing);painter.setPen(QPen(QColor("#28584e"),1));painter.setBrush(acrylic?QColor(8,27,24,20):QColor("#081b18"));painter.drawRoundedRect(QRectF(rect()).adjusted(.5,.5,-.5,-.5),12,12);}
+    void showEvent(QShowEvent* event) override {QFrame::showEvent(event);updateMaterial(true);}
+    void hideEvent(QHideEvent* event) override {updateMaterial(false);QFrame::hideEvent(event);}
+    void resizeEvent(QResizeEvent* event) override {QFrame::resizeEvent(event);roundMaterial();}
+#ifdef Q_OS_WIN
+    bool nativeEvent(const QByteArray& type,void* message,qintptr* result) override {
+        auto native=static_cast<MSG*>(message);
+        if(isVisible()&&(native->message==WM_SETTINGCHANGE||native->message==WM_THEMECHANGED||native->message==WM_DWMCOMPOSITIONCHANGED))updateMaterial(true);
+        return QFrame::nativeEvent(type,message,result);
+    }
+#endif
     void changeEvent(QEvent* event) override {QFrame::changeEvent(event);if(event->type()==QEvent::ActivationChange&&!isActiveWindow()&&!pinned)hide();}
     void keyPressEvent(QKeyEvent* event) override {if(event->key()==Qt::Key_Escape){hide();event->accept();}else QFrame::keyPressEvent(event);}
 public:
     LightController(QWidget* parent,OfficeDispatch send,std::function<void()> open):QFrame(parent,Qt::Tool|Qt::FramelessWindowHint),dispatch(std::move(send)),openPanel(std::move(open)){
         setObjectName("lightingFlyout");setWindowTitle("Lighting intensity");setAccessibleName("Lighting intensity mixer");setFixedWidth(420);setAttribute(Qt::WA_TranslucentBackground);setFont(officeui::body(15));setEnabled(false);
         setStyleSheet(R"(
-            QFrame#lightingFlyout{background:#081b18;border:1px solid #28584e;border-radius:12px;}
+            QFrame#lightingFlyout{background:transparent;border:0;}
             QWidget{color:#d4e6df;background:transparent;}
             QWidget#lightHeader{background:#10332c;border-top-left-radius:11px;border-top-right-radius:11px;}
             QLabel{border:0;background:transparent;}
@@ -136,7 +171,7 @@ public:
             QLabel#lightError{color:#ffd194;padding:8px;}
         )");
         auto outer=new QVBoxLayout(this);outer->setContentsMargins(1,1,1,10);outer->setSpacing(0);
-        auto header=new QWidget;header->setObjectName("lightHeader");auto head=new QVBoxLayout(header);head->setContentsMargins(0,8,0,4);head->setSpacing(0);
+        header->setObjectName("lightHeader");auto head=new QVBoxLayout(header);head->setContentsMargins(0,8,0,4);head->setSpacing(0);
         auto title=new QHBoxLayout;title->setContentsMargins(16,0,10,0);auto name=new QLabel("Lighting");name->setFont(officeui::body(20));title->addWidget(name,1);
         pin->setObjectName("lightPin");pin->setFixedSize(36,36);pin->setCheckable(true);pin->setAccessibleName("Pin lighting mixer");pin->setToolTip("Keep open");
         collapse->setProperty("expanded",true);collapse->setObjectName("lightCollapse");collapse->setFixedSize(36,36);collapse->setAccessibleName("Collapse devices");collapse->setToolTip("Collapse / expand devices");title->addWidget(pin);title->addWidget(collapse);head->addLayout(title);
@@ -149,6 +184,7 @@ public:
         connect(pin,&QToolButton::toggled,this,[this](bool on){pinned=on;setWindowFlag(Qt::WindowStaysOnTopHint,on);show();fit();raise();activateWindow();});
         connect(collapse,&QToolButton::clicked,this,[this]{expanded=!expanded;body->setVisible(expanded);collapse->setProperty("expanded",expanded);collapse->setAccessibleName(expanded?"Collapse devices":"Expand devices");collapse->update();adjustSize();fit();});
     }
+    Json materialStatus() const {return {{"active",acrylic},{"reason",materialReason.toStdString()},{"visible",isVisible()}};}
     void setState(const Json& value){
         if(!value.is_object()||!value.contains("devices"))return;
         accepted=value;applying=true;setEnabled(true);

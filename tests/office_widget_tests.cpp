@@ -59,6 +59,7 @@ void lightingMixer(QApplication& app){
     officeui::LightController mixer(nullptr,[&](Json request,OfficeReply reply){requests.push_back(std::move(request));replies.push_back(std::move(reply));},[&]{opened=true;});
     auto respond=[&](size_t index){auto reply=std::move(replies.at(index));reply({{"ok",true},{"result",state}});};
     mixer.setState(state);mixer.showAt({780,730,30,30});app.processEvents();
+    require(!mixer.materialStatus().at("active").get<bool>()&&mixer.materialStatus().at("reason")=="non-native-renderer","Offscreen rendering must report the opaque material fallback");
     auto verifyIcons=[&]{for(auto [id,path]:officeui::deviceIconFiles){
         auto button=mixer.findChild<QToolButton*>(QString("lightMute-")+QString::fromLatin1(id.data(),id.size()));
         require(button&&button->iconSize()==QSize(40,40)&&button->size()==QSize(44,44),"Product icon or mute hit target is incorrectly sized");
