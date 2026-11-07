@@ -6,8 +6,9 @@
 #include <stdexcept>
 #include <QDir>
 #include <QFile>
-#include <QJsonDocument>
 #include <QScreen>
+
+void require(bool value,const char* message){if(!value)throw std::runtime_error(message);}
 
 // Native composition evidence is limited to the generated fixture on the hosted
 // CI desktop. Local execution never captures the user's display.
@@ -57,7 +58,6 @@ void acrylicFlyout(QApplication& app){
     if(!output.isEmpty()){QFile file(output+"/native-material.json");require(file.open(QIODevice::WriteOnly),"Cannot retain final compositor metrics");file.write(QByteArray::fromStdString(evidence.dump(2)));}
 }
 
-void require(bool value,const char* message){if(!value)throw std::runtime_error(message);}
 int main(int argc,char** argv){
     QApplication app(argc,argv);
     try{
