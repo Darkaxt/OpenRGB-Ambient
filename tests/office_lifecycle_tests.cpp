@@ -38,6 +38,36 @@ struct Api : StubOpenRGBPluginAPIInterface {
 void require(bool value,const char* message) {if(!value) throw std::runtime_error(message);}
 
 struct OfficeLifecycleTest {
+    static void statusCheckpoints(){
+        QTemporaryDir dir;auto root=std::filesystem::path(dir.path().toStdWString()),path=root/"office-ambience.json";
+        {std::ofstream out(path);out<<Json{{"monitor","primary"},{"fps",15}};}
+        Controller strip("Govee H6609",20);Api api;api.controllers={&strip};
+        OfficeAmbience::Impl owner(&api,path,false);owner.rest.observe(false,true,1);owner.status();
+        auto bytes=[&]{QFile f(QString::fromStdWString(owner.statusPath.wstring()));require(f.open(QIODevice::ReadOnly),"Missing status checkpoint");return f.readAll();};
+        const auto initial=bytes();
+        ++owner.inputFrames;owner.outputFrames+=15;++owner.samplingPasses;++owner.deviceSubmissions;++owner.ledWrites;
+        owner.processingMs=2;owner.received=Clock::now();owner.rest.observe(false,true,2);owner.status();
+        require(bytes()==initial,"Volatile progress rewrote the disk checkpoint");
+        auto live=owner.command({{"command","snapshot"}}).at("status");
+        require(live.at("output_frames")==15&&live.at("input_frames")==1&&live.at("output_fps").get<double>()>0,"Live diagnostics froze with disk checkpoints");
+        auto stable=OfficeAmbience::Impl::checkpointState(live),ramp=live;
+        ramp["screen"]["temperature"]=4000;ramp["screen"]["brightness"]=.7;
+        ramp["screen"]["target_temperature"]=3000;ramp["screen"]["target_brightness"]=.6;ramp["display_brightness_factor"]=.5;
+        require(OfficeAmbience::Impl::checkpointState(ramp)==stable,"Screen/display ramps trigger disk churn");
+        for(auto key:{"gamma_valid","screen_disabled","lighting_disabled"}){
+            auto changed=live;changed["screen"][key]=!live.at("screen").at(key).get<bool>();
+            require(OfficeAmbience::Impl::checkpointState(changed)!=stable,"Readiness or pause transition lost its notification");
+        }
+        owner.outputPaused=true;owner.status();auto paused=bytes();
+        require(paused!=initial&&Json::parse(paused.constData()).at("output_paused")==true,"Pause transition did not publish");
+        owner.controllerError="fixture controller failure";owner.status();
+        require(Json::parse(bytes().constData()).at("controller_error")==owner.controllerError,"Controller failure not checkpointed");
+        auto original=owner.statusPath;owner.statusPath=root/"missing"/"status.json";owner.controllerError.clear();owner.status();
+        require(!owner.statusWriteError.empty(),"Failed checkpoint was acknowledged");
+        QDir().mkpath(QString::fromStdWString(owner.statusPath.parent_path().wstring()));owner.status();
+        require(owner.statusWriteError.empty()&&Json::parse(bytes().constData()).at("controller_error")=="","Failed checkpoint did not recover");
+        owner.statusPath=original;
+    }
     static void fullscreenProfiles(){
         QTemporaryDir dir;auto path=std::filesystem::path(dir.path().toStdWString())/"office-ambience.json";
         {std::ofstream out(path);out<<Json{{"monitor","primary"},{"fps",15},{"smoothing_ms",0},{"follow_display_brightness",false}};}
@@ -382,6 +412,7 @@ struct OfficeLifecycleTest {
         require(SystemParametersInfoW(SPI_GETSCREENSAVEACTIVE,0,&saverAfter,0)&&SystemParametersInfoW(SPI_GETSCREENSAVETIMEOUT,0,&timeoutAfter,0)&&saverBefore==saverAfter&&timeoutBefore==timeoutAfter,"Awake changed screensaver configuration");
     }
     static void run() {
+        statusCheckpoints();
         intensityPolicy();
         fullscreenProfiles();
         wallpaperImagePolicy();

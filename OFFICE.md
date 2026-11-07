@@ -92,9 +92,13 @@ prove that an independently switched-off physical panel is asleep when Windows
 continues reporting it as connected and awake. Diagnostics expose `rest_reason`
 and `input_desktop` without capturing secure-desktop imagery.
 
-`office-ambience-status.json` is atomically updated in the private configuration
-directory. It contains source mode/HWND, input/output counters, processing time,
-first-frame delay and capture errors, without screenshots or access tokens.
+`office-ambience-status.json` is an atomic last-state checkpoint in the private
+configuration directory. It updates on meaningful source/pause/readiness/error
+changes and requested asynchronous preview completion, without a periodic disk
+heartbeat. Counters/timings in this file describe its last checkpoint; live UI/IPC
+snapshots retain current metrics and one-second FPS measurement. Temperature and
+brightness ramps, input ticks and frame counters alone never trigger writes.
+It contains no screenshots or access tokens. Ten-second health logs are unchanged.
 
 `logs/office-ambience-events.jsonl` independently retains lifecycle history:
 UTC plus monotonic time, PID/TID, per-process session/sequence and source commit.

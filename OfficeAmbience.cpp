@@ -692,7 +692,7 @@ struct OfficeAmbience::Impl {
     uint64_t deliveredFrames=0,revision=1,sourceGeneration=0;
     double measuredFps=0;
     uint64_t previousStatusOutput=0;
-    Json config,layout;
+    Json config,layout,lastStatusState;
     std::unique_ptr<OfficeControlServer> control;
     std::string identifyDevice;
     bool calibration=false;
@@ -1374,19 +1374,37 @@ struct OfficeAmbience::Impl {
             {"output_fps",measuredFps},
             {"online_devices",std::count_if(devices.begin(),devices.end(),[](const auto& d){return d.controller!=nullptr;})},{"controller_error",controllerError},
             {"first_frame_after_switch_ms",firstFrameDelayMs},{"has_valid_frame",!latest.empty()},
-            {"error",error},{"diagnostic_error",journal->error()},{"updated_utc",QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs).toStdString()}};
+            {"error",error},{"diagnostic_error",journal->error()},{"status_file_cadence","state-change"},
+            {"updated_utc",QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs).toStdString()}};
+    }
+    static Json checkpointState(Json value) {
+        // Disk is a last-state checkpoint, not the unified UI's transport or a
+        // frame-counter heartbeat. Live snapshots and health logs retain metrics.
+        for(auto key:{"output_frames","input_frames","gpu_processing_ms","changed_input_frames","skipped_input_frames",
+            "sampling_passes","device_submissions","led_writes","callback_to_native_submit_ms","native_submit_ms",
+            "frame_age_ms","output_fps","first_frame_after_switch_ms","updated_utc","display_brightness_factor"})value.erase(key);
+        for(auto key:{"temperature","brightness","target_temperature","target_brightness"})value["screen"].erase(key);
+        value["rest_resume"].erase("last_input_tick");
+        return value;
     }
     void status() {
         auto elapsed=std::chrono::duration<double>(Clock::now()-lastStatus).count();
         if(elapsed>0) measuredFps=(outputFrames-previousStatusOutput)/elapsed;
         previousStatusOutput=outputFrames;
+        lastStatus=Clock::now();
         auto value=report();
+        auto state=checkpointState(value);state["settings_revision"]=revision;
+        // An explicitly requested asynchronous preview still wakes the existing
+        // diagnostic waiter. Idle capture never encodes previews or changes this.
+        if(capture){std::lock_guard lock(capture->state->previewMutex);
+            state["preview_encodes"]=capture->state->previewEncodes;state["preview_error"]=capture->state->previewError;}
+        if(state==lastStatusState)return;
         QSaveFile file(QString::fromStdWString(statusPath.wstring()));
         auto data=value.dump(2);
         bool saved=file.open(QIODevice::WriteOnly) && file.write(data.data(),data.size())==static_cast<qint64>(data.size()) && file.commit();
         auto failure=saved?std::string():file.errorString().toStdString();
         if(failure!=statusWriteError) {journal->write(saved?"status_write_recovered":"status_write_error",{{"message",failure}});statusWriteError=failure;}
-        lastStatus=Clock::now();
+        if(saved)lastStatusState=std::move(state);
     }
 };
 
