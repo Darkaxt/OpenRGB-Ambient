@@ -18,7 +18,7 @@ void lightingMixer(QApplication& app){
     auto respond=[&](size_t index){auto reply=std::move(replies.at(index));reply({{"ok",true},{"result",state}});};
     mixer.setState(state);mixer.showAt({780,730,30,30});app.processEvents();
     auto slider=[&](const char* key){auto value=mixer.findChild<QSlider*>(QString("lightSlider-")+key);require(value!=nullptr,"Lighting slider missing");require(!value->accessibleName().isEmpty()&&value->height()>=44,"Lighting slider lacks accessible name/hit target");return value;};
-    auto master=slider("master");require(master->value()==100&&slider("fullscreen")->value()==50,"Lighting percentages not rendered");
+    auto master=slider("master");require(master->value()==100&&!mixer.findChild<QSlider*>("lightSlider-fullscreen"),"Tray must expose master/device levels only");
     master->setValue(50);master->setValue(20);master->setValue(30);require(requests.size()==1&&requests[0].at("target")=="master","Rapid drag did not serialize native writes");
     state["master"]=50;respond(0);
     require(master->value()==30&&requests.size()==2&&requests[1].at("value")==30,"Old reply overwrote latest slider intent or intermediate value was replayed");
@@ -29,14 +29,14 @@ void lightingMixer(QApplication& app){
     state["devices"][0]["value"]=0;respond(replies.size()-1);mute->click();require(requests.back().at("value")==40,"Unmute did not restore device level");
     state["devices"][0]["value"]=40;respond(replies.size()-1);
     auto offline=mixer.findChild<QLabel*>("lightName-Keychron");require(offline&&offline->text().contains("Offline")&&slider("Keychron")->isEnabled(),"Offline device is missing or cannot retain a future level");
-    state["fullscreen_active"]=true;mixer.setState(state);require(mixer.findChild<QLabel*>("lightFullscreenState")->text().contains("Active"),"Actual fullscreen state missing");
+    state["fullscreen_active"]=true;mixer.setState(state);require(!mixer.findChild<QLabel*>("lightFullscreenState"),"Fullscreen policy leaked into tray controls");
     const auto output=qEnvironmentVariable("OFFICE_UI_EVIDENCE");Json metrics=Json::array();
     auto render=[&](const char* name){
         app.processEvents();
         for(double scale:{1.,1.5,2.}){
             QImage image(QSize(qRound(mixer.width()*scale),qRound(mixer.height()*scale)),QImage::Format_ARGB32_Premultiplied);image.setDevicePixelRatio(scale);image.fill(Qt::transparent);mixer.render(&image);
             require(mixer.width()==420&&image.width()==qRound(420*scale),"Flyout width does not follow reference/DPI contract");
-            require(image.pixelColor(qRound(10*scale),qRound((mixer.height()-15)*scale))==QColor("#202020"),"Flyout body must be opaque charcoal, not transparent desktop");
+            require(image.pixelColor(qRound(10*scale),qRound((mixer.height()-15)*scale))==QColor("#081b18"),"Flyout body must be opaque dark teal, not transparent desktop");
             if(!output.isEmpty()){QDir().mkpath(output);require(image.save(output+QString("/%1-%2.png").arg(name).arg(qRound(scale*100))),"Could not retain app-owned mixer rendering");}
         }
         for(auto widget:mixer.findChildren<QSlider*>()){
@@ -111,6 +111,9 @@ void multiSelection(QApplication& app) {
     }
     Panel panel("E:/Temp/openrgb-multiselect-widget-unavailable",{});panel.fixtureLayout(original);panel.show();app.processEvents();
     auto follow=panel.findChild<QCheckBox*>("followDisplayBrightness");
+    auto fullscreen=panel.findChild<QDoubleSpinBox*>("fullscreenIntensity");
+    require(fullscreen&&fullscreen->minimum()==0&&fullscreen->maximum()==100,"Main Output card must own the fullscreen percentage");
+    fullscreen->setValue(35);
     auto brightnessReadback=panel.findChild<QLabel*>("displayBrightnessStatus");
     require(follow && brightnessReadback && follow->text()=="Follow main display brightness","Display dimming control/readback missing from production panel");
     auto tree=panel.findChild<QTreeWidget*>("topologyTree");auto view=panel.findChild<QComboBox*>("topologyVisibility");
@@ -142,6 +145,12 @@ void multiSelection(QApplication& app) {
     panel.hide();app.processEvents();require(!panel.fixtureWantsPreview(),"Hidden panel continues requesting images");
     require(!panel.fixturePreviewRequest().contains("preview_blur"),"Hidden panel requests draft blur processing");
     panel.show();pageStack->setCurrentIndex(0);app.processEvents();require(!panel.fixtureWantsPreview(),"Control page unnecessarily requests images");
+    require(fullscreen->isVisible()&&save->isEnabled(),"Fullscreen change must use the main panel's Apply settings flow");
+    if(auto directory=qEnvironmentVariable("OFFICE_UI_EVIDENCE");!directory.isEmpty()){
+        QDir().mkpath(directory);
+        auto card=fullscreen->parentWidget()->parentWidget();
+        for(double scale:{1.,1.5,2.}){QImage image(QSize(qRound(card->width()*scale),qRound(card->height()*scale)),QImage::Format_ARGB32_Premultiplied);image.setDevicePixelRatio(scale);image.fill(Qt::transparent);card->render(&image);require(image.save(directory+QString("/output-card-%1.png").arg(qRound(scale*100))),"Cannot retain main Output card render");}
+    }
     pageStack->setCurrentIndex(1);previewBlur->setValue(0);
     auto click=[&](QTreeWidgetItem* row,Qt::KeyboardModifiers modifiers=Qt::NoModifier) {
         tree->scrollToItem(row);app.processEvents();auto box=tree->visualItemRect(row);auto p=QPointF(box.left()+75,box.center().y());
@@ -193,12 +202,14 @@ void contextOutlines(QApplication& app) {
 void trayMenuBackground() {
     QWidget parent;parent.setStyleSheet(officeui::stylesheet());QMenu menu(&parent);
     auto first=menu.addAction("Open Office Ambilight");menu.addSeparator();menu.addAction("Exit panel");
+    officeui::styleLightingMenu(&menu);
     menu.ensurePolished();menu.resize(menu.sizeHint());menu.setActiveAction(first);
     for(double scale:{1.,1.5,2.}) {
         QImage image(QSize(qRound(menu.width()*scale),qRound(menu.height()*scale)),QImage::Format_ARGB32_Premultiplied);
         image.setDevicePixelRatio(scale);image.fill(Qt::transparent);menu.render(&image);
-        auto background=image.pixelColor(qRound(5*scale),qRound((menu.height()-5)*scale));
-        require(background.alpha()==255 && background.lightness()<40,"Tray menu must paint an opaque dark background despite the transparent QWidget theme");
+        auto background=image.pixelColor(qRound(menu.width()/2.*scale),qRound((menu.height()-4)*scale));
+        require(background==QColor("#081b18"),"Modern tray menu must paint the same opaque dark teal as the mixer");
+        require(image.pixelColor(0,0).alpha()<255,"Modern tray menu corners must be rounded");
         auto row=menu.actionGeometry(first);auto highlight=image.pixelColor(qRound((row.left()+4)*scale),qRound(row.center().y()*scale));
         require(highlight.alpha()==255 && highlight!=background,"Tray menu selection must remain visible on its own background");
     }
@@ -230,6 +241,10 @@ void screenEditor(QApplication& app){
     panel.fixtureScreen(value);panel.show();app.processEvents();auto menu=panel.findChild<QMenu*>("officeTrayMenu");require(menu,"Real tray menu missing");
     QStringList entries;for(auto action:menu->actions())if(action->isVisible()&&!action->isSeparator())entries<<action->text();
     require(entries==QStringList{"Open","Disable lighting","Disable screen adjustments","Awake","Exit"},"Tray menu differs from agreed root structure with Awake addition");
+    if(auto directory=qEnvironmentVariable("OFFICE_UI_EVIDENCE");!directory.isEmpty()){
+        QDir().mkpath(directory);menu->ensurePolished();menu->resize(menu->sizeHint());menu->setActiveAction(menu->actions().front());
+        for(double scale:{1.,1.5,2.}){QImage image(QSize(qRound(menu->width()*scale),qRound(menu->height()*scale)),QImage::Format_ARGB32_Premultiplied);image.setDevicePixelRatio(scale);image.fill(Qt::transparent);menu->render(&image);require(image.save(directory+QString("/context-menu-%1.png").arg(qRound(scale*100))),"Cannot retain modern tray menu rendering");}
+    }
     auto lighting=panel.findChild<QMenu*>("lightingPauseMenu"),screen=panel.findChild<QMenu*>("screenPauseMenu");require(lighting&&screen&&lighting->actions().size()==11&&screen->actions().size()==11,"Pause choices missing");
     lighting->actions().at(2)->trigger();require(sent.at("target")=="lighting"&&sent.at("mode")=="duration"&&sent.at("minutes")==1,"Real RGB pause action dispatch failed");
     screen->actions().at(1)->trigger();require(sent.at("target")=="screen"&&sent.at("mode")=="sunrise","Real Screen pause action dispatch failed");

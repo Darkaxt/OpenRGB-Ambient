@@ -121,4 +121,10 @@ void buildTrayMenu(){
         return menu;
     };
     lightingPauseMenu=pauseMenu("Disable lighting","lighting",lightingEnable);screenPauseMenu=pauseMenu("Disable screen adjustments","screen",screenEnable);buildAwakeMenu();trayMenu->addSeparator();trayMenu->addAction("Exit",this,[this]{quitRequested=true;close();});
+    for(auto action:trayMenu->actions()){
+        auto title=action->text();if(action->isSeparator())continue;
+        auto glyph=title=="Open"?"settings_brightness":title.contains("lighting")?"power_settings_new":title.contains("screen")?"fit_screen":title=="Awake"?"bolt":"power_settings_new";
+        action->setIcon(officeui::icon(glyph,QColor("#45ddb0")));
+    }
+    officeui::styleLightingMenu(trayMenu);
 }

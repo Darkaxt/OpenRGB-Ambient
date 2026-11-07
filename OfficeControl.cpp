@@ -455,6 +455,7 @@ class Panel : public officeui::OfficeWindow {
     QCheckBox* blackBars=new officeui::Switch("Black bar detect");
     QCheckBox* followBrightness=new officeui::Switch("Follow main display brightness");
     QLabel* brightnessStatus=new QLabel;
+    QLabel* fullscreenIntensityState=new QLabel;
     QLabel* deviceSummary=new QLabel;
     QLabel* inventorySummary=new QLabel;
     QLabel* pageTitle=new QLabel;
@@ -545,7 +546,7 @@ class Panel : public officeui::OfficeWindow {
             if(name=="Cinema") {c["ema_alpha"]=.2;c["scene_cut"]=80;c["blur"]=2;}
             if(name=="Gaming") {c["fps"]=30;c["ema_alpha"]=.7;c["scene_cut"]=40;}
             if(name=="Calm") {c["ema_alpha"]=.1;c["scene_cut"]=255;c["blur"]=4;c["brightness"]=.6;}}
-        for(auto& [key,box]:numbers) box->setValue(c.at(key).get<double>());
+        for(auto& [key,box]:numbers)if(key!="fullscreen_intensity"||name=="Reset")box->setValue(c.at(key).get<double>());
         for(auto& [key,combo]:choices) combo->setCurrentIndex(combo->findData(text(c.at(key))));
         blackBars->setChecked(c.at("black_bar_detect"));fps->setValue(c.at("fps"));smooth->setValue(c.at("smoothing_ms"));changed();
     }
@@ -576,6 +577,7 @@ class Panel : public officeui::OfficeWindow {
         trace("snapshot-accepted");
         lastSnapshot=snapshot;
         if(lightMixer&&snapshot.contains("intensity"))lightMixer->setState(snapshot.at("intensity"));
+        fullscreenIntensityState->setText(snapshot.at("status").value("fullscreen_active",false)?"Active on the main display":"Applies to fullscreen apps on the main display");
         if(snapshot.contains("screen"))loadScreen(snapshot.at("screen"));
         if(snapshot.at("status").contains("awake"))loadAwake(snapshot.at("status").at("awake"));
         bool newHardware=false;

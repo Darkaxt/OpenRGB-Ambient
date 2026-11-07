@@ -7,7 +7,8 @@ immediately. The pin keeps the flyout open; the chevron collapses the controls.
 Escape or clicking elsewhere closes an unpinned flyout. Double-click or Open
 opens the full panel; its Output card also has a Lighting mixer button.
 
-Fullscreen intensity is a single percentage shared by all fullscreen apps on the
+Fullscreen intensity is in the main panel's Output card, not in the tray mixer.
+Use Apply settings there. It is a single percentage shared by all fullscreen apps on the
 main display (default50%). It multiplies master/device intensity and the existing
 brightness baseline/display-follow factor; exiting fullscreen restores normal
 levels. Ordinary maximized windows and other displays do not activate this dimming.
