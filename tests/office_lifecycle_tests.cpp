@@ -36,6 +36,25 @@ struct Api : StubOpenRGBPluginAPIInterface {
 void require(bool value,const char* message) {if(!value) throw std::runtime_error(message);}
 
 struct OfficeLifecycleTest {
+    static void wallpaperImagePolicy(){
+        QTemporaryDir dir;auto path=std::filesystem::path(dir.path().toStdWString())/"office-ambience.json";
+        {std::ofstream out(path);out<<Json{{"monitor","primary"},{"fps",15},{"smoothing_ms",0},{"follow_display_brightness",false}};}
+        Controller strip("Govee H6609",20),bars("Govee H8048",20),keys("Keychron Q6 HE ISO",109),laptop("Lenovo Legion 7 Gen 8",109),desk("Secretlab",48,"NL72S2"),mouse("G502 X PLUS",8);
+        Api api;api.controllers={&strip,&bars,&keys,&laptop,&desk,&mouse};OfficeAmbience::Impl owner(&api,path,false);
+        auto settings=owner.config;auto layout=owner.layout;Monitor monitor{reinterpret_cast<HMONITOR>(101),{0,0,32,16},"image-test"};
+        QImage image(32,16,QImage::Format_ARGB32);image.fill(Qt::blue);
+        owner.wallpaperImageBegan=Clock::now();owner.primeWallpaperImage(image,monitor,D3D_DRIVER_TYPE_WARP);owner.dirty=false;owner.tick();
+        auto all=[&](RGBColor expected){for(auto& d:owner.devices)require(std::all_of(d.colors.begin(),d.colors.end(),[&](auto c){return c==expected;}),"Wallpaper image did not reach every mapped output");};
+        all(ToRGBColor(0,0,255));require(owner.wallpaperImageActive&&owner.wallpaperImageSubmitted&&owner.inputFrames==0&&!owner.capture,"Static image was misreported as live capture");
+        owner.command({{"command","screen"},{"action","pause"},{"target","lighting"},{"mode","forever"}});owner.tick();all(0);
+        owner.command({{"command","screen"},{"action","pause"},{"target","lighting"},{"mode","enable"}});owner.tick();all(ToRGBColor(0,0,255));
+        owner.automaticSaver=true;owner.observeRest(true,false,100);owner.dirty=false;owner.tick();all(0);
+        require(!owner.wallpaperImageActive&&owner.latest.empty()&&owner.wallpaperImageRequested,"Rest retained a static wallpaper image");
+        owner.automaticSaver=false;owner.observeRest(false,true,100);owner.tick();all(0);
+        require(owner.latest.empty()&&owner.rest.active(),"Wallpaper image bypassed unchanged-input rest gate");
+        owner.observeRest(false,true,101);image.fill(Qt::red);owner.primeWallpaperImage(image,monitor,D3D_DRIVER_TYPE_WARP);owner.dirty=false;owner.tick();all(ToRGBColor(255,0,0));
+        require(owner.config==settings&&owner.layout==layout,"Image-first resume changed processing or topology");
+    }
     static void restPolicy(){
         QTemporaryDir dir;auto root=std::filesystem::path(dir.path().toStdWString());
         office::OfficeRest rest(root);require(!rest.active(),"New profile must not be asleep");
@@ -171,6 +190,7 @@ struct OfficeLifecycleTest {
                 Controller strip("Govee H6609",20),bars("Govee H8048",20),keys("Keychron Q6 HE ISO",109),laptop("Lenovo Legion 7 Gen 8",109),desk("Secretlab",48,"NL72S2"),mouse("G502 X PLUS",8);
                 Api api;api.controllers={&strip,&bars,&keys,&laptop,&desk,&mouse};
                 OfficeAmbience::Impl owner(&api,path,true);auto main=primaryMonitor();auto r=main.bounds;
+                owner.observeWallpaper=false; // The inactive desktop has no displayed Windows wallpaper.
                 owner.chooseSource(main);
                 require(owner.mode=="waiting"&&!owner.capture&&owner.dirty,"Unavailable source must remain scheduled for observation");
                 auto waitingGeneration=owner.sourceGeneration;
@@ -259,6 +279,7 @@ struct OfficeLifecycleTest {
         require(SystemParametersInfoW(SPI_GETSCREENSAVEACTIVE,0,&saverAfter,0)&&SystemParametersInfoW(SPI_GETSCREENSAVETIMEOUT,0,&timeoutAfter,0)&&saverBefore==saverAfter&&timeoutBefore==timeoutAfter,"Awake changed screensaver configuration");
     }
     static void run() {
+        wallpaperImagePolicy();
         restPolicy();
         savePreservesUntouchedSettings();
         hardwareOwnership();

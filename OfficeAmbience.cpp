@@ -53,6 +53,7 @@
 #include <numeric>
 #include <set>
 #include <cstring>
+#include "OfficeWallpaper.h"
 
 namespace {
 using namespace winrt;
@@ -656,6 +657,10 @@ struct OfficeAmbience::Impl {
     office::OfficeAwake awake;
     office::OfficeRest rest;
     bool observeNativeInput=true;
+    bool observeWallpaper=true,wallpaperImageRequested=true,wallpaperImageActive=false,wallpaperImageSubmitted=false;
+    std::string wallpaperImageError;
+    double wallpaperImageLoadMs=0;
+    Clock::time_point wallpaperImageBegan{};
     Clock::time_point lastBrightnessRead{};
     std::vector<Device> devices;
     std::unique_ptr<office::HardwareState> hardware;
@@ -940,7 +945,7 @@ struct OfficeAmbience::Impl {
     }
     // Test construction skips only OS event/IPC activation, retaining the actual
     // inventory, map and output implementation used by the installed owner.
-    Impl(OpenRGBPluginAPIInterface* api,const std::filesystem::path& path,bool activate=true):journal(std::make_shared<office::Journal>(path.parent_path()/"logs"/"office-ambience-events.jsonl")),api(api),configPath(path),awake(path.parent_path(),activate),rest(path.parent_path(),activate),observeNativeInput(activate) {
+    Impl(OpenRGBPluginAPIInterface* api,const std::filesystem::path& path,bool activate=true):journal(std::make_shared<office::Journal>(path.parent_path()/"logs"/"office-ambience-events.jsonl")),api(api),configPath(path),awake(path.parent_path(),activate),rest(path.parent_path(),activate),observeNativeInput(activate),observeWallpaper(activate) {
         journal->write("owner_start",{{"executable",QCoreApplication::applicationFilePath().toStdString()}});
         std::ifstream file(path);file>>config;diskConfig=config;
         screen=std::make_unique<office::OfficeScreen>(path.parent_path(),activate);
@@ -1079,6 +1084,19 @@ struct OfficeAmbience::Impl {
     void chooseSource() {
         chooseSource(primaryMonitor());
     }
+    void primeWallpaperImage(const QImage& image,const Monitor& monitor,D3D_DRIVER_TYPE driver=D3D_DRIVER_TYPE_HARDWARE) {
+        // Feed a newly read wallpaper through exactly the live GPU sampler;
+        // neither pre-rest images nor a second colour-processing path survive.
+        auto pixels=image.convertToFormat(QImage::Format_ARGB32);
+        if(pixels.isNull())throw std::runtime_error("Windows wallpaper image is unavailable");
+        CaptureState state(samples,monitor.bounds,monitor.bounds,driver);state.configure(config);
+        D3D11_TEXTURE2D_DESC desc{};desc.Width=pixels.width();desc.Height=pixels.height();
+        desc.MipLevels=desc.ArraySize=desc.SampleDesc.Count=1;desc.Format=DXGI_FORMAT_B8G8R8A8_UNORM;desc.Usage=D3D11_USAGE_DEFAULT;
+        D3D11_SUBRESOURCE_DATA data{pixels.constBits(),static_cast<UINT>(pixels.bytesPerLine()),0};
+        com_ptr<ID3D11Texture2D> texture;check_hresult(state.device->CreateTexture2D(&desc,&data,texture.put()));
+        state.processTexture(texture.get());latest=state.colors;
+        wallpaperImageActive=true;wallpaperImageSubmitted=false;wallpaperImageRequested=false;wallpaperImageError.clear();
+    }
     void chooseSource(const Monitor& monitor) {
         selectedMonitor=monitor;
         monitorMissing=!monitor.handle;
@@ -1099,6 +1117,20 @@ struct OfficeAmbience::Impl {
         const auto previousAwake=awake.status();awake.setContext(!saver&&candidate!=nullptr,!saver);
         if(previousAwake!=awake.status())journal->write("awake_transition",awake.status());
         std::string selected=saver?"screensaver":candidate?"app":"wallpaper";
+        if(observeWallpaper&&wallpaperImageRequested&&!saver) {
+            wallpaperImageRequested=false;wallpaperImageBegan=Clock::now();
+            try {
+                primeWallpaperImage(office::desktopWallpaperImage(monitor.bounds),monitor);
+                wallpaperImageLoadMs=std::chrono::duration<double,std::milli>(Clock::now()-wallpaperImageBegan).count();
+                mode=selected;dirty=true;
+                journal->write("wallpaper_image_ready",{{"load_ms",wallpaperImageLoadMs},{"display",monitor.name}});
+                // Submit this fresh image on this output tick before potentially
+                // blocking Windows capture setup on the following tick.
+                return;
+            } catch(hresult_error const& failure) {wallpaperImageError="Windows wallpaper query failed (HRESULT "+std::to_string(static_cast<int32_t>(failure.code()))+")";}
+              catch(std::exception const& failure) {wallpaperImageError=failure.what();}
+            journal->write("wallpaper_image_error",{{"message",wallpaperImageError}});
+        }
         if(!candidate && !saver) candidate=wallpaperHost(monitor);
         // Source readiness has no guaranteed WinEvent (for example a renderer
         // returning after unlock). Keep observing on the existing output tick.
@@ -1137,6 +1169,7 @@ struct OfficeAmbience::Impl {
         if(restReason()!=loggedRest) {journal->write("rest_transition",{{"previous",loggedRest},{"reason",restReason()}});loggedRest=restReason();}
         if(resting) {
             capture.reset();source=nullptr;mode="resting";latest.clear();
+            wallpaperImageRequested=true;wallpaperImageActive=false;wallpaperImageSubmitted=false;
             inputFrames=deliveredFrames=0;changedInputFrames=skippedInputFrames=samplingPasses=0;received={};error.clear();
         }
         auto now=Clock::now();
@@ -1158,6 +1191,7 @@ struct OfficeAmbience::Impl {
                 std::lock_guard lock(state->mutex);
                 closed=state->closed;
                 if(!closed && state->frames) {
+                    if(wallpaperImageActive) {journal->write("wallpaper_image_replaced",{{"generation",sourceGeneration}});wallpaperImageActive=false;}
                     if(!sessionLocked && !displayOff) latest=state->colors;
                     inputFrames=state->frames;changedInputFrames=state->changedFrames;skippedInputFrames=state->skippedFrames;
                     samplingPasses=state->samplingPasses;processingMs=state->lastProcessingMs;
@@ -1226,6 +1260,11 @@ struct OfficeAmbience::Impl {
             initialized=true; ++outputFrames;
             auto submitted=Clock::now();
             submitMs=deviceSubmissions==sentBefore?0:std::chrono::duration<double,std::milli>(submitted-submitBegan).count();
+            if(wallpaperImageActive&&!wallpaperImageSubmitted&&deviceSubmissions!=sentBefore&&!resting&&!paused) {
+                wallpaperImageSubmitted=true;
+                journal->write("wallpaper_image_submitted",{{"load_to_submit_ms",std::chrono::duration<double,std::milli>(submitted-wallpaperImageBegan).count()},
+                    {"device_submissions",deviceSubmissions-sentBefore},{"hardware_acknowledged",false}});
+            }
             if(deviceSubmissions!=sentBefore && inputFrames && deliveredFrames!=inputFrames) {
                 callbackToSubmitMs=std::chrono::duration<double,std::milli>(submitted-received).count();deliveredFrames=inputFrames;
             }
@@ -1246,6 +1285,8 @@ struct OfficeAmbience::Impl {
             {"display_brightness_display",displayBrightness.display},
             {"capture_bounds",{selectedMonitor.bounds.left,selectedMonitor.bounds.top,selectedMonitor.bounds.right,selectedMonitor.bounds.bottom}},
             {"source_generation",sourceGeneration},
+            {"wallpaper_image_active",wallpaperImageActive},{"wallpaper_image_submitted",wallpaperImageSubmitted},
+            {"wallpaper_image_load_ms",wallpaperImageLoadMs},{"wallpaper_image_error",wallpaperImageError},
             {"application_model","unified"},{"output_thread",GetCurrentThreadId()},{"output_paused",outputPaused||screen->lightingPaused()},{"screen",screen->status()},
             {"devices",devices.size()},{"leds",samples.size()},{"output_frames",outputFrames},
             {"input_frames",inputFrames},{"gpu_processing_ms",processingMs},

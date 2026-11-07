@@ -96,8 +96,28 @@ void mainDisplayCrops() {
         if(state.colors!=std::vector<RGBColor>(map.size(),expected)) throw std::runtime_error("Main-display change/resolution sampled another display or changed normalized map");
     }
 }
+void wallpaperPositioning() {
+    QImage image(4,2,QImage::Format_ARGB32);
+    for(int y=0;y<2;++y)for(int x=0;x<4;++x)image.setPixelColor(x,y,x<2?Qt::red:Qt::blue);
+    auto main=office::positionWallpaper(image,{0,0,2,2},{-2,0,4,2},DWPOS_SPAN,RGB(0,255,0));
+    if(main.pixelColor(0,0)!=Qt::blue||main.pixelColor(1,1)!=Qt::blue)throw std::runtime_error("Spanning wallpaper sampled the other display");
+    QImage dot(1,1,QImage::Format_ARGB32);dot.fill(Qt::red);
+    auto center=office::positionWallpaper(dot,{0,0,3,3},{0,0,3,3},DWPOS_CENTER,RGB(0,255,0));
+    if(center.pixelColor(1,1)!=Qt::red||center.pixelColor(0,0)!=Qt::green)throw std::runtime_error("Centered wallpaper lost background/position");
+    auto fit=office::positionWallpaper(image,{0,0,4,4},{0,0,4,4},DWPOS_FIT,RGB(0,255,0));
+    if(fit.pixelColor(0,0)!=Qt::green||fit.pixelColor(0,1)!=Qt::red||fit.pixelColor(3,2)!=Qt::blue)throw std::runtime_error("Fit wallpaper crop differs from Windows positioning");
+    auto fill=office::positionWallpaper(image,{0,0,2,2},{0,0,2,2},DWPOS_FILL,0);
+    if(fill.pixelColor(0,0)!=Qt::red||fill.pixelColor(1,0)!=Qt::blue)throw std::runtime_error("Fill wallpaper crop differs from Windows positioning");
+    auto stretch=office::positionWallpaper(image,{0,0,4,4},{0,0,4,4},DWPOS_STRETCH,0);
+    if(stretch.pixelColor(0,0)!=Qt::red||stretch.pixelColor(3,3)!=Qt::blue)throw std::runtime_error("Stretched wallpaper positioning failed");
+    auto tile=office::positionWallpaper(image,{0,0,4,2},{-2,0,6,2},DWPOS_TILE,0);
+    if(tile.pixelColor(0,0)!=Qt::blue||tile.pixelColor(3,1)!=Qt::red)throw std::runtime_error("Tiled wallpaper lost virtual-desktop origin");
+    bool rejected=false;try{office::positionWallpaper(QImage(),{0,0,2,2},{0,0,2,2},DWPOS_FILL,0);}catch(const std::exception&){rejected=true;}
+    if(!rejected)throw std::runtime_error("Unavailable wallpaper fabricated an image");
+}
 int main() {
     try {
+        wallpaperPositioning();
         mainDisplayCrops();
         mediaMattes();
         CaptureState state({around(.25f,.25f,.2f,.2f),around(.75f,.25f,.2f,.2f),
