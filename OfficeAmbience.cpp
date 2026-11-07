@@ -268,6 +268,23 @@ std::vector<Sample> deviceSamples(RGBControllerInterface* controller) {
 // Input textures stay on the GPU. One output pixel represents one physical LED;
 // the only CPU readback is this small row of final region-average RGB values.
 
+// Bytecode is independent of the capture window and D3D device. Recompiling
+// these identical programs on every unlock adds seconds before a fresh frame.
+struct CapturePrograms {
+    com_ptr<ID3DBlob> vertex,pixel,preview,content,compare;
+    CapturePrograms() {
+        auto compile=[](const char* entry,const char* profile,com_ptr<ID3DBlob>& result) {
+            com_ptr<ID3DBlob> errors;
+            auto hr=D3DCompile(shader,strlen(shader),nullptr,nullptr,nullptr,entry,profile,D3DCOMPILE_OPTIMIZATION_LEVEL3,0,result.put(),errors.put());
+            if(FAILED(hr)) throw std::runtime_error(errors?std::string(static_cast<const char*>(errors->GetBufferPointer()),errors->GetBufferSize()):"GPU shader compilation failed");
+        };
+        compile("vs","vs_5_0",vertex);compile("ps","ps_5_0",pixel);
+        compile("previewPs","ps_5_0",preview);compile("detectContentPs","ps_5_0",content);
+        compile("compareCs","cs_5_0",compare);
+    }
+};
+const CapturePrograms& capturePrograms() {static const CapturePrograms programs;return programs;}
+
 struct CaptureState {
     std::mutex mutex;
     bool active=true,closed=false;
@@ -338,23 +355,12 @@ struct CaptureState {
     CaptureState(const std::vector<Sample>& samples,RECT windowBounds,RECT monitorBounds,D3D_DRIVER_TYPE driver=D3D_DRIVER_TYPE_HARDWARE):colors(samples.size()),host(windowBounds),monitor(monitorBounds) {
         check_hresult(D3D11CreateDevice(nullptr,driver,nullptr,D3D11_CREATE_DEVICE_BGRA_SUPPORT,
             nullptr,0,D3D11_SDK_VERSION,device.put(),nullptr,context.put()));
-        com_ptr<ID3DBlob> vs,ps,errors;
-        auto compile=[&](const char* entry,const char* profile,com_ptr<ID3DBlob>& result) {
-            errors=nullptr;auto hr=D3DCompile(shader,strlen(shader),nullptr,nullptr,nullptr,entry,profile,D3DCOMPILE_OPTIMIZATION_LEVEL3,0,result.put(),errors.put());
-            if(FAILED(hr)) throw std::runtime_error(errors?std::string(static_cast<const char*>(errors->GetBufferPointer()),errors->GetBufferSize()):"GPU shader compilation failed");
-        };
-        compile("vs","vs_5_0",vs);
-        errors=nullptr;
-        compile("ps","ps_5_0",ps);
-        check_hresult(device->CreateVertexShader(vs->GetBufferPointer(),vs->GetBufferSize(),nullptr,vertex.put()));
-        check_hresult(device->CreatePixelShader(ps->GetBufferPointer(),ps->GetBufferSize(),nullptr,pixel.put()));
-        ps=nullptr;errors=nullptr;
-        compile("previewPs","ps_5_0",ps);
-        check_hresult(device->CreatePixelShader(ps->GetBufferPointer(),ps->GetBufferSize(),nullptr,previewPixel.put()));
-        ps=nullptr;compile("detectContentPs","ps_5_0",ps);
-        check_hresult(device->CreatePixelShader(ps->GetBufferPointer(),ps->GetBufferSize(),nullptr,contentPixel.put()));
-        ps=nullptr;compile("compareCs","cs_5_0",ps);
-        check_hresult(device->CreateComputeShader(ps->GetBufferPointer(),ps->GetBufferSize(),nullptr,compare.put()));
+        const auto& programs=capturePrograms();
+        check_hresult(device->CreateVertexShader(programs.vertex->GetBufferPointer(),programs.vertex->GetBufferSize(),nullptr,vertex.put()));
+        check_hresult(device->CreatePixelShader(programs.pixel->GetBufferPointer(),programs.pixel->GetBufferSize(),nullptr,pixel.put()));
+        check_hresult(device->CreatePixelShader(programs.preview->GetBufferPointer(),programs.preview->GetBufferSize(),nullptr,previewPixel.put()));
+        check_hresult(device->CreatePixelShader(programs.content->GetBufferPointer(),programs.content->GetBufferSize(),nullptr,contentPixel.put()));
+        check_hresult(device->CreateComputeShader(programs.compare->GetBufferPointer(),programs.compare->GetBufferSize(),nullptr,compare.put()));
         D3D11_BUFFER_DESC flag{};flag.ByteWidth=4;flag.Usage=D3D11_USAGE_DEFAULT;
         flag.BindFlags=D3D11_BIND_UNORDERED_ACCESS;flag.MiscFlags=D3D11_RESOURCE_MISC_BUFFER_ALLOW_RAW_VIEWS;
         check_hresult(device->CreateBuffer(&flag,nullptr,difference.put()));
@@ -1094,9 +1100,12 @@ struct OfficeAmbience::Impl {
         if(previousAwake!=awake.status())journal->write("awake_transition",awake.status());
         std::string selected=saver?"screensaver":candidate?"app":"wallpaper";
         if(!candidate && !saver) candidate=wallpaperHost(monitor);
+        // Source readiness has no guaranteed WinEvent (for example a renderer
+        // returning after unlock). Keep observing on the existing output tick.
+        if(!candidate) {selected="waiting";dirty=true;}
         RECT bounds{}; if(candidate) GetWindowRect(candidate,&bounds);
         bool force=invalidate.exchange(false);
-        if(!force && candidate==source && mode==selected && capture && EqualRect(&bounds,&sourceBounds) && EqualRect(&monitor.bounds,&monitorBounds)) return;
+        if(!force && candidate==source && mode==selected && (!candidate || capture) && EqualRect(&bounds,&sourceBounds) && EqualRect(&monitor.bounds,&monitorBounds)) return;
         DWORD sourcePid{};if(candidate)GetWindowThreadProcessId(candidate,&sourcePid);
         journal->write("source_switch_begin",{{"old_generation",sourceGeneration},{"old_hwnd",reinterpret_cast<uintptr_t>(source)},{"new_hwnd",reinterpret_cast<uintptr_t>(candidate)},{"source_pid",sourcePid},{"source_process",to_string(ownerName(candidate))},{"source_class",to_string(windowClass(candidate))},{"mode",selected},{"forced",force},{"display",monitor.name},{"bounds",{monitor.bounds.left,monitor.bounds.top,monitor.bounds.right,monitor.bounds.bottom}}});
         capture.reset(); source=candidate; mode=candidate?selected:"waiting";

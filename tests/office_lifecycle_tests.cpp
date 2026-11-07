@@ -171,6 +171,11 @@ struct OfficeLifecycleTest {
                 Controller strip("Govee H6609",20),bars("Govee H8048",20),keys("Keychron Q6 HE ISO",109),laptop("Lenovo Legion 7 Gen 8",109),desk("Secretlab",48,"NL72S2"),mouse("G502 X PLUS",8);
                 Api api;api.controllers={&strip,&bars,&keys,&laptop,&desk,&mouse};
                 OfficeAmbience::Impl owner(&api,path,true);auto main=primaryMonitor();auto r=main.bounds;
+                owner.chooseSource(main);
+                require(owner.mode=="waiting"&&!owner.capture&&owner.dirty,"Unavailable source must remain scheduled for observation");
+                auto waitingGeneration=owner.sourceGeneration;
+                owner.tick();owner.tick();
+                require(owner.mode=="waiting"&&owner.dirty&&owner.sourceGeneration==waitingGeneration,"Unchanged unavailable source must not churn capture generations");
                 auto requests=[](){
                     FILE* pipe=_popen("powercfg.exe /requests","r");require(pipe!=nullptr,"Query native power request inventory");
                     std::string value;char buffer[4096];while(std::fgets(buffer,sizeof(buffer),pipe))value+=buffer;
@@ -180,6 +185,11 @@ struct OfficeLifecycleTest {
                 auto expect=[&](bool on,const char* message){owner.chooseSource(main);require(owner.awake.active()==on,message);require(owner.awake.status().at("error")=="","Native awake request rejected");};
                 window=CreateWindowW(L"STATIC",L"Ordinary app",WS_OVERLAPPEDWINDOW|WS_VISIBLE,r.left+40,r.top+40,240,160,nullptr,nullptr,GetModuleHandleW(nullptr),nullptr);
                 require(window!=nullptr,"Create isolated app");expect(false,"Floating app kept display awake");
+                // No Qt/WinEvent dispatch or explicit invalidation between the
+                // waiting observation and the production tick discovering it.
+                ShowWindow(window,SW_MAXIMIZE);owner.tick();
+                require(owner.source==window&&owner.capture&&owner.awake.active(),"Available source did not recover without another window notification");
+                ShowWindow(window,SW_RESTORE);expect(false,"Recovered source retained Awake after restore");
                 ShowWindow(window,SW_MAXIMIZE);expect(true,"Maximized main-display app did not acquire awake requests");
                 auto native=requests();auto first=native.find(reason);require(first!=native.npos&&native.find(reason,first+reason.size())!=native.npos,"Windows must independently report display and system requests");
                 floating=CreateWindowW(L"STATIC",L"Floating overlay",WS_OVERLAPPEDWINDOW|WS_VISIBLE,r.left+20,r.top+20,200,150,nullptr,nullptr,GetModuleHandleW(nullptr),nullptr);
