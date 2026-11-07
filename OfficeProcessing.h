@@ -1,5 +1,6 @@
 #pragma once
 #include "OfficeLayout.h"
+#include "OfficeFullscreenProfiles.h"
 #include <array>
 #include <map>
 #include <string>
@@ -9,6 +10,7 @@ inline Json processingDefaults() {
     return {{"strategy","mapped"},{"depth",10.0},{"adaptive_min",3.0},{"adaptive_max",20.0},
         {"black_bar_detect",false},{"blur",0.0},{"saturation",1.0},{"brightness",1.0},{"follow_display_brightness",true},
         {"lighting_intensity",100.0},{"fullscreen_intensity",50.0},{"device_intensity",Json::object()},
+        {"fullscreen_profiles",Json::object()},
         {"min_luminance",0.0},{"ema_alpha",0.35},{"scene_cut",255.0},
         {"smoothing_mode","time"},{"standby","hold"},{"standby_brightness",0.15},
         {"effect_center_x",0.5},{"effect_center_y",0.5}};
@@ -30,6 +32,7 @@ inline void validateProcessing(const Json& c) {
     }
     if(c.at("adaptive_min")>c.at("adaptive_max")) throw std::runtime_error("Adaptive minimum exceeds maximum depth");
     if(!c.at("device_intensity").is_object())throw std::runtime_error("Device intensity must be an object");
+    validateFullscreenProfiles(c.at("fullscreen_profiles"));
     for(auto& [id,value]:c.at("device_intensity").items())
         if(id.empty()||!value.is_number()||!std::isfinite(value.get<double>())||value<0||value>100)throw std::runtime_error("Device intensity must be 0-100 percent");
     if(!c.at("black_bar_detect").is_boolean()) throw std::runtime_error("Black bar detection must be a boolean");

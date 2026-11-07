@@ -11,6 +11,21 @@
 #include <QCryptographicHash>
 #include <set>
 void require(bool condition,const char* message) {if(!condition) throw std::runtime_error(message);}
+void fullscreenProfileEditor(QApplication& app){
+    Json devices=Json::array();for(auto [id,name]:std::vector<std::pair<const char*,const char*>>{{"H6609","Govee strip"},{"H8048","Govee light bars"},{"Secretlab","Secretlab desk"},{"Keychron","Keychron Q6 HE"},{"Legion","Legion keyboard"},{"Logitech","G502 X PLUS"}})devices.push_back({{"id",id},{"name",name}});
+    Panel panel("unused-profile-fixture",{});panel.fixtureProfiles(Json::object(),devices);
+    auto open=panel.findChild<QPushButton*>("fullscreenProfilesButton");require(open!=nullptr,"Main Output card lacks profile editor");open->click();app.processEvents();
+    auto editor=dynamic_cast<officeui::FullscreenProfilesEditor*>(panel.findChild<QDialog*>("fullscreenProfilesDialog"));require(editor!=nullptr,"Profile editor is disconnected from Output card");
+    editor->findChild<QLineEdit*>("profileExecutable")->setText("not-an-app");editor->findChild<QPushButton*>("profileAdd")->click();require(editor->value().empty()&&!editor->findChild<QLabel*>("profileMessage")->text().isEmpty(),"Invalid app identity became a profile");
+    editor->findChild<QLineEdit*>("profileExecutable")->setText("NuvioDV.EXE");editor->findChild<QPushButton*>("profileAdd")->click();
+    for(auto id:{"H6609","H8048"}){auto use=editor->findChild<QCheckBox*>(QString("profileOverride-")+id);auto level=editor->findChild<QSpinBox*>(QString("profileLevel-")+id);require(use&&level&&!level->isEnabled(),"Profile device row missing or overrides enabled without selection");use->setChecked(true);level->setValue(30);require(level->isEnabled()&&!level->accessibleName().isEmpty(),"Profile intensity lacks accessible editing");}
+    auto expected=Json{{"nuviodv.exe",{{"H6609",30},{"H8048",30}}}};require(editor->value()==expected,"Profile editor did not retain independent Govee30 overrides");
+    auto output=qEnvironmentVariable("OFFICE_UI_EVIDENCE");if(!output.isEmpty())for(double scale:{1.,1.5,2.}){QImage image(QSize(qRound(editor->width()*scale),qRound(editor->height()*scale)),QImage::Format_ARGB32_Premultiplied);image.setDevicePixelRatio(scale);image.fill(Qt::transparent);editor->render(&image);require(image.save(output+QString("/fullscreen-profiles-%1.png").arg(qRound(scale*100))),"Could not retain profile UI rendering");}
+    editor->findChild<QDialogButtonBox*>("profileButtons")->button(QDialogButtonBox::Save)->click();require(panel.fixtureProfileDraft()==expected,"Use profiles failed to update the main draft");QApplication::sendPostedEvents(nullptr,QEvent::DeferredDelete);
+    open->click();app.processEvents();editor=dynamic_cast<officeui::FullscreenProfilesEditor*>(panel.findChild<QDialog*>("fullscreenProfilesDialog"));require(editor&&editor->value()==expected,"Reopening profile editor lost draft");
+    editor->findChild<QPushButton*>("profileRemove")->click();require(editor->value().empty(),"Remove profile failed");editor->reject();require(panel.fixtureProfileDraft()==expected,"Cancel overwrote main settings draft");QApplication::sendPostedEvents(nullptr,QEvent::DeferredDelete);
+    officeui::FullscreenProfilesEditor duplicate(expected,devices,50);duplicate.findChild<QLineEdit*>("profileExecutable")->setText("C:\\Updated\\NUVIODV.EXE");duplicate.findChild<QPushButton*>("profileAdd")->click();require(duplicate.value()==expected&&duplicate.findChild<QComboBox*>("profileApplications")->count()==1,"Executable case/path update duplicated or erased profile");
+}
 void productIcons(){
     QFile manifest(":/office/devices/provenance.json");require(manifest.open(QIODevice::ReadOnly),"Product icon provenance is not embedded");
     const auto provenance=Json::parse(manifest.readAll().toStdString());
@@ -317,6 +332,7 @@ int main(int argc,char** argv) {
     try {
         officeui::loadFonts();
         productIcons();
+        fullscreenProfileEditor(app);
         screenEditor(app);
         awakeEditor(app);
         hardwareEditor(app);

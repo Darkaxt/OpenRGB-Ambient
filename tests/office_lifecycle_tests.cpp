@@ -1,6 +1,7 @@
 // Exercise the actual output owner against OpenRGB's synchronous removal contract.
 #include "../OfficeAmbience.cpp"
 #include "../OfficeLightController.h"
+#include "../OfficeFullscreenProfilesEditor.h"
 #include "interface_stubs.h"
 #include <QCoreApplication>
 #include <QTemporaryDir>
@@ -37,6 +38,41 @@ struct Api : StubOpenRGBPluginAPIInterface {
 void require(bool value,const char* message) {if(!value) throw std::runtime_error(message);}
 
 struct OfficeLifecycleTest {
+    static void fullscreenProfiles(){
+        QTemporaryDir dir;auto path=std::filesystem::path(dir.path().toStdWString())/"office-ambience.json";
+        {std::ofstream out(path);out<<Json{{"monitor","primary"},{"fps",15},{"smoothing_ms",0},{"follow_display_brightness",false}};}
+        Controller strip("Govee H6609",20),bars("Govee H8048",20),keys("Keychron Q6 HE ISO",109),laptop("Lenovo Legion 7 Gen 8",109),desk("Secretlab",48,"NL72S2"),mouse("G502 X PLUS",8);
+        Api api;api.controllers={&strip,&bars,&keys,&laptop,&desk,&mouse};OfficeAmbience::Impl owner(&api,path,false);owner.dirty=false;
+        officeui::FullscreenProfilesEditor editor(Json::object(),owner.layout,50);
+        editor.findChild<QLineEdit*>("profileExecutable")->setText("C:\\Program Files\\NuvioDV\\NuvioDV.EXE");editor.findChild<QPushButton*>("profileAdd")->click();
+        for(auto id:{"H6609","H8048"}){editor.findChild<QCheckBox*>(QString("profileOverride-")+id)->setChecked(true);editor.findChild<QSpinBox*>(QString("profileLevel-")+id)->setValue(30);}
+        auto save=[&](const Json& profiles){auto settings=owner.config;settings["fullscreen_profiles"]=profiles;return owner.command({{"command","save"},{"revision",owner.revision},{"settings",settings},{"layout",owner.layout}});};
+        save(editor.value());owner.dirty=false;require(owner.diskConfig.at("fullscreen_profiles").at("nuviodv.exe").at("H8048")==30,"Real profile editor did not persist native settings");
+        auto stale=owner.snapshot();owner.command({{"command","intensity"},{"target","master"},{"value",80}});bool staleRejected=false;
+        try{owner.command({{"command","save"},{"revision",stale.at("revision")},{"settings",stale.at("settings")},{"layout",stale.at("layout")}});}catch(const std::exception&){staleRejected=true;}
+        require(staleRejected&&owner.config.at("lighting_intensity")==80,"Profile draft overwrote a newer tray adjustment");owner.command({{"command","intensity"},{"target","master"},{"value",100}});owner.dirty=false;
+        auto fresh=[&]{owner.latest.assign(314,ToRGBColor(200,100,40));owner.tick();};
+        fresh();require(owner.devices[0].colors[0]==ToRGBColor(200,100,40),"Wallpaper failed to preserve normal full intensity");
+        owner.fullscreenActive=true;owner.fullscreenExecutable="nuviodv.exe";fresh();
+        require(owner.devices[0].colors[0]==ToRGBColor(60,30,12)&&owner.devices[1].colors[0]==ToRGBColor(60,30,12),"Nuvio Govee 30% must replace rather than multiply fullscreen 50%");
+        require(owner.devices[2].colors[0]==ToRGBColor(100,50,20),"Unconfigured device did not retain shared fullscreen policy");
+        owner.config["lighting_intensity"]=50;owner.config["device_intensity"]["H6609"]=40;fresh();require(owner.devices[0].colors[0]==ToRGBColor(12,6,2),"App override ignored master/device controls");
+        owner.config["lighting_intensity"]=100;owner.config["device_intensity"]=Json::object();
+        owner.fullscreenExecutable="other.exe";fresh();require(owner.devices[0].colors[0]==ToRGBColor(100,50,20),"Switching apps retained previous app profile");
+        owner.fullscreenActive=false;owner.fullscreenExecutable.clear();fresh();require(owner.devices[0].colors[0]==ToRGBColor(200,100,40),"Leaving fullscreen did not restore normal output");
+        owner.fullscreenActive=true;owner.fullscreenExecutable="nuviodv.exe";owner.config["fullscreen_intensity"]=0;fresh();
+        require(!owner.captureSuppressed()&&owner.devices[0].colors[0]==ToRGBColor(60,30,12)&&owner.devices[2].colors[0]==0,"Default fullscreen mute swallowed nonzero app override");
+        owner.config["fullscreen_intensity"]=50;
+        owner.sessionLocked=true;owner.tick();for(auto& d:owner.devices)require(d.colors[0]==0,"Profile bypassed rest blackout");owner.sessionLocked=false;
+        auto expected=owner.diskConfig.at("fullscreen_profiles");
+        auto bad=expected;bad["nuviodv.exe"]["unknown"]=30;bool rejected=false;try{save(bad);}catch(const std::exception&){rejected=true;}require(rejected&&owner.diskConfig.at("fullscreen_profiles")==expected,"Unknown profile device changed settings");
+        auto external=owner.diskConfig;external["fps"]=20;{std::ofstream out(path);out<<external;}
+        rejected=false;try{save(Json::object());}catch(const std::exception&){rejected=true;}require(rejected&&owner.diskConfig.at("fullscreen_profiles")==expected,"Profile save overwrote an external edit");
+        {std::ofstream out(path);out<<owner.diskConfig;}
+        OfficeAmbience::Impl restarted(&api,path,false);require(restarted.config.at("fullscreen_profiles")==expected,"Profiles lost after restart");
+        restarted.config["fullscreen_profiles"]["nuviodv.exe"]=Json::object();for(auto& d:restarted.devices)restarted.config["fullscreen_profiles"]["nuviodv.exe"][d.key]=0;
+        restarted.fullscreenActive=true;restarted.fullscreenExecutable="nuviodv.exe";restarted.latest.assign(314,ToRGBColor(200,100,40));restarted.tick();require(restarted.captureSuppressed()&&restarted.latest.empty(),"All-device app mute retained capture");
+    }
     static void intensityPolicy(){
         QTemporaryDir dir;auto path=std::filesystem::path(dir.path().toStdWString())/"office-ambience.json";
         const Json original={{"monitor","primary"},{"fps",15},{"smoothing_ms",0},{"follow_display_brightness",false}};
@@ -292,10 +328,13 @@ struct OfficeLifecycleTest {
                 ShowWindow(window,SW_MAXIMIZE);expect(true,"Maximize failed to reacquire");ShowWindow(window,SW_MINIMIZE);expect(false,"Minimized app retained request");
                 DestroyWindow(window);window=CreateWindowW(L"STATIC",L"Fullscreen app",WS_POPUP|WS_VISIBLE,r.left,r.top,r.right-r.left,r.bottom-r.top,nullptr,nullptr,GetModuleHandleW(nullptr),nullptr);
                 require(window&&!IsZoomed(window),"Create borderless fullscreen app");expect(true,"Borderless fullscreen app did not acquire request");require(owner.fullscreenActive,"Fullscreen lighting policy did not recognize main-display app");
+                auto executable=office::fullscreenExecutableKey(QString::fromStdWString(ownerName(window)));require(!executable.empty()&&owner.fullscreenExecutable==executable,"Native source did not resolve actual fullscreen executable");
+                auto configured=owner.config;configured["fullscreen_profiles"]={{executable,{{"H6609",30},{"H8048",30}}}};owner.command({{"command","save"},{"revision",owner.revision},{"settings",configured},{"layout",owner.layout}});
+                require(owner.report().at("fullscreen_profile")==true&&std::abs(owner.intensityGain("H6609")-.3)<.00001,"Native window identity failed to select its saved device profile");
                 MONITORINFO secondary{};secondary.cbSize=sizeof(secondary);
                 EnumDisplayMonitors(nullptr,nullptr,[](HMONITOR h,HDC,LPRECT,LPARAM p)->BOOL{MONITORINFO info{sizeof(info)};if(GetMonitorInfoW(h,&info)&&!(info.dwFlags&MONITORINFOF_PRIMARY)){*reinterpret_cast<MONITORINFO*>(p)=info;return FALSE;}return TRUE;},reinterpret_cast<LPARAM>(&secondary));
                 auto other=secondary.rcMonitor;if(other.right==other.left)other={r.right+100,r.top,r.right+500,r.top+300};
-                SetWindowPos(window,nullptr,other.left,other.top,other.right-other.left,other.bottom-other.top,SWP_NOACTIVATE|SWP_NOZORDER);expect(false,"App outside main display retained request");require(!owner.fullscreenActive,"Other-display app retained fullscreen dimming");
+                SetWindowPos(window,nullptr,other.left,other.top,other.right-other.left,other.bottom-other.top,SWP_NOACTIVATE|SWP_NOZORDER);expect(false,"App outside main display retained request");require(!owner.fullscreenActive&&owner.fullscreenExecutable.empty()&&owner.intensityGain("H6609")==1,"Other-display app retained fullscreen profile");
                 SetWindowPos(window,nullptr,r.left,r.top,r.right-r.left,r.bottom-r.top,SWP_NOACTIVATE|SWP_NOZORDER);expect(true,"Return to main display failed to reacquire");
                 OfficeAmbience::Impl::nativeEvent(owner.eventWindow,WM_WTSSESSION_CHANGE,WTS_SESSION_LOCK,0);require(!owner.awake.active(),"Lock did not release native request");expect(false,"Locked session reacquired request");
                 OfficeAmbience::Impl::nativeEvent(owner.eventWindow,WM_WTSSESSION_CHANGE,WTS_SESSION_UNLOCK,0);expect(true,"Unlock failed to reacquire");
@@ -344,6 +383,7 @@ struct OfficeLifecycleTest {
     }
     static void run() {
         intensityPolicy();
+        fullscreenProfiles();
         wallpaperImagePolicy();
         restPolicy();
         savePreservesUntouchedSettings();

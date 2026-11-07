@@ -185,3 +185,17 @@ keyboards, are editable; disconnected devices retain their maps.
 
 This fork is under active integration. A successful build alone is not physical
 acceptance or final delivery. The core integration specification owns those gates.
+# Fullscreen app lighting profiles
+
+In the main Output card, open **Fullscreen app profiles**. Add an executable
+name (for example `NuvioDV.exe`) or browse to it, then check the devices whose
+fullscreen intensity should differ. Set both Govee devices to30% to dim them
+while NuvioDV is fullscreen on the main display. Choose **Use profiles**, then
+**Apply settings**. Remove the profile to return that app to the shared policy.
+
+Profile percentages replace the shared fullscreen percentage for the selected
+devices. Unchecked devices keep the shared fullscreen setting. Master intensity,
+individual device intensity and display dimming still multiply the result.
+Normal wallpaper levels return when fullscreen ends. Rest, lock, screensaver and
+disabled lighting keep their existing priority. Profiles match the executable
+basename without case sensitivity, including after an app changes install paths.

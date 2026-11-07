@@ -36,6 +36,13 @@ int main() {
         for(size_t i=0;i<points.size();++i) if(std::abs(identity[i].left-points[i].left)>.0001f)
             throw std::runtime_error("Opening/saving the editor must not move current samples");
         Json settings=processingDefaults();settings["smoothing_ms"]=140;validateProcessing(settings);
+        if(fullscreenExecutableKey("C:\\Program Files\\NuvioDV\\NuvioDV.EXE")!="nuviodv.exe")throw std::runtime_error("Executable profile identity must be case folded basename");
+        settings["fullscreen_profiles"]={{"nuviodv.exe",{{"H6609",30},{"H8048",30}}}};validateProcessing(settings);
+        for(auto profiles:{Json{{"NuvioDV.exe",Json::object()}},Json{{"nuviodv.exe",{{"H6609",101}}}},Json{{"nuviodv.exe",{{"H6609",true}}}},Json{{"not-an-app",Json::object()}},Json::array()}){
+            settings["fullscreen_profiles"]=profiles;rejected=false;try{validateProcessing(settings);}catch(const std::exception&){rejected=true;}
+            if(!rejected)throw std::runtime_error("Invalid fullscreen app profile accepted");
+        }
+        settings["fullscreen_profiles"]=Json::object();
         settings["device_intensity"]={{"H6609",101}};rejected=false;try{validateProcessing(settings);}catch(const std::exception&){rejected=true;}
         if(!rejected)throw std::runtime_error("Invalid persisted device intensity accepted");settings["device_intensity"]=Json::object();
         if(!settings.value("follow_display_brightness",false)) throw std::runtime_error("New and legacy maps must follow main-display dimming by default without rewriting the brightness baseline");

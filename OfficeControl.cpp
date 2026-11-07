@@ -8,6 +8,7 @@
 #include "OfficeSundial.h"
 #include "OfficeWindow.h"
 #include "OfficeLightController.h"
+#include "OfficeFullscreenProfilesEditor.h"
 #include <QTimeEdit>
 #include <QDateTimeEdit>
 #include <QActionGroup>
@@ -496,6 +497,11 @@ class Panel : public officeui::OfficeWindow {
     QPushButton* stopTest=new QPushButton("Stop test / return to ambience");
 
     void changed() {if(updating) return;dirty=true;dirtyLabel->setText("Unsaved changes");save->setEnabled(client.ready());}
+    void editFullscreenProfiles(){
+        auto editor=new officeui::FullscreenProfilesEditor(settings.value("fullscreen_profiles",Json::object()),layout,qRound(numbers.at("fullscreen_intensity")->value()),this);
+        editor->setAttribute(Qt::WA_DeleteOnClose);
+        connect(editor,&QDialog::accepted,this,[this,editor]{settings["fullscreen_profiles"]=editor->value();changed();});editor->open();
+    }
     void writePanelOption(const char* key,bool value) {
         auto next=panelOptions;next[key]=value;QSaveFile file(state+"/office-panel.json");auto data=QByteArray::fromStdString(next.dump(2));
         if(!file.open(QIODevice::WriteOnly) || file.write(data)!=data.size() || !file.commit()) {failure("Could not save panel preferences");return;}panelOptions=next;
@@ -577,7 +583,8 @@ class Panel : public officeui::OfficeWindow {
         trace("snapshot-accepted");
         lastSnapshot=snapshot;
         if(lightMixer&&snapshot.contains("intensity"))lightMixer->setState(snapshot.at("intensity"));
-        fullscreenIntensityState->setText(snapshot.at("status").value("fullscreen_active",false)?"Active on the main display":"Applies to fullscreen apps on the main display");
+        const auto& fullscreenStatus=snapshot.at("status");auto fullscreenExe=fullscreenStatus.value("fullscreen_executable",std::string());
+        fullscreenIntensityState->setText(fullscreenStatus.value("fullscreen_active",false)?QString("%1 · %2").arg(QString::fromStdString(fullscreenExe)).arg(fullscreenStatus.value("fullscreen_profile",false)?"App profile active":"Default fullscreen intensity active"):"Applies to fullscreen apps on the main display");
         if(snapshot.contains("screen"))loadScreen(snapshot.at("screen"));
         if(snapshot.at("status").contains("awake"))loadAwake(snapshot.at("status").at("awake"));
         bool newHardware=false;
@@ -887,6 +894,8 @@ public:
     void fixtureHardware(const Json& value) {refresh.stop();client.connected={};hardwareDialog(value);}
     void fixtureScreen(const Json& value) {refresh.stop();client.connected={};loadScreen(value);shellPages->setCurrentIndex(0);pages->setCurrentIndex(7);}
     void fixtureAwake(const Json& value) {refresh.stop();client.connected={};loadAwake(value);}
+    void fixtureProfiles(const Json& value,const Json& devices) {refresh.stop();client.connected={};settings=office::processingDefaults();settings["fullscreen_profiles"]=value;layout=devices;numbers.at("fullscreen_intensity")->setValue(50);}
+    Json fixtureProfileDraft() const{return settings.at("fullscreen_profiles");}
     bool fixtureWantsPreview() const {return wantsPreview();}
     Json fixturePreviewRequest() const {return previewRequest();}
     void fixturePreviewReply(const Json& reply) {loadPreview(reply);}
