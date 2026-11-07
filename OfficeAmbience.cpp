@@ -657,6 +657,7 @@ struct OfficeAmbience::Impl {
     office::OfficeAwake awake;
     office::OfficeRest rest;
     bool observeNativeInput=true;
+    bool observeNativeSources=true,capturePaused=false;
     bool observeWallpaper=true,wallpaperImageRequested=true,wallpaperImageActive=false,wallpaperImageSubmitted=false;
     std::string wallpaperImageError;
     double wallpaperImageLoadMs=0;
@@ -799,6 +800,7 @@ struct OfficeAmbience::Impl {
             previewKey=previewEpoch+":"+std::to_string(sourceGeneration)+":"+std::to_string(state.previewGeneration)+":"+std::to_string(state.previewRenderedBlur);
             if(preview && state.previewRenderedBlur==previewBlur && knownPreview!=previewKey) image=state.previewBase64;
             previewError=state.previewError;encodes=state.previewEncodes;encodeMs=state.previewEncodeMs;}
+        if(preview&&capturePaused)previewError="Lighting is disabled; live capture is stopped";
         auto online=Json::array();{std::lock_guard lock(controllersMutex);for(auto& d:devices) online.push_back(d.controller!=nullptr);}
         Json settings={{"monitor",config.at("monitor")},{"enabled",config.at("enabled")},{"fps",config.at("fps")},{"smoothing_ms",config.at("smoothing_ms")}};
         const auto defaults=office::processingDefaults();for(auto& [key,value]:defaults.items()) settings[key]=config.at(key);
@@ -943,9 +945,10 @@ struct OfficeAmbience::Impl {
             if(event==EVENT_SYSTEM_DESKTOPSWITCH) found->second->invalidate=true;
         }
     }
-    // Test construction skips only OS event/IPC activation, retaining the actual
-    // inventory, map and output implementation used by the installed owner.
-    Impl(OpenRGBPluginAPIInterface* api,const std::filesystem::path& path,bool activate=true):journal(std::make_shared<office::Journal>(path.parent_path()/"logs"/"office-ambience-events.jsonl")),api(api),configPath(path),awake(path.parent_path(),activate),rest(path.parent_path(),activate),observeNativeInput(activate),observeWallpaper(activate) {
+    // Test construction skips OS event/IPC activation and automatic native
+    // source observation, retaining inventory/map/output and explicit source
+    // selection. Output fixtures supply their own fresh image rows.
+    Impl(OpenRGBPluginAPIInterface* api,const std::filesystem::path& path,bool activate=true):journal(std::make_shared<office::Journal>(path.parent_path()/"logs"/"office-ambience-events.jsonl")),api(api),configPath(path),awake(path.parent_path(),activate),rest(path.parent_path(),activate),observeNativeInput(activate),observeNativeSources(activate),observeWallpaper(activate) {
         journal->write("owner_start",{{"executable",QCoreApplication::applicationFilePath().toStdString()}});
         std::ifstream file(path);file>>config;diskConfig=config;
         screen=std::make_unique<office::OfficeScreen>(path.parent_path(),activate);
@@ -1084,6 +1087,13 @@ struct OfficeAmbience::Impl {
     void chooseSource() {
         chooseSource(primaryMonitor());
     }
+    bool captureSuppressed() const {return outputPaused||screen->lightingPaused()||!config.at("enabled").get<bool>();}
+    void releaseCaptureInput() {
+        capture.reset();source=nullptr;latest.clear();received={};error.clear();
+        inputFrames=deliveredFrames=changedInputFrames=skippedInputFrames=samplingPasses=0;
+        processingMs=firstFrameDelayMs=0;
+        wallpaperImageActive=false;wallpaperImageSubmitted=false;wallpaperImageRequested=true;
+    }
     void primeWallpaperImage(const QImage& image,const Monitor& monitor,D3D_DRIVER_TYPE driver=D3D_DRIVER_TYPE_HARDWARE) {
         // Feed a newly read wallpaper through exactly the live GPU sampler;
         // neither pre-rest images nor a second colour-processing path survive.
@@ -1117,6 +1127,14 @@ struct OfficeAmbience::Impl {
         const auto previousAwake=awake.status();awake.setContext(!saver&&candidate!=nullptr,!saver);
         if(previousAwake!=awake.status())journal->write("awake_transition",awake.status());
         std::string selected=saver?"screensaver":candidate?"app":"wallpaper";
+        // Awake's application policy and screen adjustment do not need image
+        // capture. Keep those independent while RGB is disabled, without GPU
+        // allocation, wallpaper-file reads, or a hidden preview capture.
+        if(captureSuppressed()) {
+            capturePaused=true;
+            if(capture||source||!latest.empty())releaseCaptureInput();
+            mode=selected;return;
+        }
         if(observeWallpaper&&wallpaperImageRequested&&!saver) {
             wallpaperImageRequested=false;wallpaperImageBegan=Clock::now();
             try {
@@ -1155,15 +1173,23 @@ struct OfficeAmbience::Impl {
         return sessionLocked?"session-locked":displayOff?"display-asleep":automaticSaver?"automatic-screensaver":desktopUnavailable?"secure-desktop":monitorMissing?"monitor-disconnected":rest.active()?"awaiting-user-input":"";
     }
     void tick() {
-        // Persistent tray pause is independent of capture, screen adjustment,
-        // and per-device hardware ownership. Native tests cannot override it.
+        // RGB pause owns capture lifetime, independently of gamma and Awake.
         const bool paused=outputPaused||screen->lightingPaused();
+        const bool nextCapturePaused=captureSuppressed();
+        if(nextCapturePaused!=capturePaused) {
+            capturePaused=nextCapturePaused;
+            if(capturePaused)releaseCaptureInput();
+            else wallpaperImageRequested=true;
+            dirty=true;invalidate=true;
+            journal->write("capture_pause",{{"paused",capturePaused}});
+        }
+        if(capturePaused&&(capture||source||!latest.empty()))releaseCaptureInput();
         // There is no session last-input change notification. Observe its token
         // on the existing output cadence only while the resume gate is held.
         if(observeNativeInput&&rest.active()&&rest.inputChanged(lastInput()))dirty=true;
         if(sessionLocked||powerSuspended||rest.active())awake.setContext(false,false);
         else if(displayOff)awake.setContext(false,!desktopUnavailable&&!automaticSaver&&!monitorMissing,false);
-        if(!sessionLocked && !displayOff && !powerSuspended && dirty.exchange(false)) chooseSource();
+        if(observeNativeSources && !sessionLocked && !displayOff && !powerSuspended && dirty.exchange(false)) chooseSource();
         awake.tick();
         const bool resting=!restReason().empty();
         if(restReason()!=loggedRest) {journal->write("rest_transition",{{"previous",loggedRest},{"reason",restReason()}});loggedRest=restReason();}
@@ -1285,6 +1311,7 @@ struct OfficeAmbience::Impl {
             {"display_brightness_display",displayBrightness.display},
             {"capture_bounds",{selectedMonitor.bounds.left,selectedMonitor.bounds.top,selectedMonitor.bounds.right,selectedMonitor.bounds.bottom}},
             {"source_generation",sourceGeneration},
+            {"capture_paused",capturePaused},{"capture_active",capture!=nullptr},
             {"wallpaper_image_active",wallpaperImageActive},{"wallpaper_image_submitted",wallpaperImageSubmitted},
             {"wallpaper_image_load_ms",wallpaperImageLoadMs},{"wallpaper_image_error",wallpaperImageError},
             {"application_model","unified"},{"output_thread",GetCurrentThreadId()},{"output_paused",outputPaused||screen->lightingPaused()},{"screen",screen->status()},
