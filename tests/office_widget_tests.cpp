@@ -81,6 +81,7 @@ void lightingMixer(QApplication& app){
     const auto output=qEnvironmentVariable("OFFICE_UI_EVIDENCE");Json metrics=Json::array();
     auto render=[&](const char* name){
         app.processEvents();
+        metrics.push_back({{"state",name},{"id","lightingFlyout"},{"bounds",{mixer.x(),mixer.y(),mixer.width(),mixer.height()}},{"bottom_right",{mixer.frameGeometry().right(),mixer.frameGeometry().bottom()}}});
         for(double scale:{1.,1.5,2.}){
             QImage image(QSize(qRound(mixer.width()*scale),qRound(mixer.height()*scale)),QImage::Format_ARGB32_Premultiplied);image.setDevicePixelRatio(scale);image.fill(Qt::transparent);mixer.render(&image);
             require(mixer.width()==420&&image.width()==qRound(420*scale),"Flyout width does not follow reference/DPI contract");
@@ -93,8 +94,13 @@ void lightingMixer(QApplication& app){
             metrics.push_back({{"state",name},{"id",widget->objectName().toStdString()},{"accessible_name",widget->accessibleName().toStdString()},{"bounds",{bounds.x(),bounds.y(),bounds.width(),bounds.height()}},{"visible",widget->isVisible()},{"value",widget->value()}});
         }
     };
-    render("expanded");auto height=mixer.height();mixer.findChild<QToolButton*>("lightCollapse")->click();app.processEvents();require(mixer.height()<height&&!mixer.findChild<QScrollArea*>("lightDevices")->isVisible(),"Collapse did not compact the flyout");render("collapsed");mixer.findChild<QToolButton*>("lightCollapse")->click();
+    render("expanded");auto height=mixer.height();auto attached=mixer.frameGeometry().bottomRight();
+    mixer.findChild<QToolButton*>("lightCollapse")->click();app.processEvents();require(mixer.height()<height&&!mixer.findChild<QScrollArea*>("lightDevices")->isVisible(),"Collapse did not compact the flyout");
+    require(mixer.frameGeometry().bottomRight()==attached,"Collapsed panel detached from its tray anchor");mixer.setState(state);app.processEvents();require(mixer.frameGeometry().bottomRight()==attached,"Snapshot refresh moved the collapsed panel away from the tray");
+    render("collapsed");mixer.hide();mixer.showAt({780,730,30,30});app.processEvents();require(mixer.frameGeometry().bottomRight()==attached,"Reopening collapsed did not retain tray placement");
+    mixer.findChild<QToolButton*>("lightCollapse")->click();app.processEvents();require(mixer.frameGeometry().bottomRight()==attached,"Expanding moved the panel's tray edge");
     auto pin=mixer.findChild<QToolButton*>("lightPin");pin->click();app.processEvents();QApplication::setActiveWindow(&mixer);QApplication::setActiveWindow(nullptr);require(mixer.isVisible(),"Pinned flyout dismissed on deactivation");
+    auto pinnedEdge=mixer.frameGeometry().bottomRight();mixer.findChild<QToolButton*>("lightCollapse")->click();app.processEvents();require(mixer.frameGeometry().bottomRight()==pinnedEdge,"Pinned collapsed panel detached from tray");mixer.findChild<QToolButton*>("lightCollapse")->click();app.processEvents();require(mixer.frameGeometry().bottomRight()==pinnedEdge,"Pinned expansion moved tray edge");
     QKeyEvent escape(QEvent::KeyPress,Qt::Key_Escape,Qt::NoModifier);QApplication::sendEvent(&mixer,&escape);require(!mixer.isVisible(),"Escape must dismiss even when pinned");
     mixer.showAt({780,730,30,30});pin->click();app.processEvents();QApplication::setActiveWindow(&mixer);QApplication::setActiveWindow(nullptr);require(!mixer.isVisible(),"Unpinned flyout did not dismiss on click-away");
     mixer.showAt({780,730,30,30});mixer.findChild<QPushButton*>("lightOpenPanel")->click();require(opened&&!mixer.isVisible(),"Open panel action failed");

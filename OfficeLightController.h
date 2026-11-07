@@ -64,6 +64,7 @@ class LightController final : public QFrame {
     OfficeDispatch dispatch;
     Json accepted;
     bool applying=false,busy=false,pinned=false,expanded=true;
+    QRect placementAnchor;
     QWidget* body=new QWidget;
     QWidget* deviceBody=new QWidget;
     QVBoxLayout* deviceRows=new QVBoxLayout(deviceBody);
@@ -101,11 +102,16 @@ class LightController final : public QFrame {
     }
     void fit(QScreen* screen=nullptr){
         if(!isVisible())return;
-        if(!screen)screen=QGuiApplication::screenAt(frameGeometry().center());if(!screen)screen=QGuiApplication::primaryScreen();if(!screen)return;
+        if(!screen)screen=QGuiApplication::screenAt(placementAnchor.isEmpty()?frameGeometry().center():placementAnchor.center());if(!screen)screen=QGuiApplication::primaryScreen();if(!screen)return;
         const auto available=screen->availableGeometry();
         const int content=deviceRows->sizeHint().height();devices->setFixedHeight(content);adjustSize();
         const int overhead=height()-content;devices->setFixedHeight(std::min(content,std::max(76,available.height()-overhead-12)));
-        adjustSize();move(std::clamp(x(),available.left(),std::max(available.left(),available.right()-width()+1)),std::clamp(y(),available.top(),std::max(available.top(),available.bottom()-height()+1)));
+        adjustSize();
+        // Size changes grow/shrink away from the tray, preserving the opening
+        // anchor rather than retaining the expanded panel's old top edge.
+        const int x=placementAnchor.isEmpty()?available.right()-width()-12:placementAnchor.right()-width();
+        const int y=placementAnchor.isEmpty()?available.bottom()-height()-12:placementAnchor.top()-height()-8;
+        move(std::clamp(x,available.left(),std::max(available.left(),available.right()-width()+1)),std::clamp(y,available.top(),std::max(available.top(),available.bottom()-height()+1)));
     }
 protected:
     void paintEvent(QPaintEvent*) override {QPainter painter(this);painter.setRenderHint(QPainter::Antialiasing);painter.setPen(QPen(QColor("#28584e"),1));painter.setBrush(QColor("#081b18"));painter.drawRoundedRect(QRectF(rect()).adjusted(.5,.5,-.5,-.5),12,12);}
@@ -140,7 +146,7 @@ public:
         error->setObjectName("lightError");error->setWordWrap(true);error->hide();outer->addWidget(error);
         auto openButton=new QPushButton("Open Office Ambilight");openButton->setObjectName("lightOpenPanel");openButton->setMinimumHeight(36);openButton->setAccessibleName("Open Office Ambilight");outer->addWidget(openButton);
         connect(openButton,&QPushButton::clicked,this,[this]{hide();if(openPanel)openPanel();});
-        connect(pin,&QToolButton::toggled,this,[this](bool on){pinned=on;setWindowFlag(Qt::WindowStaysOnTopHint,on);show();raise();activateWindow();});
+        connect(pin,&QToolButton::toggled,this,[this](bool on){pinned=on;setWindowFlag(Qt::WindowStaysOnTopHint,on);show();fit();raise();activateWindow();});
         connect(collapse,&QToolButton::clicked,this,[this]{expanded=!expanded;body->setVisible(expanded);collapse->setProperty("expanded",expanded);collapse->setAccessibleName(expanded?"Collapse devices":"Expand devices");collapse->update();adjustSize();fit();});
     }
     void setState(const Json& value){
@@ -156,11 +162,9 @@ public:
     }
     void showAt(const QRect& anchor){
         auto screen=QGuiApplication::screenAt(anchor.center());if(!screen)screen=QGuiApplication::primaryScreen();if(!screen)return;
+        placementAnchor=anchor;
         setState(accepted);show();fit(screen);
-        const auto available=screen->availableGeometry();
-        int x=anchor.isEmpty()?available.right()-width()-12:anchor.right()-width();
-        int y=anchor.isEmpty()?available.bottom()-height()-12:anchor.top()-height()-8;
-        move(std::clamp(x,available.left(),std::max(available.left(),available.right()-width()+1)),std::clamp(y,available.top(),std::max(available.top(),available.bottom()-height()+1)));raise();activateWindow();
+        raise();activateWindow();
     }
 };
 }
