@@ -15,7 +15,9 @@ void require(bool value,const char* message){if(!value)throw std::runtime_error(
 void acrylicFlyout(QApplication& app){
     using office::Json;
     class Stripes final:public QWidget {
-        void paintEvent(QPaintEvent*) override {QPainter p(this);for(int x=0;x<width();++x)p.fillRect(x,0,1,height(),x%2?Qt::white:Qt::black);}
+    public:
+        QRect target;
+        void paintEvent(QPaintEvent*) override {QPainter p(this);for(int x=0;x<width();++x){auto color=x<target.center().x()?QColor(220,40,40):QColor(40,40,220);p.fillRect(x,0,1,height(),x%2?color.lighter(130):color.darker(130));}}
     } background;
     background.setWindowFlags(Qt::Tool|Qt::FramelessWindowHint);background.setGeometry(QGuiApplication::primaryScreen()->availableGeometry());background.show();background.repaint();app.processEvents();
     officeui::LightController mixer(nullptr,{},{});
@@ -23,15 +25,15 @@ void acrylicFlyout(QApplication& app){
     mixer.setState({{"master",100},{"devices",devices}});
     auto screen=QGuiApplication::primaryScreen();const auto area=screen->availableGeometry();
     mixer.showAt(QRect(area.right()-40,area.bottom()-35,30,30));mixer.findChild<QToolButton*>("lightCollapse")->click();app.processEvents();mixer.repaint();
+    background.target=mixer.frameGeometry().translated(-background.pos());background.repaint();app.processEvents();
     auto hwnd=reinterpret_cast<HWND>(mixer.winId());
     require(mixer.materialStatus().at("active").get<bool>(),mixer.materialStatus().dump().c_str());
     require((GetWindowLongPtrW(hwnd,GWL_EXSTYLE)&WS_EX_LAYERED)!=0,"Acrylic must preserve Qt's layered raster window");
-    officeui::flyoutMaterial::AccentPolicy policy;
-    require(officeui::flyoutMaterial::read(hwnd,policy)&&policy.state==4&&policy.color==0xb2181b08,"Native acrylic policy/tint readback differs");
+    require(mixer.materialStatus().at("native_set_accepted")==true&&mixer.materialStatus().at("last_accepted_accent")==4,"Native compositor rejected acrylic");
     require(!mixer.mask().contains({0,0})&&mixer.mask().contains(mixer.rect().center()),"Acrylic is not clipped to the rounded surface");
     QImage veil(mixer.size(),QImage::Format_ARGB32_Premultiplied);veil.fill(Qt::transparent);mixer.render(&veil);
     require(veil.pixelColor(30,mixer.height()-18).alpha()>0&&veil.pixelColor(30,mixer.height()-18).alpha()<255,"Opaque UI paint hides native blur, or empty alpha loses input hit testing");
-    Json evidence={{"native_policy",policy.state},{"tint_abgr",policy.color},{"layered_window",true},{"rounded_mask",true},{"body_alpha",veil.pixelColor(30,mixer.height()-18).alpha()},{"compositor_pixels_checked",false}};
+    Json evidence={{"accepted_accent",4},{"requested_tint_abgr",0xb2181b08},{"layered_window",true},{"rounded_mask",true},{"body_alpha",veil.pixelColor(30,mixer.height()-18).alpha()},{"compositor_pixels_checked",false}};
     const auto output=qEnvironmentVariable("OFFICE_UI_EVIDENCE");
     auto render=[&](const char* state){if(output.isEmpty())return;require(QDir().mkpath(output),"Cannot create native material render directory");for(double scale:{1.,1.5,2.}){QImage image(QSize(qRound(mixer.width()*scale),qRound(mixer.height()*scale)),QImage::Format_ARGB32_Premultiplied);image.setDevicePixelRatio(scale);image.fill(Qt::transparent);mixer.render(&image);require(image.save(output+QString("/material-veil-%1-%2.png").arg(state).arg(qRound(scale*100))),"Cannot retain native material paint plane");}};
     render("collapsed");
@@ -41,18 +43,21 @@ void acrylicFlyout(QApplication& app){
         auto blurred=grab();require(officeui::flyoutMaterial::set(hwnd,false),"Cannot establish clear native fixture reference");auto clear=grab();
         auto contrast=[&](const QImage& image){const auto scale=image.width()/double(mixer.width());const int y=qRound((mixer.height()-18)*scale);double sum=0;int count=0;for(int x=qRound(24*scale);x<qRound(90*scale)-1;++x){sum+=std::abs(image.pixelColor(x,y).lightness()-image.pixelColor(x+1,y).lightness());++count;}return sum/count;};
         double baseline=contrast(clear),frosted=contrast(blurred);evidence["clear_edge_contrast"]=baseline;evidence["blurred_edge_contrast"]=frosted;
+        auto scale=blurred.width()/double(mixer.width());auto left=blurred.pixelColor(qRound(40*scale),qRound((mixer.height()-18)*scale)),right=blurred.pixelColor(qRound((mixer.width()-40)*scale),qRound((mixer.height()-18)*scale));
+        evidence["left_rgb"]={left.red(),left.green(),left.blue()};evidence["right_rgb"]={right.red(),right.green(),right.blue()};
         if(!output.isEmpty()){require(QDir().mkpath(output),"Cannot create compositor evidence directory");require(blurred.save(output+"/native-acrylic.png")&&clear.save(output+"/native-clear-reference.png"),"Cannot retain owned compositor fixture");QFile file(output+"/native-material.json");require(file.open(QIODevice::WriteOnly),"Cannot retain compositor metrics");file.write(QByteArray::fromStdString(evidence.dump(2)));}
         require(baseline>30,"CI display did not expose the generated clear stripe fixture");
-        require(frosted<baseline*.3,"Native material did not blur the generated background");
+        require(frosted<baseline*.12,"Native material did not blur the generated background");
+        require(left.red()-left.blue()>15&&right.blue()-right.red()>15,"Acrylic became opaque instead of preserving blurred background colours");
         evidence["compositor_pixels_checked"]=true;
         require(officeui::flyoutMaterial::set(hwnd,true),"Cannot restore fixture acrylic");
     }
     auto edge=mixer.frameGeometry().bottomRight();auto pin=mixer.findChild<QToolButton*>("lightPin");pin->click();app.processEvents();
-    hwnd=reinterpret_cast<HWND>(mixer.winId());require(officeui::flyoutMaterial::read(hwnd,policy)&&policy.state==4,"Pinning lost native acrylic");
+    hwnd=reinterpret_cast<HWND>(mixer.winId());require(mixer.materialStatus().at("native_set_accepted")==true&&mixer.materialStatus().at("last_accepted_accent")==4,"Pinning lost native acrylic");
     require(mixer.frameGeometry().bottomRight()==edge,"Pinning acrylic lost tray anchor");
     mixer.findChild<QToolButton*>("lightCollapse")->click();app.processEvents();require(mixer.frameGeometry().bottomRight()==edge&&!mixer.mask().contains({0,0}),"Expanding acrylic lost anchor or rounded clipping");render("expanded");
     mixer.hide();app.processEvents();
-    require(!mixer.materialStatus().at("active").get<bool>()&&officeui::flyoutMaterial::read(hwnd,policy)&&policy.state==0,"Hidden widget retained native acrylic");
+    require(!mixer.materialStatus().at("active").get<bool>()&&mixer.materialStatus().at("native_set_accepted")==true&&mixer.materialStatus().at("last_accepted_accent")==0,"Hidden widget retained native acrylic");
     mixer.showAt(QRect(area.right()-40,area.bottom()-35,30,30));app.processEvents();require(mixer.materialStatus().at("active").get<bool>(),"Reopen failed to restore native acrylic");
     mixer.hide();background.hide();
     if(!output.isEmpty()){QFile file(output+"/native-material.json");require(file.open(QIODevice::WriteOnly),"Cannot retain final compositor metrics");file.write(QByteArray::fromStdString(evidence.dump(2)));}

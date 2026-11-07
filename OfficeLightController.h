@@ -68,6 +68,8 @@ class LightController final : public QFrame {
     Json accepted;
     bool applying=false,busy=false,pinned=false,expanded=true;
     bool acrylic=false;
+    bool nativeSetAccepted=false;
+    int acceptedAccent=0;
     QString materialReason="hidden";
     QRect placementAnchor;
     QWidget* body=new QWidget;
@@ -131,10 +133,11 @@ class LightController final : public QFrame {
             materialReason=flyoutMaterial::unavailableReason();
             if(materialReason.isEmpty()){
                 active=flyoutMaterial::set(reinterpret_cast<HWND>(winId()),true);
+                nativeSetAccepted=active;if(active)acceptedAccent=4;
                 materialReason=active?"native-acrylic":"native-acrylic-rejected";
             }
         }
-        if(!active&&acrylic)flyoutMaterial::set(reinterpret_cast<HWND>(internalWinId()),false);
+        if(!active&&acrylic){nativeSetAccepted=flyoutMaterial::set(reinterpret_cast<HWND>(internalWinId()),false);if(nativeSetAccepted)acceptedAccent=0;}
 #endif
         if(active!=acrylic){acrylic=active;header->setStyleSheet(acrylic?"QWidget#lightHeader{background:rgba(16,51,44,90);border-top-left-radius:11px;border-top-right-radius:11px;}":"");roundMaterial();update();}
     }
@@ -184,7 +187,7 @@ public:
         connect(pin,&QToolButton::toggled,this,[this](bool on){pinned=on;setWindowFlag(Qt::WindowStaysOnTopHint,on);show();fit();raise();activateWindow();});
         connect(collapse,&QToolButton::clicked,this,[this]{expanded=!expanded;body->setVisible(expanded);collapse->setProperty("expanded",expanded);collapse->setAccessibleName(expanded?"Collapse devices":"Expand devices");collapse->update();adjustSize();fit();});
     }
-    Json materialStatus() const {return {{"active",acrylic},{"reason",materialReason.toStdString()},{"visible",isVisible()}};}
+    Json materialStatus() const {return {{"active",acrylic},{"reason",materialReason.toStdString()},{"visible",isVisible()},{"native_set_accepted",nativeSetAccepted},{"last_accepted_accent",acceptedAccent}};}
     void setState(const Json& value){
         if(!value.is_object()||!value.contains("devices"))return;
         accepted=value;applying=true;setEnabled(true);

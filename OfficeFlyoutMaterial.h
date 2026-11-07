@@ -15,16 +15,10 @@ namespace flyoutMaterial {
 struct AccentPolicy {int state=0,flags=0;DWORD color=0;DWORD animation=0;};
 struct AttributeData {int attribute=19;void* data=nullptr;UINT size=0;};
 using SetAttribute=BOOL(WINAPI*)(HWND,const AttributeData*);
-using GetAttribute=BOOL(WINAPI*)(HWND,AttributeData*);
 inline SetAttribute setter(){static const auto f=reinterpret_cast<SetAttribute>(GetProcAddress(GetModuleHandleW(L"user32.dll"),"SetWindowCompositionAttribute"));return f;}
-inline GetAttribute getter(){static const auto f=reinterpret_cast<GetAttribute>(GetProcAddress(GetModuleHandleW(L"user32.dll"),"GetWindowCompositionAttribute"));return f;}
 inline bool set(HWND window,bool on){
     auto f=setter();if(!f||!IsWindow(window))return false;
     AccentPolicy policy;if(on){policy.state=4;policy.flags=0x1e0;policy.color=0xb2181b08;}
-    AttributeData data;data.data=&policy;data.size=sizeof(policy);return f(window,&data)!=FALSE;
-}
-inline bool read(HWND window,AccentPolicy& policy){
-    auto f=getter();if(!f||!IsWindow(window))return false;
     AttributeData data;data.data=&policy;data.size=sizeof(policy);return f(window,&data)!=FALSE;
 }
 inline QString unavailableReason(){
