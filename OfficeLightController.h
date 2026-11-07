@@ -107,8 +107,8 @@ public:
             QWidget#lightHeader{background:#384b64;border-top-left-radius:11px;border-top-right-radius:11px;}
             QLabel{border:0;background:transparent;}
             QToolButton,QPushButton{background:transparent;color:#f4f4f4;border:0;border-radius:4px;padding:0;}
-            QToolButton:hover,QPushButton:hover{background:#ffffff20;}
-            QToolButton:checked{background:#ffffff18;}
+            QToolButton:hover,QPushButton:hover{background:rgba(255,255,255,20);}
+            QToolButton:checked{background:rgba(255,255,255,24);}
             QToolButton:focus,QPushButton:focus,QSlider:focus{border:1px solid #dedede;}
             QSlider::groove:horizontal{height:5px;background:#4d4d4d;border-radius:2px;}
             QSlider::sub-page:horizontal{background:#0089d8;border-radius:2px;}
