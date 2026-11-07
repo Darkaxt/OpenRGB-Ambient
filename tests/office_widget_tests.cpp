@@ -145,7 +145,7 @@ void multiSelection(QApplication& app) {
     panel.hide();app.processEvents();require(!panel.fixtureWantsPreview(),"Hidden panel continues requesting images");
     require(!panel.fixturePreviewRequest().contains("preview_blur"),"Hidden panel requests draft blur processing");
     panel.show();pageStack->setCurrentIndex(0);app.processEvents();require(!panel.fixtureWantsPreview(),"Control page unnecessarily requests images");
-    require(fullscreen->isVisible()&&save->isEnabled(),"Fullscreen change must use the main panel's Apply settings flow");
+    require(fullscreen->isVisible()&&fullscreen->value()==35&&save->text()=="Apply settings","Fullscreen change must use the main panel's Apply settings flow");
     if(auto directory=qEnvironmentVariable("OFFICE_UI_EVIDENCE");!directory.isEmpty()){
         QDir().mkpath(directory);
         auto card=fullscreen->parentWidget()->parentWidget();
