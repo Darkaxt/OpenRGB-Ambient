@@ -36,6 +36,7 @@ void lightingMixer(QApplication& app){
         for(double scale:{1.,1.5,2.}){
             QImage image(QSize(qRound(mixer.width()*scale),qRound(mixer.height()*scale)),QImage::Format_ARGB32_Premultiplied);image.setDevicePixelRatio(scale);image.fill(Qt::transparent);mixer.render(&image);
             require(mixer.width()==420&&image.width()==qRound(420*scale),"Flyout width does not follow reference/DPI contract");
+            require(image.pixelColor(qRound(10*scale),qRound((mixer.height()-15)*scale))==QColor("#202020"),"Flyout body must be opaque charcoal, not transparent desktop");
             if(!output.isEmpty()){QDir().mkpath(output);require(image.save(output+QString("/%1-%2.png").arg(name).arg(qRound(scale*100))),"Could not retain app-owned mixer rendering");}
         }
         for(auto widget:mixer.findChildren<QSlider*>()){
