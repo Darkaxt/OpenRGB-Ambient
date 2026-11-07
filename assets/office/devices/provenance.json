@@ -1,0 +1,101 @@
+{
+  "generated_date": "2026-11-07",
+  "assets": [
+    {
+      "id": "H6609",
+      "file": "h6609.png",
+      "sha256": "ab3579d55dfb890f8375817ead84f8ada96640d2bf632c1cf907e729dc7ce3a1",
+      "width": 1254,
+      "height": 1254,
+      "generator": "built-in image_gen",
+      "transparent_background": true,
+      "prompt": "Create one square UI icon of the Govee Gaming Light Strip G1 H6609, using the reference photo for the actual product shape. Show a compact upright coil of black flexible PCB tape with visible discrete LED modules and a short loose end. Use the real strip geometry, not a generic bulb or monitor symbol. Render it as a polished 3D product miniature with simplified fine detail, neutral studio highlights and restrained mint-green/cyan LEDs. Center the whole object, filling about 85% of the square with clear edges that remain readable at 40 pixels. Transparent background. No labels, packaging, room, pedestal, border, added objects or cast shadow.",
+      "reference": {
+        "product": "Govee Gaming Light Strip G1 H6609",
+        "page": "https://us.govee.com/products/refurbished-govee-gaming-light-strip-g1",
+        "image_url": "https://cdn.shopify.com/s/files/1/0512/3489/8105/files/H6609-2_1fc2140e-2e5a-4c22-a97c-b5ef7a95f5fc.jpg?v=1700016468&width=1600",
+        "sha256": "423b1bc1a42e0be0def2d5673bb2451bcab7a9f21a342ecb4814114d363d8cc0"
+      }
+    },
+    {
+      "id": "H8048",
+      "file": "h8048.png",
+      "sha256": "ead376e12c5b8d5c03003c0b146ace0a06acc3a859847fe8fca0ad4c894c59b6",
+      "width": 1254,
+      "height": 1254,
+      "generator": "built-in image_gen",
+      "transparent_background": true,
+      "prompt": "Create one square UI icon of a pair of Govee Gaming Light Bars Pro H8048/H6048, using the reference photo for the actual two light bars. Keep their tall rounded rectangular light faces, metallic silver housings and distinctive angular transparent pedestal feet. Show both complete bars in a compact three-quarter product view, one slightly angled to reveal the housing. Exclude the packaging, phone and cables from the reference. Render a polished 3D product miniature with simplified fine detail, neutral studio highlights and restrained mint-green/cyan illumination. Center the pair, filling about 85% of the square, with clear edges readable at 40 pixels. Transparent background. No labels, room, border or cast shadow.",
+      "reference": {
+        "product": "Govee Gaming Light Bars Pro H8048/H6048",
+        "page": "https://us.govee.com/products/govee-gaming-light-bars-pro",
+        "image_url": "https://cdn.shopify.com/s/files/1/0512/3489/8105/files/6048-1.png?v=1747669019&width=1600",
+        "sha256": "a80fa7350342c77c37b8248f19ab5e21cabd75aea7eb9a36d20b1c15e75acdd8"
+      }
+    },
+    {
+      "id": "Secretlab",
+      "file": "secretlab.png",
+      "sha256": "cfd6ff83bfd189ae59e897ee5ba2fcb6bd658f756d4531f3925082ba2d7cfeac",
+      "width": 1254,
+      "height": 1254,
+      "generator": "built-in image_gen",
+      "transparent_background": true,
+      "prompt": "Create one square UI icon representing Secretlab MAGRGB desk lighting, using the reference photo of the actual Secretlab MAGNUS desk and integrated rear lightstrip. Show the complete black metal desk in the same three-quarter top view, with its rectangular dark desktop, slim four-leg frame and clearly visible illuminated rear MAGRGB strip. Keep the recognizable desk proportions and construction. Render it as a polished 3D product miniature with simplified fine detail, neutral studio highlights and restrained mint-green/cyan strip illumination. Center the desk, filling about 85% of the square, with clear edges readable at 40 pixels. Transparent background. No monitor, chair, room, labels, border or cast shadow.",
+      "reference": {
+        "product": "Secretlab MAGRGB lighting on MAGNUS desk",
+        "page": "https://nanoleaf.me/en-int/pages/works-with-secretlab",
+        "image_url": "https://nanoleaf.me/cdn/shop/files/works-with-secretlab-hero-desk.png?v=1786305811&width=1600",
+        "sha256": "b981bc8b5f8a885e5848bde171ed2e4ad33427d6a9dcafa8f8e9eb6a7460ea42"
+      }
+    },
+    {
+      "id": "Keychron",
+      "file": "keychron.png",
+      "sha256": "b4ca156148220b8adb857f71be031701e5f23ecf9b146829e25119db3438cd3c",
+      "width": 1254,
+      "height": 1254,
+      "generator": "built-in image_gen",
+      "transparent_background": true,
+      "prompt": "Create one square UI icon of the Keychron Q6 HE ISO Carbon Black keyboard, using the reference photo for its actual layout and key colours. Show only the complete full-size keyboard: black aluminum case, light grey alphanumeric keys, dark modifier keys, red Escape key, large ISO Enter key, separate arrows/navigation cluster, right numeric keypad and encoder knob above the navigation cluster. Exclude the loose spare keycaps. Render it as a polished 3D product miniature in a slight three-quarter top view, with simplified key details, neutral studio highlights and subtle mint-green RGB between keys. Center the whole keyboard, filling about 85% of the square, with a strong silhouette readable at 40 pixels. Transparent background. No added labels, packaging, desk, border or cast shadow.",
+      "reference": {
+        "product": "Keychron Q6 HE ISO Carbon Black",
+        "page": "https://www.keychron.com/products/keychron-q6-he-qmk-wireless-custom-keyboard-iso-layout-collection",
+        "image_url": "https://cdn.shopify.com/s/files/1/0059/0630/1017/files/Q6-HE-UK.png?v=1743653210&width=1600",
+        "sha256": "883544ba2fa291471110170e05273b4f3bbaa0334004209aabec843eba7141be"
+      }
+    },
+    {
+      "id": "Legion",
+      "file": "legion.png",
+      "sha256": "5901a27b868d785c08ed92b20eb50c71e9d3c900aef49ce40ca4448df90badd8",
+      "width": 1254,
+      "height": 1254,
+      "generator": "built-in image_gen",
+      "transparent_background": true,
+      "prompt": "Create one square UI icon of the Lenovo Legion Pro 7 16IRX8H Gen 8 laptop, using the reference photo for its actual chassis. Show the complete open dark grey laptop in a three-quarter front/top view, retaining the wide 16:10 screen, slim bezels, full keyboard with numeric keypad, rear hinge construction and distinctive illuminated front-edge light bar. Use a simple dark abstract screen image without text. Render it as a polished 3D product miniature with simplified fine detail, neutral studio highlights and restrained mint-green/cyan keyboard and front-edge RGB. Center the laptop, filling about 85% of the square, with clear edges readable at 40 pixels. Transparent background. No labels, room, desk, border or cast shadow.",
+      "reference": {
+        "product": "Lenovo Legion Pro 7 16IRX8H Gen8 82WQ",
+        "page": "https://psref.lenovo.com/Product/Legion/Legion_Pro_7_16IRX8H",
+        "image_url": "https://psrefstuff.lenovo.com/syspool/Sys/Image/Legion/Legion_Pro_7_16IRX8H/Legion_Pro_7_16IRX8H_CT1_01.png",
+        "sha256": "60b957b301fcd86c69a838d399e7c2e708b07ba19330b71c3479026648510028"
+      }
+    },
+    {
+      "id": "Logitech",
+      "file": "logitech.png",
+      "sha256": "60d87af17d8007424164d94f05ba33515b292eb8e16429c162e5f02197438599",
+      "width": 1254,
+      "height": 1254,
+      "generator": "built-in image_gen",
+      "transparent_background": true,
+      "prompt": "Create one square UI icon of the black Logitech G502 X PLUS mouse, using the reference photo for its actual product geometry. Retain the asymmetric right-handed shell, broad thumb rest, split main buttons, metal scroll wheel, extra buttons beside the left click and distinctive curved LIGHTSYNC RGB band across the rear palm area. Show the complete mouse in a three-quarter top view. Render it as a polished 3D product miniature with simplified fine detail, neutral studio highlights and restrained mint-green/cyan RGB. Center the mouse, filling about 85% of the square, with clear edges readable at 40 pixels. Transparent background. No labels, cable, packaging, desk, border or cast shadow.",
+      "reference": {
+        "product": "Logitech G502 X PLUS Black",
+        "page": "https://www.logitechg.com/en-gb/shop/p/g502-x-plus-wireless-lightforce.910-006163",
+        "image_url": "https://resource.logitechg.com/content/dam/gaming/en/products/g502x-plus/2026-update/gallery/g502-x-plus-top-angle-black-gallery-1.png",
+        "sha256": "376c06646efaa5791e42d673604135f9c8e87ace6a8b8af675e4b000ec4dffac"
+      }
+    }
+  ]
+}

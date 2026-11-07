@@ -8,7 +8,33 @@
 #include <QBuffer>
 #include <QSignalSpy>
 #include <QEventLoop>
+#include <QCryptographicHash>
+#include <set>
 void require(bool condition,const char* message) {if(!condition) throw std::runtime_error(message);}
+void productIcons(){
+    QFile manifest(":/office/devices/provenance.json");require(manifest.open(QIODevice::ReadOnly),"Product icon provenance is not embedded");
+    const auto provenance=Json::parse(manifest.readAll().toStdString());
+    require(provenance.at("assets").size()==6,"Product icon provenance must cover all six devices");
+    std::set<QByteArray> fingerprints;
+    for(auto [id,path]:officeui::deviceIconFiles){
+        QFile file(path);require(file.open(QIODevice::ReadOnly),"Product icon resource missing");const auto bytes=file.readAll();
+        const auto hash=QCryptographicHash::hash(bytes,QCryptographicHash::Sha256).toHex();bool matched=false;
+        for(auto& asset:provenance.at("assets"))if(asset.at("id")==std::string(id)){
+            matched=asset.at("sha256")==hash.toStdString();
+            require(asset.at("generator")=="built-in image_gen"&&!asset.at("prompt").get<std::string>().empty(),"Generated icon lost its method or exact prompt");
+        }
+        require(matched,"Embedded icon does not match selected ImageGen asset");
+        auto full=QImage::fromData(bytes);require(full.hasAlphaChannel()&&full.width()==full.height(),"Product icon must preserve square transparent source");
+        for(auto corner:{QPoint(0,0),QPoint(full.width()-1,0),QPoint(0,full.height()-1),QPoint(full.width()-1,full.height()-1)})
+            require(full.pixelColor(corner).alpha()==0,"Product icon has an opaque background");
+        const auto small=officeui::deviceIcon(id).pixmap(QSize(40,40)).toImage();
+        require(!small.isNull()&&small.width()==40&&small.height()==40,"Product icon failed at actual controller size");
+        int visible=0,transparent=0;for(int y=0;y<40;++y)for(int x=0;x<40;++x){auto alpha=small.pixelColor(x,y).alpha();visible+=alpha>100;transparent+=alpha==0;}
+        require(visible>25&&transparent>25,"Product miniature is empty or lost its cutout at controller size");
+        fingerprints.insert(QCryptographicHash::hash(QByteArray::fromRawData(reinterpret_cast<const char*>(small.constBits()),small.sizeInBytes()),QCryptographicHash::Sha256));
+    }
+    require(fingerprints.size()==6&&officeui::deviceIcon("unknown-device").isNull(),"Device identities reuse artwork or unknown identity is misrepresented");
+}
 void lightingMixer(QApplication& app){
     Json state={{"revision",1},{"master",100},{"fullscreen",50},{"fullscreen_active",false},{"devices",Json::array()}};
     for(auto [id,name]:std::vector<std::pair<const char*,const char*>>{{"H6609","Govee strip"},{"H8048","Govee light bars"},{"Secretlab","Secretlab desk"},{"Keychron","Keychron Q6 HE"},{"Legion","Legion keyboard"},{"Logitech","G502 X PLUS"}})
@@ -17,6 +43,12 @@ void lightingMixer(QApplication& app){
     officeui::LightController mixer(nullptr,[&](Json request,OfficeReply reply){requests.push_back(std::move(request));replies.push_back(std::move(reply));},[&]{opened=true;});
     auto respond=[&](size_t index){auto reply=std::move(replies.at(index));reply({{"ok",true},{"result",state}});};
     mixer.setState(state);mixer.showAt({780,730,30,30});app.processEvents();
+    auto verifyIcons=[&]{for(auto [id,path]:officeui::deviceIconFiles){
+        auto button=mixer.findChild<QToolButton*>(QString("lightMute-")+QString::fromLatin1(id.data(),id.size()));
+        require(button&&button->iconSize()==QSize(40,40)&&button->size()==QSize(44,44),"Product icon or mute hit target is incorrectly sized");
+        require(button->icon().pixmap({40,40}).toImage()==officeui::deviceIcon(id).pixmap({40,40}).toImage(),"Physical device row is showing the wrong product");
+    }};
+    verifyIcons();auto renamed=state;for(auto& item:renamed["devices"]){item["name"]="Renamed light";item["online"]=false;}mixer.setState(renamed);verifyIcons();mixer.setState(state);
     auto slider=[&](const char* key){auto value=mixer.findChild<QSlider*>(QString("lightSlider-")+key);require(value!=nullptr,"Lighting slider missing");require(!value->accessibleName().isEmpty()&&value->height()>=44,"Lighting slider lacks accessible name/hit target");return value;};
     auto master=slider("master");require(master->value()==100&&!mixer.findChild<QSlider*>("lightSlider-fullscreen"),"Tray must expose master/device levels only");
     master->setValue(50);master->setValue(20);master->setValue(30);require(requests.size()==1&&requests[0].at("target")=="master","Rapid drag did not serialize native writes");
@@ -284,6 +316,7 @@ int main(int argc,char** argv) {
     QApplication app(argc,argv);
     try {
         officeui::loadFonts();
+        productIcons();
         screenEditor(app);
         awakeEditor(app);
         hardwareEditor(app);

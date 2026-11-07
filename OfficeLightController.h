@@ -1,6 +1,7 @@
 #pragma once
 #include "OfficePanel.h"
 #include "OfficeStyle.h"
+#include "OfficeDeviceIcons.h"
 #include <QApplication>
 #include <QGuiApplication>
 #include <QScreen>
@@ -70,11 +71,11 @@ class LightController final : public QFrame {
     QLabel* error=new QLabel;
     QToolButton *pin=new MixerHeaderButton(true),*collapse=new MixerHeaderButton(false);
     std::function<void()> openPanel;
-    Row makeRow(const std::string& key,const QString& title,const QString& glyph,QVBoxLayout* parent,bool master=false){
+    Row makeRow(const std::string& key,const QString& title,QVBoxLayout* parent,bool master=false){
         auto box=new QWidget;box->setObjectName(QString::fromStdString("lightRow-"+key));box->setMinimumHeight(master?72:76);
         auto grid=new QGridLayout(box);grid->setContentsMargins(16,4,16,4);grid->setHorizontalSpacing(12);grid->setVerticalSpacing(0);
         auto name=new QLabel(title);name->setObjectName(QString::fromStdString("lightName-"+key));name->setFont(officeui::body(15));name->setMinimumWidth(0);name->setSizePolicy(QSizePolicy::Ignored,QSizePolicy::Preferred);name->setToolTip(title);
-        auto mute=new QToolButton;mute->setObjectName(QString::fromStdString("lightMute-"+key));mute->setIcon(icon(glyph,QColor("#45ddb0")));mute->setIconSize({28,28});mute->setFixedSize(44,44);mute->setCheckable(true);mute->setAccessibleName("Mute "+title);mute->setToolTip("Mute / restore "+title);
+        auto mute=new QToolButton;mute->setObjectName(QString::fromStdString("lightMute-"+key));mute->setIcon(master?icon("settings_brightness",QColor("#45ddb0")):deviceIcon(key));mute->setIconSize(master?QSize(28,28):QSize(40,40));mute->setFixedSize(44,44);mute->setCheckable(true);mute->setAccessibleName("Mute "+title);mute->setToolTip("Mute / restore "+title);
         auto slider=new IntensitySlider(box);slider->setObjectName(QString::fromStdString("lightSlider-"+key));slider->setAccessibleName(title+(key=="fullscreen"?"":" intensity"));slider->setToolTip(slider->accessibleName());
         auto value=new QLabel;value->setObjectName(QString::fromStdString("lightValue-"+key));value->setFixedWidth(42);value->setAlignment(Qt::AlignRight|Qt::AlignVCenter);value->setFont(officeui::body(master?26:22));
         grid->addWidget(mute,0,0,2,1);grid->addWidget(name,0,1);grid->addWidget(slider,1,1);grid->addWidget(value,0,2,2,1);grid->setColumnStretch(1,1);parent->addWidget(box);
@@ -133,7 +134,7 @@ public:
         auto title=new QHBoxLayout;title->setContentsMargins(16,0,10,0);auto name=new QLabel("Lighting");name->setFont(officeui::body(20));title->addWidget(name,1);
         pin->setObjectName("lightPin");pin->setFixedSize(36,36);pin->setCheckable(true);pin->setAccessibleName("Pin lighting mixer");pin->setToolTip("Keep open");
         collapse->setProperty("expanded",true);collapse->setObjectName("lightCollapse");collapse->setFixedSize(36,36);collapse->setAccessibleName("Collapse devices");collapse->setToolTip("Collapse / expand devices");title->addWidget(pin);title->addWidget(collapse);head->addLayout(title);
-        rows.emplace("master",makeRow("master","All lights","settings_brightness",head,true));outer->addWidget(header);
+        rows.emplace("master",makeRow("master","All lights",head,true));outer->addWidget(header);
         auto content=new QVBoxLayout(body);content->setContentsMargins(0,0,0,0);content->setSpacing(0);
         deviceRows->setContentsMargins(0,0,0,0);deviceRows->setSpacing(0);devices->setObjectName("lightDevices");devices->setWidget(deviceBody);devices->setWidgetResizable(true);devices->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);content->addWidget(devices);outer->addWidget(body);
         error->setObjectName("lightError");error->setWordWrap(true);error->hide();outer->addWidget(error);
@@ -148,7 +149,7 @@ public:
         setLevel("master",value.at("master"));
         for(auto& device:value.at("devices")){
             const auto key=device.at("id").get<std::string>();auto name=QString::fromStdString(device.at("name").get<std::string>());
-            if(!rows.contains(key))rows.emplace(key,makeRow(key,name,key=="Keychron"?"keyboard":key=="H6609"?"linear_scale":key=="Secretlab"?"hub":key=="Legion"?"memory":"settings_brightness",deviceRows));
+            if(!rows.contains(key))rows.emplace(key,makeRow(key,name,deviceRows));
             auto& row=rows.at(key);row.name->setText(name+(device.at("online").get<bool>()?"":" · Offline"));row.name->setToolTip(row.name->text());row.box->setProperty("online",device.at("online").get<bool>());setLevel(key,device.at("value"));
         }
         applying=false;fit();

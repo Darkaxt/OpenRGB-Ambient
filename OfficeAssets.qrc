@@ -1,5 +1,12 @@
 <RCC><qresource prefix="/office">
 <file alias="lightbulb.ico">assets/office/lightbulb.ico</file>
+<file alias="devices/h6609.png">assets/office/devices/h6609.png</file>
+<file alias="devices/h8048.png">assets/office/devices/h8048.png</file>
+<file alias="devices/secretlab.png">assets/office/devices/secretlab.png</file>
+<file alias="devices/keychron.png">assets/office/devices/keychron.png</file>
+<file alias="devices/legion.png">assets/office/devices/legion.png</file>
+<file alias="devices/logitech.png">assets/office/devices/logitech.png</file>
+<file alias="devices/provenance.json">assets/office/devices/provenance.json</file>
 <file alias="LICENSE-Material-Symbols.txt">assets/office/LICENSE-Material-Symbols.txt</file>
 <file alias="LICENSE-Orbitron.txt">assets/office/LICENSE-Orbitron.txt</file>
 <file alias="LICENSE-Rajdhani.txt">assets/office/LICENSE-Rajdhani.txt</file>
