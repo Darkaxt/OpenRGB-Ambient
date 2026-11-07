@@ -331,6 +331,7 @@ int main(int argc,char** argv) {
     QApplication app(argc,argv);
     try {
         officeui::loadFonts();
+        const auto evidence=qEnvironmentVariable("OFFICE_UI_EVIDENCE");if(!evidence.isEmpty())require(QDir().mkpath(evidence),"Cannot create hosted UI evidence directory");
         productIcons();
         fullscreenProfileEditor(app);
         screenEditor(app);
