@@ -2,6 +2,7 @@
 #include "OfficeFullscreenProfiles.h"
 #include "OfficeDeviceIcons.h"
 #include "OfficeStyle.h"
+#include "OfficeInputs.h"
 #include <QDialog>
 #include <QDialogButtonBox>
 #include <QComboBox>
@@ -16,7 +17,7 @@ namespace officeui {
 class FullscreenProfilesEditor final : public QDialog {
     using Json=office::Json;
     Json profiles;
-    QComboBox* apps=new QComboBox;
+    QComboBox* apps=new ChoiceBox(QColor("#45ddb0"));
     QLineEdit* executable=new QLineEdit;
     QLabel* message=new QLabel;
     QPushButton* remove=new QPushButton("Remove profile");
@@ -54,6 +55,7 @@ public:
             QPushButton:hover{background:#164538;} QPushButton:focus,QComboBox:focus,QLineEdit:focus,QSpinBox:focus{border:1px solid #78efc9;}
             QPushButton:disabled,QCheckBox:disabled,QSpinBox:disabled{color:#82988f;}
             QCheckBox::indicator{width:18px;height:18px;}
+            QCheckBox::indicator:checked{background:#45ddb0;border-color:#78efc9;}
         )");
         auto content=new QVBoxLayout(this);content->setContentsMargins(20,18,20,18);content->setSpacing(12);
         content->addWidget(label("Fullscreen app profiles","eyebrow"));
@@ -68,7 +70,7 @@ public:
             const auto id=device.at("id").get<std::string>();const auto name=QString::fromStdString(device.at("name").get<std::string>());
             auto row=new QHBoxLayout;auto picture=new QLabel;picture->setPixmap(deviceIcon(id).pixmap({32,32}));picture->setFixedSize(36,36);row->addWidget(picture);
             auto use=new QCheckBox(name);use->setObjectName(QString::fromStdString("profileOverride-"+id));use->setMinimumHeight(44);use->setAccessibleName("Override "+name);
-            auto level=new QSpinBox;level->setRange(0,100);level->setSuffix(" %");level->setObjectName(QString::fromStdString("profileLevel-"+id));level->setAccessibleName(name+" fullscreen intensity");level->setMinimumHeight(32);
+            auto level=new Stepper<QSpinBox>(QColor("#45ddb0"));level->setRange(0,100);level->setSuffix(" %");level->setObjectName(QString::fromStdString("profileLevel-"+id));level->setAccessibleName(name+" fullscreen intensity");
             row->addWidget(use,1);row->addWidget(level);content->addLayout(row);rows.emplace(id,Row{use,level});
             connect(use,&QCheckBox::toggled,this,[this,id]{store(id);});connect(level,&QSpinBox::valueChanged,this,[this,id]{store(id);});
         }
