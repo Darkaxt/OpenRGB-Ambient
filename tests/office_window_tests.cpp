@@ -7,8 +7,70 @@
 #include <QDir>
 #include <QFile>
 #include <QScreen>
+#include <QPaintEvent>
 
 void require(bool value,const char* message){if(!value)throw std::runtime_error(message);}
+
+// Observe normal show/paint dispatch. Do not render/grab/repaint the QWidget:
+// those calls can repair a partial first presentation and mask this regression.
+void firstFlyoutFrame(QApplication& app){
+    using office::Json;
+    class FirstShow final:public QObject{
+    public:
+        QRect shown;int shows=0;QRegion painted;
+        bool eventFilter(QObject* object,QEvent* event) override{
+            if(event->type()==QEvent::Show){shown=static_cast<QWidget*>(object)->frameGeometry();++shows;}
+            if(event->type()==QEvent::Paint)painted+=static_cast<QPaintEvent*>(event)->region();
+            return false;
+        }
+    } observed;
+    QWidget backdrop;backdrop.setWindowFlags(Qt::Tool|Qt::FramelessWindowHint);
+    backdrop.setAutoFillBackground(true);auto palette=backdrop.palette();palette.setColor(QPalette::Window,QColor("#263a45"));backdrop.setPalette(palette);
+    backdrop.setGeometry(QGuiApplication::primaryScreen()->availableGeometry());backdrop.show();app.processEvents();
+    QWidget owner;owner.resize(1000,700); // actual mixer has a hidden main-window owner
+    officeui::LightController mixer(&owner,{},{});mixer.installEventFilter(&observed);
+    Json devices=Json::array();
+    for(auto id:{"Logitech","Keychron","Legion","H6609","H8048","Secretlab"})devices.push_back({{"id",id},{"name",id},{"online",true},{"value",100}});
+    mixer.setState({{"master",100},{"devices",Json::array({devices[0]})}});
+    app.processEvents(); // hidden inventory refresh, not a visible warm-up
+    mixer.setState({{"master",100},{"devices",devices}});
+    auto screen=QGuiApplication::primaryScreen();const auto area=screen->availableGeometry();
+    const QRect anchor(area.right()-40,area.bottom()-12,30,10);
+    const auto output=qEnvironmentVariable("OFFICE_UI_EVIDENCE");
+    Json evidence=Json::array();
+    for(int cycle=0;cycle<2;++cycle){
+        observed.painted={};mixer.showAt(anchor);const auto prepared=mixer.frameGeometry();
+        require(observed.shown==prepared,"Flyout was shown before its final geometry/anchor was prepared");
+        app.processEvents();QCoreApplication::sendPostedEvents(nullptr,QEvent::UpdateRequest);app.processEvents();
+        require(mixer.frameGeometry()==prepared,"First queued paint changed flyout placement");
+        require(observed.painted.contains(QPoint(mixer.width()-25,25))&&observed.painted.contains(QPoint(mixer.width()-25,mixer.height()-20)),"First queued paint omitted the right or bottom surface");
+        auto master=mixer.findChild<QSlider*>("lightSlider-master");auto footer=mixer.findChild<QPushButton*>("lightOpenPanel");
+        require(master->isVisible()&&footer->isVisible()&&mixer.rect().contains(footer->mapTo(&mixer,footer->rect().center())),"First show lost master or footer layout");
+        auto hwnd=reinterpret_cast<HWND>(mixer.winId());RECT client{};GetClientRect(hwnd,&client);
+        require(std::abs(client.right-qRound(mixer.width()*mixer.devicePixelRatioF()))<=1,"Native surface does not match logical widget DPI");
+        Json row={{"cycle",cycle},{"shows",observed.shows},{"dpr",mixer.devicePixelRatioF()},{"bounds",{prepared.x(),prepared.y(),prepared.width(),prepared.height()}},{"native_client",{client.right,client.bottom}},{"paint_right_bottom",true},{"shown_at_final_geometry",true}};
+        if(qEnvironmentVariable("GITHUB_ACTIONS")=="true"){
+            require(SUCCEEDED(DwmFlush()),"First frame compositor flush failed");
+            const auto native=mixer.mapToGlobal(mixer.rect().center())*mixer.devicePixelRatioF();DWORD pid{};
+            auto visible=GetAncestor(WindowFromPoint(POINT{native.x(),native.y()}),GA_ROOT);GetWindowThreadProcessId(visible,&pid);
+            require(visible==hwnd&&pid==GetCurrentProcessId(),"First-frame evidence is not the owned fixture");
+            auto image=screen->grabWindow(0,prepared.x(),prepared.y(),prepared.width(),prepared.height()).toImage();
+            require(!image.isNull(),"First-frame compositor image unavailable");
+            const auto point=master->mapTo(&mixer,QPoint(master->width()-11,master->height()/2));
+            const double scale=image.width()/double(mixer.width());int green=0;
+            for(int y=qRound(point.y()*scale)-5;y<=qRound(point.y()*scale)+5;++y)for(int x=qRound(point.x()*scale)-5;x<=qRound(point.x()*scale)+5;++x){auto pixel=image.pixelColor(x,y);if(pixel.green()>pixel.red()+50&&pixel.green()>pixel.blue()+15)++green;}
+            row["right_master_green_pixels"]=green;
+            const auto footerRect=QRect(footer->mapTo(&mixer,QPoint()),footer->size());int text=0;
+            for(int y=qRound(footerRect.top()*scale);y<qRound(footerRect.bottom()*scale);++y)for(int x=qRound(footerRect.left()*scale);x<qRound(footerRect.right()*scale);++x){auto pixel=image.pixelColor(x,y);if(pixel.red()>150&&pixel.green()>160&&pixel.blue()>150)++text;}
+            row["footer_text_pixels"]=text;
+            if(!output.isEmpty()){QDir().mkpath(output);image.save(output+QString("/first-show-%1.png").arg(cycle));}
+            require(green>10,"First composed frame is missing the master slider at the right edge");
+            require(text>50,"First composed frame is missing the footer below the old surface bounds");
+        }
+        evidence.push_back(row);mixer.hide();app.processEvents();
+    }
+    if(!output.isEmpty()){QFile file(output+"/first-show.json");require(file.open(QIODevice::WriteOnly),"Cannot retain first-show geometry");file.write(QByteArray::fromStdString(evidence.dump(2)));}
+}
 
 // Native composition evidence is limited to the generated fixture on the hosted
 // CI desktop. Local execution never captures the user's display.
@@ -66,6 +128,7 @@ void acrylicFlyout(QApplication& app){
 int main(int argc,char** argv){
     QApplication app(argc,argv);
     try{
+        if(app.arguments().contains("--flyout-only")){officeui::loadFonts();firstFlyoutFrame(app);return 0;}
         officeui::loadFonts();officeui::OfficeWindow window;window.resize(1000,700);window.setMinimumSize(1000,700);
         auto root=new QWidget;auto layout=new QVBoxLayout(root);layout->setContentsMargins(0,0,0,0);layout->setSpacing(0);
         auto header=new QWidget;header->setFixedHeight(48);auto row=new QHBoxLayout(header);row->setContentsMargins(16,0,0,0);row->addWidget(new QLabel("Office Ambilight"),1);
@@ -89,7 +152,7 @@ int main(int argc,char** argv){
         max->click();app.processEvents();office::showWindow(static_cast<QWidget*>(&window));app.processEvents();require(!IsZoomed(hwnd)&&!window.isMaximized(),"Real native activation helper diverges from caption state");
         min->click();app.processEvents();require(IsIconic(hwnd),"Minimize button failed");window.showNormal();app.processEvents();
         SendMessageW(hwnd,WM_NCLBUTTONDBLCLK,HTCAPTION,0);app.processEvents();require(IsZoomed(hwnd),"Caption double-click did not maximize");window.showNormal();app.processEvents();close->click();app.processEvents();require(!window.isVisible(),"Close button did not dispatch normal close lifecycle");
-        acrylicFlyout(app);
+        firstFlyoutFrame(app);acrylicFlyout(app);
         std::cout<<"Native caption and acrylic policy/compositor/lifecycle checks passed\n";return 0;
     }catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 1;}
 }

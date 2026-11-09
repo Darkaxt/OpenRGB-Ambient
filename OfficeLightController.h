@@ -6,6 +6,7 @@
 #include <QApplication>
 #include <QGuiApplication>
 #include <QScreen>
+#include <QWindow>
 #include <QScrollArea>
 #include <QSignalBlocker>
 #include <QPointer>
@@ -109,7 +110,6 @@ class LightController final : public QFrame {
         row.slider->setValue(qRound(value));row.value->setText(QString::number(qRound(value)));row.mute->setChecked(value==0);
     }
     void fit(QScreen* screen=nullptr){
-        if(!isVisible())return;
         if(!screen)screen=QGuiApplication::screenAt(placementAnchor.isEmpty()?frameGeometry().center():placementAnchor.center());if(!screen)screen=QGuiApplication::primaryScreen();if(!screen)return;
         const auto available=screen->availableGeometry();
         const int content=deviceRows->sizeHint().height();devices->setFixedHeight(content);adjustSize();
@@ -197,12 +197,17 @@ public:
             if(!rows.contains(key))rows.emplace(key,makeRow(key,name,deviceRows));
             auto& row=rows.at(key);row.name->setText(name+(device.at("online").get<bool>()?"":" · Offline"));row.name->setToolTip(row.name->text());row.box->setProperty("online",device.at("online").get<bool>());setLevel(key,device.at("value"));
         }
-        applying=false;fit();
+        applying=false;if(isVisible())fit();
     }
     void showAt(const QRect& anchor){
         auto screen=QGuiApplication::screenAt(anchor.center());if(!screen)screen=QGuiApplication::primaryScreen();if(!screen)return;
         placementAnchor=anchor;
-        setState(accepted);show();fit(screen);
+        setState(accepted);ensurePolished();
+        // Bind native DPI and finish layout/placement while hidden. showEvent
+        // applies acrylic and its clip to this final surface; showing first
+        // published the previous surface before fit resized/moved it.
+        winId();windowHandle()->setScreen(screen);deviceRows->activate();layout()->activate();fit(screen);
+        show();
         raise();activateWindow();
     }
 };
