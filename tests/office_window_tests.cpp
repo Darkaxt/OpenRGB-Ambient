@@ -43,6 +43,9 @@ void firstFlyoutFrame(QApplication& app){
         require(observed.shown==prepared,"Flyout was shown before its final geometry/anchor was prepared");
         app.processEvents();QCoreApplication::sendPostedEvents(nullptr,QEvent::UpdateRequest);app.processEvents();
         const auto settled=mixer.frameGeometry();
+        Json layoutEvidence={{"prepared",{prepared.x(),prepared.y(),prepared.width(),prepared.height()}},{"settled",{settled.x(),settled.y(),settled.width(),settled.height()}},{"available",{area.width(),area.height()}},{"dpr",mixer.devicePixelRatioF()}};
+        for(auto id:{"lightHeader","lightDevices","lightOpenPanel","lightRow-master"}){auto w=mixer.findChild<QWidget*>(id);auto at=w->mapTo(&mixer,QPoint());layoutEvidence[id]={{"bounds",{at.x(),at.y(),w->width(),w->height()}},{"hint",{w->sizeHint().width(),w->sizeHint().height()}},{"minimum",{w->minimumWidth(),w->minimumHeight()}}};}
+        std::cout<<"First-show layout: "<<layoutEvidence.dump()<<'\n';
         require(settled==prepared,QString("First queued paint changed flyout placement: prepared %1,%2 %3x%4; settled %5,%6 %7x%8").arg(prepared.x()).arg(prepared.y()).arg(prepared.width()).arg(prepared.height()).arg(settled.x()).arg(settled.y()).arg(settled.width()).arg(settled.height()).toStdString().c_str());
         require(observed.painted.contains(QPoint(mixer.width()-25,25))&&observed.painted.contains(QPoint(mixer.width()-25,mixer.height()-20)),"First queued paint omitted the right or bottom surface");
         auto master=mixer.findChild<QSlider*>("lightSlider-master");auto footer=mixer.findChild<QPushButton*>("lightOpenPanel");
