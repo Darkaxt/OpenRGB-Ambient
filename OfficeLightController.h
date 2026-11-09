@@ -112,9 +112,13 @@ class LightController final : public QFrame {
     void fit(QScreen* screen=nullptr){
         if(!screen)screen=QGuiApplication::screenAt(placementAnchor.isEmpty()?frameGeometry().center():placementAnchor.center());if(!screen)screen=QGuiApplication::primaryScreen();if(!screen)return;
         const auto available=screen->availableGeometry();
-        const int content=deviceRows->sizeHint().height();devices->setFixedHeight(content);adjustSize();
-        const int overhead=height()-content;devices->setFixedHeight(std::min(content,std::max(76,available.height()-overhead-12)));
-        adjustSize();
+        const int content=deviceRows->sizeHint().height();devices->setFixedHeight(content);layout()->activate();
+        // QWidget::adjustSize caps an unshown top-level window to 2/3 of its
+        // screen, before the queued layout establishes the real minimum size.
+        // Derive chrome and viewport from the layout instead of that capped size.
+        const int overhead=layout()->sizeHint().height()-(expanded?content:0);
+        devices->setFixedHeight(std::min(content,std::max(76,available.height()-overhead-12)));
+        layout()->activate();resize(width(),layout()->sizeHint().height());layout()->activate();
         // Size changes grow/shrink away from the tray, preserving the opening
         // anchor rather than retaining the expanded panel's old top edge.
         const int x=placementAnchor.isEmpty()?available.right()-width()-12:placementAnchor.right()-width();
@@ -139,16 +143,10 @@ class LightController final : public QFrame {
         }
         if(!active&&acrylic){nativeSetAccepted=flyoutMaterial::set(reinterpret_cast<HWND>(internalWinId()),false);if(nativeSetAccepted)acceptedAccent=0;}
 #endif
-        if(active!=acrylic){acrylic=active;roundMaterial();update();}
+        if(active!=acrylic){acrylic=active;header->setStyleSheet(acrylic?"QWidget#lightHeader{background:rgba(16,51,44,90);border-top-left-radius:11px;border-top-right-radius:11px;}":"");roundMaterial();update();}
     }
 protected:
-    void paintEvent(QPaintEvent*) override {
-        QPainter painter(this);painter.setRenderHint(QPainter::Antialiasing);painter.setPen(QPen(QColor("#28584e"),1));
-        painter.setBrush(acrylic?QColor(8,27,24,20):QColor("#081b18"));painter.drawRoundedRect(QRectF(rect()).adjusted(.5,.5,-.5,-.5),12,12);
-        // Material changes are paint state, not a new stylesheet/font/layout.
-        QPainterPath outline;outline.addRoundedRect(QRectF(rect()).adjusted(1,1,-1,-1),11,11);painter.setClipPath(outline);
-        painter.fillRect(header->geometry(),acrylic?QColor(16,51,44,90):QColor("#10332c"));
-    }
+    void paintEvent(QPaintEvent*) override {QPainter painter(this);painter.setRenderHint(QPainter::Antialiasing);painter.setPen(QPen(QColor("#28584e"),1));painter.setBrush(acrylic?QColor(8,27,24,20):QColor("#081b18"));painter.drawRoundedRect(QRectF(rect()).adjusted(.5,.5,-.5,-.5),12,12);}
     void showEvent(QShowEvent* event) override {QFrame::showEvent(event);updateMaterial(true);}
     void hideEvent(QHideEvent* event) override {updateMaterial(false);QFrame::hideEvent(event);}
     void resizeEvent(QResizeEvent* event) override {QFrame::resizeEvent(event);roundMaterial();}
@@ -167,7 +165,7 @@ public:
         setStyleSheet(R"(
             QFrame#lightingFlyout{background:transparent;border:0;}
             QWidget{color:#d4e6df;background:transparent;}
-            QWidget#lightHeader{background:transparent;}
+            QWidget#lightHeader{background:#10332c;border-top-left-radius:11px;border-top-right-radius:11px;}
             QLabel{border:0;background:transparent;}
             QToolButton,QPushButton{background:transparent;color:#d4e6df;border:0;border-radius:6px;padding:0;}
             QToolButton:hover,QPushButton:hover{background:rgba(255,255,255,20);}
@@ -191,7 +189,7 @@ public:
         auto openButton=new QPushButton("Open Office Ambilight");openButton->setObjectName("lightOpenPanel");openButton->setMinimumHeight(36);openButton->setAccessibleName("Open Office Ambilight");outer->addWidget(openButton);
         connect(openButton,&QPushButton::clicked,this,[this]{hide();if(openPanel)openPanel();});
         connect(pin,&QToolButton::toggled,this,[this](bool on){pinned=on;setWindowFlag(Qt::WindowStaysOnTopHint,on);show();fit();raise();activateWindow();});
-        connect(collapse,&QToolButton::clicked,this,[this]{expanded=!expanded;body->setVisible(expanded);collapse->setProperty("expanded",expanded);collapse->setAccessibleName(expanded?"Collapse devices":"Expand devices");collapse->update();adjustSize();fit();});
+        connect(collapse,&QToolButton::clicked,this,[this]{expanded=!expanded;body->setVisible(expanded);collapse->setProperty("expanded",expanded);collapse->setAccessibleName(expanded?"Collapse devices":"Expand devices");collapse->update();fit();});
     }
     Json materialStatus() const {return {{"active",acrylic},{"reason",materialReason.toStdString()},{"visible",isVisible()},{"native_set_accepted",nativeSetAccepted},{"last_accepted_accent",acceptedAccent}};}
     void setState(const Json& value){
