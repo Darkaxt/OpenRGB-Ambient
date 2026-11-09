@@ -139,10 +139,16 @@ class LightController final : public QFrame {
         }
         if(!active&&acrylic){nativeSetAccepted=flyoutMaterial::set(reinterpret_cast<HWND>(internalWinId()),false);if(nativeSetAccepted)acceptedAccent=0;}
 #endif
-        if(active!=acrylic){acrylic=active;header->setStyleSheet(acrylic?"QWidget#lightHeader{background:rgba(16,51,44,90);border-top-left-radius:11px;border-top-right-radius:11px;}":"");roundMaterial();update();}
+        if(active!=acrylic){acrylic=active;roundMaterial();update();}
     }
 protected:
-    void paintEvent(QPaintEvent*) override {QPainter painter(this);painter.setRenderHint(QPainter::Antialiasing);painter.setPen(QPen(QColor("#28584e"),1));painter.setBrush(acrylic?QColor(8,27,24,20):QColor("#081b18"));painter.drawRoundedRect(QRectF(rect()).adjusted(.5,.5,-.5,-.5),12,12);}
+    void paintEvent(QPaintEvent*) override {
+        QPainter painter(this);painter.setRenderHint(QPainter::Antialiasing);painter.setPen(QPen(QColor("#28584e"),1));
+        painter.setBrush(acrylic?QColor(8,27,24,20):QColor("#081b18"));painter.drawRoundedRect(QRectF(rect()).adjusted(.5,.5,-.5,-.5),12,12);
+        // Material changes are paint state, not a new stylesheet/font/layout.
+        QPainterPath outline;outline.addRoundedRect(QRectF(rect()).adjusted(1,1,-1,-1),11,11);painter.setClipPath(outline);
+        painter.fillRect(header->geometry(),acrylic?QColor(16,51,44,90):QColor("#10332c"));
+    }
     void showEvent(QShowEvent* event) override {QFrame::showEvent(event);updateMaterial(true);}
     void hideEvent(QHideEvent* event) override {updateMaterial(false);QFrame::hideEvent(event);}
     void resizeEvent(QResizeEvent* event) override {QFrame::resizeEvent(event);roundMaterial();}
@@ -161,7 +167,7 @@ public:
         setStyleSheet(R"(
             QFrame#lightingFlyout{background:transparent;border:0;}
             QWidget{color:#d4e6df;background:transparent;}
-            QWidget#lightHeader{background:#10332c;border-top-left-radius:11px;border-top-right-radius:11px;}
+            QWidget#lightHeader{background:transparent;}
             QLabel{border:0;background:transparent;}
             QToolButton,QPushButton{background:transparent;color:#d4e6df;border:0;border-radius:6px;padding:0;}
             QToolButton:hover,QPushButton:hover{background:rgba(255,255,255,20);}

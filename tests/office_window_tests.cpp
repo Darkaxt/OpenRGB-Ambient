@@ -42,7 +42,8 @@ void firstFlyoutFrame(QApplication& app){
         observed.painted={};mixer.showAt(anchor);const auto prepared=mixer.frameGeometry();
         require(observed.shown==prepared,"Flyout was shown before its final geometry/anchor was prepared");
         app.processEvents();QCoreApplication::sendPostedEvents(nullptr,QEvent::UpdateRequest);app.processEvents();
-        require(mixer.frameGeometry()==prepared,"First queued paint changed flyout placement");
+        const auto settled=mixer.frameGeometry();
+        require(settled==prepared,QString("First queued paint changed flyout placement: prepared %1,%2 %3x%4; settled %5,%6 %7x%8").arg(prepared.x()).arg(prepared.y()).arg(prepared.width()).arg(prepared.height()).arg(settled.x()).arg(settled.y()).arg(settled.width()).arg(settled.height()).toStdString().c_str());
         require(observed.painted.contains(QPoint(mixer.width()-25,25))&&observed.painted.contains(QPoint(mixer.width()-25,mixer.height()-20)),"First queued paint omitted the right or bottom surface");
         auto master=mixer.findChild<QSlider*>("lightSlider-master");auto footer=mixer.findChild<QPushButton*>("lightOpenPanel");
         require(master->isVisible()&&footer->isVisible()&&mixer.rect().contains(footer->mapTo(&mixer,footer->rect().center())),"First show lost master or footer layout");
