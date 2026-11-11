@@ -155,8 +155,6 @@ HWND maximizedApp(const Monitor& monitor) {
         auto cls=windowClass(window);
         if(cls==L"Progman" || cls==L"WorkerW" || cls==L"Shell_TrayWnd" || cls==L"Shell_SecondaryTrayWnd") return TRUE;
         if(GetWindowLongPtrW(window,GWL_EXSTYLE)&WS_EX_TOOLWINDOW) return TRUE;
-        // Never capture this application's own maximized panel.
-        DWORD pid{};GetWindowThreadProcessId(window,&pid);if(pid==GetCurrentProcessId()) return TRUE;
         DWORD cloaked{}; DwmGetWindowAttribute(window,DWMWA_CLOAKED,&cloaked,sizeof(cloaked));
         if(cloaked || isRenderer(window)) return TRUE;
         if(IsZoomed(window) || fullscreenApp(window,s.monitor)) { s.app=window; return FALSE; }
