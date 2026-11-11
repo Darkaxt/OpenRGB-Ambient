@@ -155,6 +155,13 @@ int main(int argc,char** argv){
         max->click();app.processEvents();require(IsZoomed(hwnd)&&window.isMaximized(),"Maximize button failed");window.hide();app.processEvents();window.showNormal();app.processEvents();require(!IsZoomed(hwnd)&&!window.isMaximized()&&window.isVisible(),"Tray-style reopen did not restore the native window");
         max->click();app.processEvents();office::showWindow(static_cast<QWidget*>(&window));app.processEvents();require(!IsZoomed(hwnd)&&!window.isMaximized(),"Real native activation helper diverges from caption state");
         min->click();app.processEvents();require(IsIconic(hwnd),"Minimize button failed");window.showNormal();app.processEvents();
+        // A native central widget covers the whole client area. Its own hit
+        // test must defer caption/border points to the top-level window.
+        auto child=reinterpret_cast<HWND>(root->winId());app.processEvents();require(child!=hwnd&&GetAncestor(child,GA_ROOT)==hwnd,"Central widget did not become a native child");
+        auto childHit=[&](QPoint point){auto global=window.mapToGlobal(point);return SendMessageW(child,WM_NCHITTEST,0,MAKELPARAM(qRound(global.x()*window.devicePixelRatioF()),qRound(global.y()*window.devicePixelRatioF())));};
+        require(childHit({150,24})==HTTRANSPARENT&&childHit({1,1})==HTTRANSPARENT&&childHit(max->mapTo(&window,max->rect().center()))==HTTRANSPARENT,"Native child blocks caption drag, resize or snap");
+        require(childHit(control->mapTo(&window,control->rect().center()))==HTCLIENT&&childHit({500,400})==HTCLIENT,"Native child lost interactive client area");
+        require(hit({150,24})==HTCAPTION,"Top-level caption hit changed with a native child");
         SendMessageW(hwnd,WM_NCLBUTTONDBLCLK,HTCAPTION,0);app.processEvents();require(IsZoomed(hwnd),"Caption double-click did not maximize");window.showNormal();app.processEvents();close->click();app.processEvents();require(!window.isVisible(),"Close button did not dispatch normal close lifecycle");
         firstFlyoutFrame(app);acrylicFlyout(app);
         std::cout<<"Native caption and acrylic policy/compositor/lifecycle checks passed\n";return 0;

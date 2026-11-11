@@ -155,6 +155,8 @@ HWND maximizedApp(const Monitor& monitor) {
         auto cls=windowClass(window);
         if(cls==L"Progman" || cls==L"WorkerW" || cls==L"Shell_TrayWnd" || cls==L"Shell_SecondaryTrayWnd") return TRUE;
         if(GetWindowLongPtrW(window,GWL_EXSTYLE)&WS_EX_TOOLWINDOW) return TRUE;
+        // Never capture this application's own maximized panel.
+        DWORD pid{};GetWindowThreadProcessId(window,&pid);if(pid==GetCurrentProcessId()) return TRUE;
         DWORD cloaked{}; DwmGetWindowAttribute(window,DWMWA_CLOAKED,&cloaked,sizeof(cloaked));
         if(cloaked || isRenderer(window)) return TRUE;
         if(IsZoomed(window) || fullscreenApp(window,s.monitor)) { s.app=window; return FALSE; }
@@ -702,7 +704,7 @@ struct OfficeAmbience::Impl {
     Clock::time_point standbyBegan=Clock::now();
     HPOWERNOTIFY displayNotification{};
     static constexpr GUID sessionDisplayState{0x2b84c20e,0xad23,0x4ddf,{0x93,0xdb,0x05,0xff,0xbd,0x7e,0xfc,0xa5}};
-    Clock::time_point identifyUntil{};
+    Clock::time_point identifyUntil{},captureRetry{};
     HWND eventWindow{};
     bool initialized=false;
     std::atomic_bool dirty{true};
@@ -851,7 +853,15 @@ struct OfficeAmbience::Impl {
             journal->write("intensity_applied",{{"target",target},{"value",value},{"revision",revision}});
             return intensitySnapshot();
         }
-        if(name=="recover") {outputPaused=false;invalidate=true;dirty=true;return {{"accepted",true}};}
+        if(name=="recover") {
+            outputPaused=false;invalidate=true;dirty=true;
+            // Also reconnect lights: missing mapped devices are rediscovered,
+            // and present Govee lamps re-enter their stream session.
+            bool missing,detecting;{std::lock_guard lock(controllersMutex);detecting=detectionActive;missing=std::any_of(devices.begin(),devices.end(),[](auto& d){return d.controller==nullptr;});}
+            if(missing&&!detecting){journal->write("recover_rescan");api->RescanDevices();}
+            else reassertStreams("recover");
+            return {{"accepted",true},{"rescan",missing&&!detecting}};
+        }
         if(name=="pause_output") {screen->command({{"action","pause"},{"target","lighting"},{"mode",screen->lightingPaused()?"enable":"forever"}});return {{"paused",screen->lightingPaused()}};}
         if(name=="hardware")return hardwareCommand(request);
         if(name=="stop_test") {calibration=false;standbyPreview=false;identifyDevice.clear();return {{"accepted",true}};}
@@ -1088,6 +1098,14 @@ struct OfficeAmbience::Impl {
         mode="stopped"; status();
         journal->write("owner_stop_complete");
     }
+    // Govee lamps leave DreamView stream mode after a network interruption and
+    // then ignore colour frames. Re-entering it briefly blanks them, so this is
+    // done only when that is invisible or requested: leaving rest and recover.
+    void reassertStreams(const char* reason) {
+        std::lock_guard lock(controllersMutex);auto names=Json::array();
+        for(auto& d:devices)if(d.controller&&d.controller->GetVendor()=="Govee"){d.controller->UpdateMode();d.delivered=false;names.push_back(d.key);}
+        if(!names.empty())journal->write("stream_reassert",{{"reason",reason},{"devices",names}});
+    }
     void resourcesUpdated(unsigned reason) {
         // OpenRGB emits these synchronously while removed controllers are still
         // alive. This barrier must not be queued onto the Qt output thread:
@@ -1101,7 +1119,7 @@ struct OfficeAmbience::Impl {
         }
         if(reason!=RESOURCEMANAGER_UPDATE_REASON_DEVICE_LIST_UPDATED && reason!=RESOURCEMANAGER_UPDATE_REASON_DETECTION_COMPLETE) return;
         auto current=api->GetRGBControllers();controllerError.clear();
-        bindHardware(current);detectionActive=reason!=RESOURCEMANAGER_UPDATE_REASON_DETECTION_COMPLETE;
+        detectionActive=reason!=RESOURCEMANAGER_UPDATE_REASON_DETECTION_COMPLETE;
         for(auto& d:devices) {
             RGBControllerInterface* found=nullptr;
             for(auto* c:current) if(deviceKey(c)==d.key) {
@@ -1112,6 +1130,9 @@ struct OfficeAmbience::Impl {
             if(found && found!=d.controller) {found->SetCustomMode();d.delivered=false;}
             d.controller=found;
         }
+        // Mapped devices are rebound first: a hardware identity failure must
+        // not leave pointers to controllers freed after this callback returns.
+        try {bindHardware(current);} catch(const std::exception& e) {nativeControllers.clear();controllerError=e.what();}
     }
     static std::optional<uint32_t> lastInput(){
         LASTINPUTINFO value{sizeof(value)};
@@ -1212,11 +1233,14 @@ struct OfficeAmbience::Impl {
         if(candidate) try { capture=std::make_unique<Capture>(candidate,monitor.bounds,samples,journal,sourceGeneration);std::lock_guard lock(capture->state->mutex);capture->state->configure(config); }
         catch(hresult_error const& failure) { error=to_string(failure.message());journal->write("capture_create_error",{{"generation",sourceGeneration},{"hresult",static_cast<int32_t>(failure.code())},{"message",error}}); }
         catch(std::exception const& failure) { error=failure.what();journal->write("capture_create_error",{{"generation",sourceGeneration},{"message",error}}); }
+        // A failed capture is retried on the output tick rather than waiting
+        // for an unrelated window event; the interval bounds journal volume.
+        captureRetry=candidate&&!capture?Clock::now()+std::chrono::seconds(1):Clock::time_point{};
         journal->write("source_switch_complete",{{"generation",sourceGeneration},{"mode",mode},{"capture_created",capture!=nullptr}});
         status();
     }
     std::string restReason() const {
-        return sessionLocked?"session-locked":displayOff?"display-asleep":automaticSaver?"automatic-screensaver":desktopUnavailable?"secure-desktop":monitorMissing?"monitor-disconnected":rest.active()?"awaiting-user-input":"";
+        return sessionLocked?"session-locked":powerSuspended?"power-suspended":displayOff?"display-asleep":automaticSaver?"automatic-screensaver":desktopUnavailable?"secure-desktop":monitorMissing?"monitor-disconnected":rest.active()?"awaiting-user-input":"";
     }
     void tick() {
         // RGB pause owns capture lifetime, independently of gamma and Awake.
@@ -1238,7 +1262,12 @@ struct OfficeAmbience::Impl {
         if(observeNativeSources && !sessionLocked && !displayOff && !powerSuspended && dirty.exchange(false)) chooseSource();
         awake.tick();
         const bool resting=!restReason().empty();
-        if(restReason()!=loggedRest) {journal->write("rest_transition",{{"previous",loggedRest},{"reason",restReason()}});loggedRest=restReason();}
+        if(restReason()!=loggedRest) {
+            journal->write("rest_transition",{{"previous",loggedRest},{"reason",restReason()}});
+            if(!loggedRest.empty()&&!resting)reassertStreams("rest-exit");
+            loggedRest=restReason();
+        }
+        if(!capture&&source&&captureRetry!=Clock::time_point{}&&Clock::now()>=captureRetry) {captureRetry={};invalidate=true;dirty=true;}
         if(resting) {
             updateFullscreen(nullptr,selectedMonitor);
             capture.reset();source=nullptr;mode="resting";latest.clear();

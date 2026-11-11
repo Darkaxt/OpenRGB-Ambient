@@ -2,6 +2,8 @@
 // Client-drawn caption integrated with the application header. Windows still
 // owns movement, resizing, snapping, system menu and maximize work-area policy.
 #include "OfficeStyle.h"
+#include <QAbstractNativeEventFilter>
+#include <QApplication>
 #include <QMainWindow>
 #include <QToolButton>
 #include <QWindow>
@@ -48,16 +50,7 @@ protected:
             if(IsZoomed(m->hwnd)){MONITORINFO info{sizeof(info)};if(GetMonitorInfoW(MonitorFromWindow(m->hwnd,MONITOR_DEFAULTTONEAREST),&info))*r=info.rcWork;}
             *result=0;return true;
         }
-        if(caption&&m->message==WM_NCHITTEST){
-            RECT r{};GetWindowRect(m->hwnd,&r);POINT pos{GET_X_LPARAM(m->lParam),GET_Y_LPARAM(m->lParam)};
-            const auto dpi=GetDpiForWindow(m->hwnd);int border=GetSystemMetricsForDpi(SM_CXSIZEFRAME,dpi)+GetSystemMetricsForDpi(SM_CXPADDEDBORDER,dpi);
-            if(!IsZoomed(m->hwnd)){
-                bool left=pos.x<r.left+border,right=pos.x>=r.right-border,top=pos.y<r.top+border,bottom=pos.y>=r.bottom-border;
-                if(left||right||top||bottom){*result=top?(left?HTTOPLEFT:right?HTTOPRIGHT:HTTOP):bottom?(left?HTBOTTOMLEFT:right?HTBOTTOMRIGHT:HTBOTTOM):left?HTLEFT:HTRIGHT;return true;}
-            }
-            ScreenToClient(m->hwnd,&pos);QPoint point(qRound(pos.x/devicePixelRatioF()),qRound(pos.y/devicePixelRatioF()));
-            *result=captionHit(point);return true;
-        }
+        if(caption&&m->message==WM_NCHITTEST){*result=nonClientHit(m->hwnd,m->lParam);return true;}
         if(maximize&&(m->message==WM_NCMOUSEMOVE||m->message==WM_NCMOUSELEAVE)){
             maximize->setProperty("nativeHover",m->message==WM_NCMOUSEMOVE&&m->wParam==HTMAXBUTTON);maximize->update();
             if(m->message==WM_NCMOUSEMOVE){TRACKMOUSEEVENT track{sizeof(track),TME_NONCLIENT|TME_LEAVE,m->hwnd,0};TrackMouseEvent(&track);}
@@ -88,8 +81,37 @@ public:
 #endif
         QMainWindow::showMinimized();
     }
+#ifdef Q_OS_WIN
+    // Resize borders and caption for screen point lParam on top-level hwnd.
+    LRESULT nonClientHit(HWND hwnd,LPARAM lParam) const {
+        RECT r{};GetWindowRect(hwnd,&r);POINT pos{GET_X_LPARAM(lParam),GET_Y_LPARAM(lParam)};
+        const auto dpi=GetDpiForWindow(hwnd);int border=GetSystemMetricsForDpi(SM_CXSIZEFRAME,dpi)+GetSystemMetricsForDpi(SM_CXPADDEDBORDER,dpi);
+        if(!IsZoomed(hwnd)){
+            bool left=pos.x<r.left+border,right=pos.x>=r.right-border,top=pos.y<r.top+border,bottom=pos.y>=r.bottom-border;
+            if(left||right||top||bottom)return top?(left?HTTOPLEFT:right?HTTOPRIGHT:HTTOP):bottom?(left?HTBOTTOMLEFT:right?HTBOTTOMRIGHT:HTBOTTOM):left?HTLEFT:HTRIGHT;
+        }
+        ScreenToClient(hwnd,&pos);return captionHit(QPoint(qRound(pos.x/devicePixelRatioF()),qRound(pos.y/devicePixelRatioF())));
+    }
+    // A native child HWND (any widget that acquired its own window handle)
+    // receives WM_NCHITTEST before the frameless top level and answers
+    // HTCLIENT, disabling caption drag and resize borders. Children of the
+    // same thread answer HTTRANSPARENT there so Windows asks the top level.
+    struct DescendantHitFilter final : QAbstractNativeEventFilter {
+        bool nativeEventFilter(const QByteArray&,void* message,qintptr* result) override {
+            auto m=static_cast<MSG*>(message);if(m->message!=WM_NCHITTEST)return false;
+            HWND top=GetAncestor(m->hwnd,GA_ROOT);if(!top||top==m->hwnd)return false;
+            auto window=dynamic_cast<OfficeWindow*>(QWidget::find(reinterpret_cast<WId>(top)));
+            if(!window||!window->caption||window->nonClientHit(top,m->lParam)==HTCLIENT)return false;
+            *result=HTTRANSPARENT;return true;
+        }
+    };
+#endif
     void integrateCaption(QWidget* header,QHBoxLayout* row){
         caption=header;caption->setObjectName("windowHeader");
+#ifdef Q_OS_WIN
+        static DescendantHitFilter* descendants=nullptr;
+        if(!descendants){descendants=new DescendantHitFilter;qApp->installNativeEventFilter(descendants);}
+#endif
         for(int i=0;i<3;++i){auto b=new CaptionButton(i,header);row->addWidget(b);if(i==1)maximize=b;
             connect(b,&QToolButton::clicked,this,[this,i]{if(i==0)showMinimized();else if(i==1){if(isMaximized())showNormal();else showMaximized();}else close();});}
 #ifdef Q_OS_WIN

@@ -43,6 +43,9 @@ class OfficeScreen final {
     std::map<int,std::string> hotkeyActions;
     static constexpr const char* hotkeys[]={"ToggleHotKey","FocusWindowHotKey","IncreaseTemperatureOffsetHotKey","DecreaseTemperatureOffsetHotKey","IncreaseBrightnessOffsetHotKey","DecreaseBrightnessOffsetHotKey","ResetConfigurationOffsetHotKey"};
     std::function<void()> reveal;
+    bool standalone=false;int64_t standaloneChecked=-1;
+    // Original ramps survive a crash here; normal restoration removes it.
+    QString baselinePath;std::map<std::wstring,std::array<std::array<WORD,256>,3>> recovered;
 
     static Json readFile(const QString& name) {
         QFile file(name);if(!file.open(QIODevice::ReadOnly))throw std::runtime_error("Cannot read screen settings");
@@ -83,7 +86,9 @@ class OfficeScreen final {
     static Json defaults(){return {{"DayConfiguration",{{"Temperature",6600},{"Brightness",1.}}},{"NightConfiguration",{{"Temperature",3900},{"Brightness",.85}}},{"ConfigurationTransitionDuration","00:40:00"},{"ConfigurationTransitionOffset",0.},{"ConfigurationSmoothingMaxDuration","00:00:05"},{"IsManualSunriseSunsetEnabled",true},{"ManualSunriseTime","07:20:00"},{"ManualSunsetTime","16:30:00"},{"Location",nullptr},{"IsDefaultToDayConfigurationEnabled",false},{"IsConfigurationSmoothingEnabled",true},{"IsPauseWhenFullScreenEnabled",false},{"IsGammaPollingEnabled",false},{"IsApplicationWhitelistEnabled",false},{"WhitelistedApplications",Json::array()}};}
     std::pair<double,double> solarAt(const QDateTime& instant) const {
         const auto& s=document.at("settings");if(s.at("IsManualSunriseSunsetEnabled").get<bool>())return {timeSeconds(s.at("ManualSunriseTime")),timeSeconds(s.at("ManualSunsetTime"))};
-        return screen::solar(s.at("Location").at("Latitude"),s.at("Location").at("Longitude"),instant.date().dayOfYear(),instant.offsetFromUtc()/3600.);
+        // Use the day's noon offset so a DST change at night does not shift the whole day.
+        const auto noon=QDateTime(instant.date(),QTime(12,0),QTimeZone::systemTimeZone());
+        return screen::solar(s.at("Location").at("Latitude"),s.at("Location").at("Longitude"),instant.date().dayOfYear(),noon.offsetFromUtc()/3600.);
     }
     int64_t nextSunrise(int64_t after) const {
         const auto start=QDateTime::fromMSecsSinceEpoch(after).toLocalTime();
@@ -92,14 +97,36 @@ class OfficeScreen final {
         throw std::runtime_error("Cannot resolve next sunrise");
     }
     screen::Pause pause(const char* name) const{return screen::Pause::from(document.value(name,Json::object()));}
-    static bool standaloneRunning(){
-        HANDLE snapshot=CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS,0);if(snapshot==INVALID_HANDLE_VALUE)return true;
+    // Re-resolve "until sunrise" pauses after schedule, location or clock changes.
+    bool resolveSunrise(Json& next) const {
+        bool changed=false;for(auto key:{"lighting_pause","screen_pause"}){auto p=screen::Pause::from(next.value(key,Json::object()));if(p.kind=="sunrise"){p.until=nextSunrise(p.started);next[key]=p.json();changed=true;}}return changed;
+    }
+    // A process snapshot costs milliseconds of kernel time. The 50 ms gamma
+    // tick reuses a recent answer; explicit enabling always checks afresh.
+    bool standaloneRunning(bool fresh=false){
+        const auto now=monotonic.elapsed();if(!fresh&&standaloneChecked>=0&&now-standaloneChecked<3000)return standalone;
+        HANDLE snapshot=CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS,0);
+        if(snapshot==INVALID_HANDLE_VALUE)return standaloneChecked<0||standalone;
         PROCESSENTRY32W p{};p.dwSize=sizeof(p);bool found=false;
         if(Process32FirstW(snapshot,&p))do{if(_wcsicmp(p.szExeFile,L"LightBulb.exe")==0){found=true;break;}}while(Process32NextW(snapshot,&p));
-        CloseHandle(snapshot);return found;
+        CloseHandle(snapshot);standalone=found;standaloneChecked=now;return found;
+    }
+    void loadBaselines(){
+        QFile file(baselinePath);if(!file.open(QIODevice::ReadOnly))return;auto bytes=file.readAll();
+        auto saved=Json::parse(bytes.constData(),bytes.constData()+bytes.size(),nullptr,false);if(!saved.is_object())return;
+        for(auto& [name,ramp]:saved.items()){if(!ramp.is_array()||ramp.size()!=768)continue;std::array<std::array<WORD,256>,3> value{};bool valid=true;
+            for(size_t i=0;i<768&&valid;++i){valid=ramp[i].is_number_unsigned()&&ramp[i].get<unsigned>()<=65535;if(valid)value[i/256][i%256]=static_cast<WORD>(ramp[i].get<unsigned>());}
+            if(valid)recovered[QString::fromStdString(name).toStdWString()]=value;}
+    }
+    void saveBaselines(){
+        Json saved=Json::object();for(auto& d:displays){auto ramp=Json::array();for(auto& channel:d.baseline)for(auto v:channel)ramp.push_back(v);saved[QString::fromStdWString(d.name).toStdString()]=ramp;}
+        QSaveFile file(baselinePath);auto bytes=saved.dump();
+        if(!file.open(QIODevice::WriteOnly)||file.write(bytes.data(),bytes.size())!=static_cast<qint64>(bytes.size())||!file.commit())error="Cannot record the original gamma ramps for crash recovery";
     }
     void restoreDisplays() noexcept {
-        for(auto& d:displays){if(d.baselineValid&&d.owned){if(!SetDeviceGammaRamp(d.dc,d.baseline.data()))error="Could not restore a display gamma baseline";}if(d.dc)DeleteDC(d.dc);}
+        bool restored=true;
+        for(auto& d:displays){if(d.baselineValid&&d.owned){if(!SetDeviceGammaRamp(d.dc,d.baseline.data())){error="Could not restore a display gamma baseline";restored=false;}}if(d.dc)DeleteDC(d.dc);}
+        if(restored&&!displays.empty())QFile::remove(baselinePath);
         displays.clear();appliedValid=false;
     }
     void ensureDisplays(){
@@ -113,8 +140,12 @@ class OfficeScreen final {
             Display d;d.name=info.szDevice;d.dc=CreateDCW(L"DISPLAY",d.name.c_str(),nullptr,nullptr);
             d.baselineValid=d.dc&&GetDeviceGammaRamp(d.dc,d.baseline.data());
             if(!d.baselineValid){if(d.dc)DeleteDC(d.dc);self.error="Cannot read original gamma ramp";return TRUE;}
+            // After a crash the current ramp is still our adjusted one; the
+            // recorded original is the only correct calibration baseline.
+            if(auto found=self.recovered.find(d.name);found!=self.recovered.end()){d.baseline=found->second;self.recovered.erase(found);}
             self.displays.push_back(d);return TRUE;
         },reinterpret_cast<LPARAM>(this));
+        if(!displays.empty())saveBaselines();
     }
     void updateForeground(){
         if(!foregroundInvalid)return;foregroundInvalid=false;pauseReason.clear();
@@ -127,7 +158,10 @@ class OfficeScreen final {
         const auto& s=document.at("settings");
         if(s.at("IsApplicationWhitelistEnabled").get<bool>()&&!s.at("WhitelistedApplications").is_null())for(auto& item:s.at("WhitelistedApplications"))
             if(QString::compare(executable,QString::fromStdString(item.at("ExecutableFilePath")),Qt::CaseInsensitive)==0&&!executable.isEmpty())pauseReason="excluded-application";
-        if(s.at("IsPauseWhenFullScreenEnabled").get<bool>()){
+        // A captioned maximized window covers the monitor when the taskbar
+        // auto-hides; only borderless fullscreen applications pause.
+        const bool captioned=IsZoomed(foreground)&&(GetWindowLongPtrW(foreground,GWL_STYLE)&WS_CAPTION)==WS_CAPTION;
+        if(s.at("IsPauseWhenFullScreenEnabled").get<bool>()&&!captioned){
             RECT bounds{};MONITORINFO info{};info.cbSize=sizeof(info);auto monitor=MonitorFromWindow(foreground,MONITOR_DEFAULTTONULL);
             if(monitor&&GetWindowRect(foreground,&bounds)&&GetMonitorInfoW(monitor,&info)&&bounds.left<=info.rcMonitor.left&&bounds.top<=info.rcMonitor.top&&bounds.right>=info.rcMonitor.right&&bounds.bottom>=info.rcMonitor.bottom)pauseReason="fullscreen-application";
         }
@@ -180,6 +214,7 @@ class OfficeScreen final {
     }
 public:
     OfficeScreen(const std::filesystem::path& root,bool activate):path(QString::fromStdWString((root/"office-screen.json").wstring())),active(activate){
+        baselinePath=QString::fromStdWString((root/"office-screen-baseline.json").wstring());if(activate)loadBaselines();
         auto settings=defaults();document={{"settings",settings},{"managed",false},{"lighting_pause",screen::Pause{}.json()},{"screen_pause",screen::Pause{}.json()},{"temperature_offset",0.},{"brightness_offset",0.}};
         if(QFile::exists(path)){document=readFile(path);disk=document;}
         else if(activate){auto source=qEnvironmentVariable("APPDATA")+"/LightBulb/Settings.json";if(QFile::exists(source)){auto imported=readFile(source);settings.update(imported);document["settings"]=settings;document["import_source"]=source.toStdString();document["imported"]=true;}}
@@ -194,7 +229,7 @@ public:
     void nativeEvent(UINT message,WPARAM w,LPARAM){
         if(message==WM_ENDSESSION && w){shutdown();return;}
         if(message==WM_DISPLAYCHANGE)invalid=true;
-        if(message==WM_SETTINGCHANGE||message==WM_TIMECHANGE){foregroundInvalid=true;refreshGamma=true;auto next=document;bool changed=false;for(auto key:{"lighting_pause","screen_pause"}){auto p=pause(key);if(p.kind=="sunrise"){p.until=nextSunrise(p.started);next[key]=p.json();changed=true;}}if(changed)persist(next);}
+        if(message==WM_SETTINGCHANGE||message==WM_TIMECHANGE){foregroundInvalid=true;refreshGamma=true;auto next=document;if(resolveSunrise(next))persist(next);}
         if(message==WM_POWERBROADCAST||message==WM_WTSSESSION_CHANGE)refreshGamma=true;
         if(message==WM_HOTKEY&&hotkeyActions.contains(static_cast<int>(w))){auto name=hotkeyActions.at(static_cast<int>(w));
             if(name=="FocusWindowHotKey"){if(reveal)reveal();}
@@ -214,7 +249,10 @@ public:
     }
     void tick(){
         if(closed||!active)return;auto real=QDateTime::currentDateTime();auto now=real.toMSecsSinceEpoch();
-        auto next=document;bool expired=false;for(auto key:{"lighting_pause","screen_pause"}){auto p=pause(key);if(p.kind!="none"&&p.kind!="forever"&&!p.active(now)){p.clear();next[key]=p.json();expired=true;}}if(expired)persist(next);
+        auto next=document;bool expired=false;for(auto key:{"lighting_pause","screen_pause"}){auto p=pause(key);if(p.kind!="none"&&p.kind!="forever"&&!p.active(now)){p.clear();next[key]=p.json();expired=true;}}
+        // An expired pause ends even when it cannot be saved; otherwise every
+        // tick would throw here and freeze screen adjustment.
+        if(expired)try{persist(next);}catch(const std::exception& e){document=std::move(next);++revision;error=e.what();}
         if(!document.value("managed",false))return;
         // Process enumeration is an ownership check, never a retry/cancellation deadline.
         if(standaloneRunning()){error="Standalone LightBulb is running; close it before enabling integrated screen adjustments";appliedValid=false;for(auto& d:displays){d.owned=false;d.appliedValid=false;}refreshGamma=true;return;}
@@ -257,8 +295,9 @@ public:
         }else if(action=="save"){
             if(request.at("revision").get<uint64_t>()!=revision)throw std::runtime_error("Screen settings changed; reload before saving");auto settings=request.at("settings");validate(settings);
             for(auto key:hotkeys)if(settings.contains(key))shortcut(settings.at(key));auto next=document;next["settings"]=settings;persist(next);foregroundInvalid=refreshGamma=true;registerHotkeys();
+            if(auto resolved=document;resolveSunrise(resolved))persist(resolved);
         }else if(action=="managed"){
-            bool enable=request.at("enabled");if(enable&&standaloneRunning())throw std::runtime_error("Close standalone LightBulb before enabling integrated screen adjustments");
+            bool enable=request.at("enabled");if(enable&&standaloneRunning(true))throw std::runtime_error("Close standalone LightBulb before enabling integrated screen adjustments");
             auto next=document;next["managed"]=enable;persist(next);if(!enable)restoreDisplays();else invalid=true;registerHotkeys();refreshGamma=true;elapsed.restart();
         }else if(action=="preview"){if(!document.value("managed",false))throw std::runtime_error("Enable integrated screen adjustment before previewing");preview=!preview;if(preview){previewStart=QDateTime::currentMSecsSinceEpoch();previewClock.start();}refreshGamma=true;
         }else if(action=="offset_reset"){auto next=document;next["temperature_offset"]=0.;next["brightness_offset"]=0.;persist(next);refreshGamma=true;

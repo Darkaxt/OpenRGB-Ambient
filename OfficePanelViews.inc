@@ -142,6 +142,6 @@ void Panel::buildViews() {
         connect(recover,&QPushButton::clicked,this,[this]{action({{"command","recover"}});});
         buildTrayMenu();
         if(exportPath.isEmpty() && QSystemTrayIcon::isSystemTrayAvailable()) {
-            tray=new QSystemTrayIcon(windowIcon(),this);tray->setToolTip("Office Ambilight · Lighting mixer");tray->setContextMenu(trayMenu);connect(tray,&QSystemTrayIcon::activated,this,[this](auto reason){if(reason==QSystemTrayIcon::Trigger){if(lightMixer->isVisible()&&lightMixer->isActiveWindow())lightMixer->hide();else lightMixer->showAt(tray->geometry());}else if(reason==QSystemTrayIcon::DoubleClick){lightMixer->hide();showNormal();raise();activateWindow();}});tray->show();
+            tray=new QSystemTrayIcon(windowIcon(),this);tray->setToolTip("Office Ambilight · Lighting mixer");tray->setContextMenu(trayMenu);connect(tray,&QSystemTrayIcon::activated,this,[this](auto reason){if(reason==QSystemTrayIcon::Trigger){if(lightMixer->isVisible()&&lightMixer->isActiveWindow())lightMixer->hide();else if(!lightMixer->justHidden())lightMixer->showAt(tray->geometry());}else if(reason==QSystemTrayIcon::DoubleClick){lightMixer->hide();showNormal();raise();activateWindow();}});tray->show();
         }
 }

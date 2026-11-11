@@ -18,6 +18,7 @@
 #include <QShowEvent>
 #include <QResizeEvent>
 #include <QTimer>
+#include <QElapsedTimer>
 #include <QStyle>
 #include <QMenu>
 #include <algorithm>
@@ -68,6 +69,7 @@ class LightController final : public QFrame {
     OfficeDispatch dispatch;
     Json accepted;
     bool applying=false,busy=false,pinned=false,expanded=true;
+    QElapsedTimer hiddenAt;
     bool acrylic=false;
     bool nativeSetAccepted=false;
     int acceptedAccent=0;
@@ -160,7 +162,7 @@ protected:
         painter.fillRect(header->geometry(),acrylic?QColor(16,51,44,90):QColor("#10332c"));
     }
     void showEvent(QShowEvent* event) override {QFrame::showEvent(event);updateMaterial(true);}
-    void hideEvent(QHideEvent* event) override {updateMaterial(false);QFrame::hideEvent(event);}
+    void hideEvent(QHideEvent* event) override {hiddenAt.start();updateMaterial(false);QFrame::hideEvent(event);}
     void resizeEvent(QResizeEvent* event) override {QFrame::resizeEvent(event);roundMaterial();}
 #ifdef Q_OS_WIN
     bool nativeEvent(const QByteArray& type,void* message,qintptr* result) override {
@@ -172,6 +174,9 @@ protected:
     void changeEvent(QEvent* event) override {QFrame::changeEvent(event);if(event->type()==QEvent::ActivationChange&&!isActiveWindow()&&!pinned)hide();}
     void keyPressEvent(QKeyEvent* event) override {if(event->key()==Qt::Key_Escape){hide();event->accept();}else QFrame::keyPressEvent(event);}
 public:
+    // Clicking the tray icon first deactivates (and hides) the flyout; that
+    // same click must not reopen it.
+    bool justHidden() const {return hiddenAt.isValid()&&hiddenAt.elapsed()<300;}
     LightController(QWidget* parent,OfficeDispatch send,std::function<void()> open):QFrame(parent,Qt::Tool|Qt::FramelessWindowHint),dispatch(std::move(send)),openPanel(std::move(open)){
         setObjectName("lightingFlyout");setWindowTitle("Lighting intensity");setAccessibleName("Lighting intensity mixer");setFixedWidth(420);setAttribute(Qt::WA_TranslucentBackground);setFont(officeui::body(15));setEnabled(false);
         setStyleSheet(R"(

@@ -33,8 +33,10 @@ public:
             while(auto* socket=server.nextPendingConnection()) {
                 socket->setReadBufferSize(262145);
                 connect(socket,&QLocalSocket::disconnected,socket,&QObject::deleteLater);
+                // End only a temporary test this client started, not one
+                // owned by the panel or another client.
                 connect(socket,&QLocalSocket::disconnected,this,[this,socket] {
-                    if(socket->property("authenticated").toBool()) try {handler({{"command","stop_test"}});} catch(std::exception const&) {}
+                    if(socket->property("testing").toBool()) try {handler({{"command","stop_test"}});} catch(std::exception const&) {}
                 });
                 connect(socket,&QLocalSocket::readyRead,this,[this,socket] {
                     auto pending=socket->property("pending").toByteArray()+socket->readAll();
@@ -47,6 +49,9 @@ public:
                             if(request.value("token",std::string())!=token.toStdString()) { socket->abort();return; }
                             socket->setProperty("authenticated",true);
                             response={{"id",request.at("id")},{"ok",true},{"result",handler(request)}};
+                            const auto command=request.value("command",std::string());
+                            if(command=="calibrate"||command=="identify"||command=="identify_all"||command=="preview_standby")socket->setProperty("testing",true);
+                            else if(command=="stop_test")socket->setProperty("testing",false);
                         } catch(std::exception const& e) {
                             response={{"id",request.is_object()?request.value("id",office::Json(nullptr)):office::Json(nullptr)},
                                       {"ok",false},{"error",e.what()}};

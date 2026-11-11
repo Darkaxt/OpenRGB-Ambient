@@ -13,7 +13,7 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           repository: Darkaxt/OpenRGB
-          ref: 0f2004caa4002542e4d548c47f2d88c6ecfdd264
+          ref: 11c227f827b15bb45524deefd3fb2d4a859f7760
           path: native-openrgb
       - uses: jurplel/install-qt-action@b344308e4483fc892e0d27b3cd1b173ebdd95f06
         id: qt
