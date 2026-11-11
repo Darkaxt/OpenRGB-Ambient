@@ -306,7 +306,14 @@ void screenEditor(QApplication& app){
     auto brightness=panel.findChild<QDoubleSpinBox*>("screen-NightConfiguration/Brightness");require(brightness&&brightness->value()==85,"Imported brightness not rendered");brightness->setValue(80);panel.findChild<QPushButton*>("screenSave")->click();
     require(sent.at("action")=="save"&&sent.at("revision")==3&&sent.at("settings").at("NightConfiguration").at("Brightness")==.8,"Real Screen save did not send edited settings");
     value["screen_disabled"]=true;value["lighting_disabled"]=false;panel.fixtureScreen(value);entries.clear();for(auto action:menu->actions())if(action->isVisible()&&!action->isSeparator())entries<<action->text();require(entries.contains("Enable screen adjustments")&&entries.contains("Disable lighting"),"Independent enable menu state failed");
-    require(panel.findChild<QTabWidget*>("screenTabs")->count()==4,"Screen feature tabs incomplete");
+    require(panel.findChild<QTabWidget*>("screenTabs")->count()==5,"Day/Night feature tabs incomplete");
+    panel.fixtureNight({{"night_weight",.25},{"devices",Json::array({{{"id","H6609"},{"name","Govee H6609"},{"night",50}},{{"id","kbd"},{"name","Keyboard"},{"night",nullptr}}})}});
+    auto govee=panel.findChild<QSlider*>("nightSlider-H6609"),keyboard=panel.findChild<QSlider*>("nightSlider-kbd");auto follow=panel.findChild<QCheckBox*>("nightFollow-kbd");
+    require(govee&&keyboard&&follow&&govee->value()==50&&govee->isEnabled()&&follow->isChecked()&&!keyboard->isEnabled(),"Night level rows not loaded");
+    require(panel.findChild<QLabel*>("nightStatus")->text().contains("25%"),"Night progress not shown");
+    follow->setChecked(false);require(sent.at("command")=="intensity"&&sent.at("target")=="night"&&sent.at("device")=="kbd"&&sent.at("value").is_number(),"Leaving follow screen did not set an own night level");
+    govee->setValue(45);require(sent.at("device")=="H6609"&&sent.at("value")==45,"Night slider did not send its level");
+    panel.findChild<QCheckBox*>("nightFollow-H6609")->setChecked(true);require(sent.at("device")=="H6609"&&sent.at("value").is_null(),"Follow screen did not clear the night level");
     auto slider=panel.findChild<QSlider*>("screen-slider-NightConfiguration/Brightness");require(slider&&slider->value()==85,"Screen slider not synchronized on reload");
     slider->setValue(72);require(brightness->value()==72,"Screen slider did not update exact field");brightness->setValue(81);require(slider->value()==81,"Exact field did not update slider");
     panel.findChild<QPushButton*>("screenSave")->click();require(sent.at("settings").at("NightConfiguration").at("Brightness")==.81,"Slider companion changed save semantics");

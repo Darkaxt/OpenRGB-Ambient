@@ -9,7 +9,7 @@ namespace office {
 inline Json processingDefaults() {
     return {{"strategy","mapped"},{"depth",10.0},{"adaptive_min",3.0},{"adaptive_max",20.0},
         {"black_bar_detect",false},{"blur",0.0},{"saturation",1.0},{"brightness",1.0},{"follow_display_brightness",true},
-        {"lighting_intensity",100.0},{"fullscreen_intensity",50.0},{"device_intensity",Json::object()},
+        {"lighting_intensity",100.0},{"fullscreen_intensity",50.0},{"device_intensity",Json::object()},{"device_night_level",Json::object()},
         {"fullscreen_profiles",Json::object()},
         {"min_luminance",0.0},{"ema_alpha",0.35},{"scene_cut",255.0},
         {"smoothing_mode","time"},{"standby","hold"},{"standby_brightness",0.15},
@@ -35,6 +35,9 @@ inline void validateProcessing(const Json& c) {
     validateFullscreenProfiles(c.at("fullscreen_profiles"));
     for(auto& [id,value]:c.at("device_intensity").items())
         if(id.empty()||!value.is_number()||!std::isfinite(value.get<double>())||value<0||value>100)throw std::runtime_error("Device intensity must be 0-100 percent");
+    if(!c.at("device_night_level").is_object())throw std::runtime_error("Device night levels must be an object");
+    for(auto& [id,value]:c.at("device_night_level").items())
+        if(id.empty()||!value.is_number()||!std::isfinite(value.get<double>())||value<0||value>100)throw std::runtime_error("Device night level must be 0-100 percent");
     if(!c.at("black_bar_detect").is_boolean()) throw std::runtime_error("Black bar detection must be a boolean");
     if(!c.at("follow_display_brightness").is_boolean()) throw std::runtime_error("Follow display brightness must be a boolean");
     if(c.at("smoothing_mode")!="time" && c.at("smoothing_mode")!="ema") throw std::runtime_error("Unknown smoothing mode");

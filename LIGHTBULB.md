@@ -11,7 +11,7 @@ office-integration-specification.md, R29-R36.
 | LightBulb.Core/Cycle.cs, SolarTimes.cs | OfficeScreenPolicy.h, source-derived cycle/solar regression vectors |
 | Services/GammaService.cs, PlatformInterop/DeviceContext.cs | OfficeScreen.h, native gamma ownership, lifecycle/readback/restoration |
 | Services/SettingsService.cs, ViewModels/Components/DashboardViewModel.cs | OfficeScreen.h, private settings import, offsets, exclusions, hotkeys, cycle preview |
-| App.axaml, Views/Components/Settings/* | OfficeScreenPanel.inc, Screen page and exact two root pause submenus |
+| App.axaml, Views/Components/Settings/* | OfficeScreenPanel.inc, Day/Night page (screen settings plus per-light night levels) and exact two root pause submenus |
 | favicon.ico | assets/office/lightbulb.ico |
 | Views/Components/DashboardView.axaml, Views/Controls/Arc.cs, ArcPoint.cs, Converters/CycleStateToMaterialIconKindConverter.cs | OfficeSundial.h: native day/night/transition arcs, owner-clock marker, state symbols and applied readouts |
 | Views/Components/Settings/GeneralSettingsTabView.axaml | OfficeScreenPanel.inc: synchronized sliders and exact temperature/brightness fields |

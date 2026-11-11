@@ -203,3 +203,15 @@ individual device intensity and display dimming still multiply the result.
 Normal wallpaper levels return when fullscreen ends. Rest, lock, screensaver and
 disabled lighting keep their existing priority. Profiles match the executable
 basename without case sensitivity, including after an app changes install paths.
+
+## Day/Night per-light night levels
+
+The former Screen page is now **Day/Night**. Its **Lights** tab gives each light either
+"Follow screen" (the default: the light uses the applied display brightness, as before)
+or its own night level (0–100%). A light with its own level fades from 100% by day to
+that level at night, along the same sunrise/sunset transition curve and smoothing as the
+screen (`night` position 0→1 in `OfficeScreenPolicy.h`). Levels persist in the RGB
+settings as `device_night_level` and are set through the owner's `intensity` command with
+`target: "night"` (`value: null` returns a light to following the screen). Own levels need
+integrated screen adjustment; without it every light follows the measured display gamma.
+Screen pauses return the cycle position to day, so lights go back to full brightness.

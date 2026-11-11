@@ -27,7 +27,7 @@ void Panel::buildViews() {
     auto navigation=new QWidget;navigation->setObjectName("navigation");navigation->setFixedWidth(80);navigation->setStyleSheet("QWidget#navigation{background:#02080e;border-right:1px solid #14212c;}");
     auto rail=new QVBoxLayout(navigation);rail->setContentsMargins(0,0,0,0);rail->setSpacing(0);rail->addWidget(new Logo);rail->addSpacing(8);
     auto navGroup=new QButtonGroup(this);navGroup->setExclusive(true);
-    const QStringList navNames={"Control","Screen","Topology","Devices","Settings","Preview","Help"};
+    const QStringList navNames={"Control","Day/Night","Topology","Devices","Settings","Preview","Help"};
     const QStringList navIcons={"settings_brightness","settings_brightness","hub","memory","tune","auto_awesome","help"};
     const int navPages[]={0,7,1,2,3,4,6};
     for(int i=0;i<navNames.size();++i){auto b=new NavButton(navNames[i],navIcons[i]);int page=navPages[i];navGroup->addButton(b,page);rail->addWidget(b);connect(b,&QPushButton::clicked,this,[this,page]{pages->setCurrentIndex(page);});}

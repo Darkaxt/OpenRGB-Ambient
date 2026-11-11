@@ -17,6 +17,51 @@ std::map<std::string,QCheckBox*> screenChecks;
 std::map<std::string,QTimeEdit*> screenTimes;
 std::map<std::string,QKeySequenceEdit*> screenKeys;
 QPlainTextEdit* screenExclusions=new QPlainTextEdit;
+// Per-light night levels (Day/Night → Lights). Stored with the RGB settings by
+// the owner's intensity command; absent means the light follows the screen.
+struct NightRow {QWidget* box;officeui::Switch* follow;officeui::Slider* slider;QLabel* value;};
+std::map<std::string,NightRow> nightRows;
+std::vector<std::string> nightOrder;
+QVBoxLayout* nightList=nullptr;
+QLabel* nightStatus=new QLabel;
+
+void sendNight(const std::string& id,const Json& value){
+    client.send({{"command","intensity"},{"target","night"},{"device",id},{"value",value}},[this](const Json& reply){
+        if(!reply.value("ok",false)){screenMessage->setText(text(reply.at("error")));screenMessage->setStyleSheet("color:#ffb54a");return;}
+        loadNightLevels(reply.at("result"));
+    });
+}
+void loadNightLevels(const Json& intensity){
+    if(!nightList||!intensity.is_object()||!intensity.contains("devices"))return;
+    std::vector<std::string> order;for(auto& d:intensity.at("devices"))order.push_back(d.at("id").get<std::string>());
+    if(order!=nightOrder){
+        for(auto& [id,row]:nightRows)delete row.box;nightRows.clear();nightOrder=order;
+        for(auto& d:intensity.at("devices")){
+            const auto id=d.at("id").get<std::string>();const auto name=text(d.at("name"));
+            auto box=new QWidget;auto l=new QHBoxLayout(box);l->setContentsMargins(0,0,0,0);l->setSpacing(10);
+            auto caption=officeui::label(name);caption->setMinimumWidth(150);l->addWidget(caption,1);
+            auto follow=new officeui::Switch("Follow screen");follow->setObjectName(QString::fromStdString("nightFollow-"+id));follow->setAccessibleName(name+" follows the screen");l->addWidget(follow);
+            auto slider=new officeui::Slider;slider->setRange(0,100);slider->setSingleStep(1);slider->setPageStep(5);slider->setMinimumWidth(140);
+            slider->setObjectName(QString::fromStdString("nightSlider-"+id));slider->setAccessibleName(name+" night level");l->addWidget(slider,2);
+            auto value=new QLabel;value->setMinimumWidth(48);value->setAlignment(Qt::AlignRight|Qt::AlignVCenter);l->addWidget(value);
+            nightList->addWidget(box);nightRows[id]={box,follow,slider,value};
+            connect(follow,&QCheckBox::toggled,this,[this,id,slider](bool on){slider->setEnabled(!on);sendNight(id,on?Json():Json(slider->value()));});
+            connect(slider,&QSlider::valueChanged,this,[this,id,slider,value](int n){value->setText(QString("%1%").arg(n));if(!slider->isSliderDown())sendNight(id,n);});
+            connect(slider,&QSlider::sliderReleased,this,[this,id,slider]{sendNight(id,slider->value());});
+        }
+    }
+    double screenNight=85;
+    if(screenState.contains("settings"))screenNight=screenState.at("settings").at("NightConfiguration").value("Brightness",.85)*100;
+    for(auto& d:intensity.at("devices")){
+        auto& row=nightRows.at(d.at("id").get<std::string>());if(row.slider->isSliderDown())continue;
+        const auto night=d.value("night",Json());const int level=qRound(night.is_number()?night.get<double>():screenNight);
+        QSignalBlocker a(row.follow),b(row.slider);row.follow->setChecked(night.is_null());row.slider->setEnabled(!night.is_null());
+        row.slider->setValue(level);row.value->setText(QString("%1%").arg(level));
+    }
+    const auto weight=intensity.value("night_weight",Json());
+    nightStatus->setText(weight.is_number()?QString("Now %1% of the way to night").arg(qRound(weight.get<double>()*100)):
+        "Turn on screen adjustment above to fade lights with the cycle. Until then every light follows the display brightness.");
+}
 
 void screenChanged(){if(screenUpdating)return;screenDirty=true;screenSave->setEnabled(client.ready());screenMessage->setText("Unsaved screen settings");}
 void screenRequest(Json request){
@@ -101,6 +146,10 @@ QWidget* buildScreenPage(){
     auto general=tab("Day and night");
     number(general,"Day temperature","DayConfiguration/Temperature",500,20000,50," K");number(general,"Day brightness","DayConfiguration/Brightness",10,100,1,"%");general->addWidget(divider());number(general,"Night temperature","NightConfiguration/Temperature",500,20000,50," K");number(general,"Night brightness","NightConfiguration/Brightness",10,100,1,"%");
     auto offsets=new QHBoxLayout;for(auto item:{std::pair{"Cooler",Json{{"action","offset"},{"name","temperature_offset"},{"delta",100}}},std::pair{"Warmer",Json{{"action","offset"},{"name","temperature_offset"},{"delta",-100}}},std::pair{"Brighter",Json{{"action","offset"},{"name","brightness_offset"},{"delta",.05}}},std::pair{"Dimmer",Json{{"action","offset"},{"name","brightness_offset"},{"delta",-.05}}},std::pair{"Reset offsets",Json{{"action","offset_reset"}}}}){auto b=button(item.first);offsets->addWidget(b);connect(b,&QPushButton::clicked,this,[this,request=item.second]{screenRequest(request);});}general->addLayout(offsets);general->addWidget(label("Screen adjustments and RGB lighting have independent disable controls. RGB brightness following uses the applied display factor once.","hint"));general->addStretch();
+    auto lights=tab("Lights");
+    lights->addWidget(label("Each light fades from full brightness by day to its own night level, on the same sunrise/sunset curve as the screen. Lights set to follow the screen use the applied display brightness.","hint"));
+    nightStatus->setObjectName("nightStatus");nightStatus->setWordWrap(true);lights->addWidget(nightStatus);
+    nightList=new QVBoxLayout;nightList->setSpacing(8);lights->addLayout(nightList);lights->addStretch();
     auto schedule=tab("Schedule");check(schedule,"Use manual sunrise and sunset","IsManualSunriseSunsetEnabled");
     for(auto item:{std::pair{"Sunrise","ManualSunriseTime"},std::pair{"Sunset","ManualSunsetTime"}}){auto row=new QHBoxLayout;row->addWidget(label(item.first),1);auto t=new QTimeEdit;t->setDisplayFormat("HH:mm");t->setObjectName(item.second);t->setAccessibleName(item.first);t->setMinimumWidth(160);screenTimes[item.second]=t;row->addWidget(t);schedule->addLayout(row);connect(t,&QTimeEdit::timeChanged,this,[this]{screenChanged();});}
     number(schedule,"Latitude","latitude",-90,90,.000001,{});number(schedule,"Longitude","longitude",-180,180,.000001,{});number(schedule,"Transition duration","transition_minutes",0,180,1," min");number(schedule,"Transition offset","transition_offset",0,100,1,"%");schedule->addWidget(label("Automatic solar times use these coordinates and Windows' current timezone. Until sunrise uses the same schedule for either pause menu.","hint"));schedule->addStretch();

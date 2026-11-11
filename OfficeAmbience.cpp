@@ -835,6 +835,18 @@ struct OfficeAmbience::Impl {
         if(name=="awake")return awake.command(request);
         if(name=="intensity") {
             const auto target=request.at("target").get<std::string>();const auto value=request.at("value");
+            if(target=="night") {
+                // Own night level per device; null returns it to following the screen.
+                const auto id=request.at("device").get<std::string>();
+                if(std::none_of(devices.begin(),devices.end(),[&](auto& d){return d.key==id;}))throw std::runtime_error("Unknown physical device");
+                if(!value.is_null()&&(!value.is_number()||!std::isfinite(value.get<double>())||value<0||value>100))throw std::runtime_error("Night level must be 0-100 percent");
+                auto next=config;if(value.is_null())next["device_night_level"].erase(id);else next["device_night_level"][id]=value;
+                if(next.at("device_night_level")==config.at("device_night_level"))return intensitySnapshot();
+                validateSettings(next);auto document=diskConfig;document["device_night_level"]=next.at("device_night_level");saveDocument(document);
+                config=std::move(next);diskConfig=std::move(document);++revision;dirty=true;
+                journal->write("night_level_applied",{{"device",id},{"value",value},{"revision",revision}});
+                return intensitySnapshot();
+            }
             if(!value.is_number()||!std::isfinite(value.get<double>())||value<0||value>100)throw std::runtime_error("Intensity must be 0-100 percent");
             auto next=config;std::string key;
             if(target=="master")key="lighting_intensity";
@@ -918,10 +930,18 @@ struct OfficeAmbience::Impl {
     double intensityGain(const std::string& id) const {
         return config.at("lighting_intensity").get<double>()/100*fullscreenLevel(id)/100*config.at("device_intensity").value(id,100.0)/100;
     }
+    // Day/night factor for one device: an own night level fades from 100% by
+    // day to that level at night along the screen cycle; otherwise the device
+    // follows the applied display brightness as before.
+    double dayNightGain(const std::string& id,std::optional<double> weight) const {
+        auto level=config.at("device_night_level").find(id);
+        if(weight&&level!=config.at("device_night_level").end())return 1+(level->get<double>()/100-1)*(*weight);
+        return displayBrightness.applied(config.at("follow_display_brightness").get<bool>());
+    }
     Json intensitySnapshot() const {
         std::lock_guard lock(controllersMutex);auto rows=Json::array();
-        for(auto& d:devices)rows.push_back({{"id",d.key},{"name",d.name},{"online",d.controller!=nullptr},{"value",config.at("device_intensity").value(d.key,100.0)}});
-        return {{"revision",revision},{"master",config.at("lighting_intensity")},{"fullscreen",config.at("fullscreen_intensity")},{"fullscreen_active",fullscreenActive},{"fullscreen_executable",fullscreenExecutable},{"devices",rows}};
+        for(auto& d:devices)rows.push_back({{"id",d.key},{"name",d.name},{"online",d.controller!=nullptr},{"value",config.at("device_intensity").value(d.key,100.0)},{"night",config.at("device_night_level").value(d.key,Json())}});
+        return {{"revision",revision},{"master",config.at("lighting_intensity")},{"fullscreen",config.at("fullscreen_intensity")},{"fullscreen_active",fullscreenActive},{"fullscreen_executable",fullscreenExecutable},{"night_weight",screen->nightWeight()?Json(*screen->nightWeight()):Json()},{"devices",rows}};
     }
 
     std::string nativeKey(RGBControllerInterface* c) {
@@ -1310,12 +1330,12 @@ struct OfficeAmbience::Impl {
             auto submitBegan=Clock::now();
             auto sentBefore=deviceSubmissions;
             double elapsedMs=std::chrono::duration<double,std::milli>(now-lastOutput).count();
-            size_t deviceIndex=0;
+            size_t deviceIndex=0;const auto nightWeight=screen->nightWeight();
             {std::lock_guard lock(controllersMutex);
             for(auto& device:devices) {
                 bool changed=false;
                 bool overrideHardware=resting || standbyPreview || paused || muted || !config.at("enabled").get<bool>() || calibration || !identifyDevice.empty();
-                const double gain=displayBrightness.applied(config.at("follow_display_brightness").get<bool>())*intensityGain(device.key);
+                const double gain=dayNightGain(device.key,nightWeight)*intensityGain(device.key);
                 try {if(hardware->output(device.key,device.controller,overrideHardware,true)){++deviceIndex;continue;}}
                 catch(const std::exception& e){controllerError=e.what();++deviceIndex;continue;}
                 if(hardware->consumeReset(device.key))device.delivered=false;

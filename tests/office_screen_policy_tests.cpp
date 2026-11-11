@@ -7,9 +7,11 @@ void require(bool v,const char* message){if(!v)throw std::runtime_error(message)
 int main(){try{
     Color day{6600,1},night{3600,.85};
     require(cycle(14*3600,7*3600,18*3600,5400,0,day,night)==day,"Daytime contract");
-    require(cycle(2*3600,7*3600,18*3600,5400,0,day,night)==night,"Nighttime contract");
+    require(cycle(2*3600,7*3600,18*3600,5400,0,day,night)==Color{3600,.85,1},"Nighttime contract");
+    require(cycle(14*3600,7*3600,18*3600,5400,0,day,night).night==0,"Day position for per-light night levels");
     auto between=cycle(18*3600+1800,7*3600,18*3600,5400,0,day,night);
     require(between.temperature>3600&&between.temperature<6600&&between.brightness>.85&&between.brightness<1,"Sunset interpolation");
+    require(between.night>0&&between.night<1&&std::abs(between.brightness-(1-.15*between.night))<1e-9,"Night position follows the screen transition curve");
     auto midnight=cycle(0,7*3600,18*3600,5400,0,day,night);
     require(midnight==cycle(86399,7*3600,18*3600,5400,0,day,night),"Midnight continuity");
     for(int t=0;t<86400;t+=60){auto a=cycle(t,26400,84900,5400,0,day,night),b=cycle(t+60,26400,84900,5400,0,day,night);require(std::abs(a.temperature-b.temperature)<1500,"Cross-midnight cycle discontinuity");}

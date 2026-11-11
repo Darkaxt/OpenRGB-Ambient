@@ -552,6 +552,7 @@ class Panel : public officeui::OfficeWindow {
         trace("snapshot-accepted");
         lastSnapshot=snapshot;
         if(lightMixer&&snapshot.contains("intensity"))lightMixer->setState(snapshot.at("intensity"));
+        if(snapshot.contains("intensity"))loadNightLevels(snapshot.at("intensity"));
         const auto& fullscreenStatus=snapshot.at("status");auto fullscreenExe=fullscreenStatus.value("fullscreen_executable",std::string());
         fullscreenIntensityState->setText(fullscreenStatus.value("fullscreen_active",false)?QString("%1 · %2").arg(QString::fromStdString(fullscreenExe)).arg(fullscreenStatus.value("fullscreen_profile",false)?"App profile active":"Default fullscreen intensity active"):"Applies to fullscreen apps on the main display");
         if(snapshot.contains("screen"))loadScreen(snapshot.at("screen"));
@@ -861,6 +862,7 @@ class Panel : public officeui::OfficeWindow {
 public:
 #ifdef OFFICE_WIDGET_TEST
     void fixtureHardware(const Json& value) {refresh.stop();client.connected={};hardwareDialog(value);}
+    void fixtureNight(const Json& value) {loadNightLevels(value);}
     void fixtureScreen(const Json& value) {refresh.stop();client.connected={};loadScreen(value);shellPages->setCurrentIndex(0);pages->setCurrentIndex(7);}
     void fixtureAwake(const Json& value) {refresh.stop();client.connected={};loadAwake(value);}
     void fixtureProfiles(const Json& value,const Json& devices) {refresh.stop();client.connected={};settings=office::processingDefaults();settings["fullscreen_profiles"]=value;layout=devices;numbers.at("fullscreen_intensity")->setValue(50);}

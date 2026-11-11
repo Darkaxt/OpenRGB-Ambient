@@ -244,6 +244,12 @@ public:
         for(auto& display:displays)if(QString::fromStdWString(display.name).toStdString()==name&&display.appliedValid&&lastApplied)return lastApplied->brightness;
         return {};
     }
+    // Cycle position used by lights with their own night level; empty when
+    // integrated screen adjustment is off (lights then follow measured gamma).
+    std::optional<double> nightWeight() const {
+        if(!document.value("managed",false))return {};
+        return std::clamp(current.night,0.,1.);
+    }
     QDateTime cycleInstant(const QDateTime& real) const {
         return preview&&previewClock.elapsed()<14400?QDateTime::fromMSecsSinceEpoch(previewStart+previewClock.elapsed()*6000).toLocalTime():real;
     }
@@ -266,7 +272,7 @@ public:
         target=(on||preview)?screen::cycle(QTime(0,0).secsTo(instant.time()),times.first,times.second,duration(s.at("ConfigurationTransitionDuration")),s.at("ConfigurationTransitionOffset"),color(s.at("DayConfiguration")),color(s.at("NightConfiguration"))):s.at("IsDefaultToDayConfigurationEnabled").get<bool>()?color(s.at("DayConfiguration")):screen::Color{};
         if(on||preview){target.temperature=std::clamp(target.temperature+document.value("temperature_offset",0.),500.,20000.);target.brightness=std::clamp(target.brightness+document.value("brightness_offset",0.),.1,1.);}
         double step=std::max<int64_t>(0,elapsed.restart())/1000.;auto smooth=duration(s.at("ConfigurationSmoothingMaxDuration"));
-        if(s.at("IsConfigurationSmoothingEnabled").get<bool>()&&smooth>=.1&&!preview){if(!smoothingSource||!smoothingTarget||*smoothingTarget!=target){smoothingSource=current;smoothingTarget=target;}auto approach=[](double a,double b,double d){return a+std::clamp(b-a,-d,d);};current.temperature=approach(current.temperature,target.temperature,std::max(std::abs(smoothingTarget->temperature-smoothingSource->temperature)/smooth,600.)*step);current.brightness=approach(current.brightness,target.brightness,std::max(std::abs(smoothingTarget->brightness-smoothingSource->brightness)/smooth,1.6)*step);}
+        if(s.at("IsConfigurationSmoothingEnabled").get<bool>()&&smooth>=.1&&!preview){if(!smoothingSource||!smoothingTarget||*smoothingTarget!=target){smoothingSource=current;smoothingTarget=target;}auto approach=[](double a,double b,double d){return a+std::clamp(b-a,-d,d);};current.temperature=approach(current.temperature,target.temperature,std::max(std::abs(smoothingTarget->temperature-smoothingSource->temperature)/smooth,600.)*step);current.brightness=approach(current.brightness,target.brightness,std::max(std::abs(smoothingTarget->brightness-smoothingSource->brightness)/smooth,1.6)*step);current.night=approach(current.night,target.night,std::max(std::abs(smoothingTarget->night-smoothingSource->night)/smooth,1.6)*step);}
         else {current=target;smoothingSource.reset();smoothingTarget.reset();}
         if(current==target&&target==previousTarget&&current!=previousCurrent)refreshGamma=true;
         if(s.at("IsGammaPollingEnabled").get<bool>()&&observedTime-lastPoll>=1000){refreshGamma=true;lastPoll=observedTime;}
@@ -274,7 +280,7 @@ public:
     }
     Json status() const {
         auto real=QDateTime::currentDateTime();auto instant=cycleInstant(real);auto times=solarAt(instant);auto p=pause("screen_pause"),rgb=pause("lighting_pause");
-        return {{"managed",document.value("managed",false)},{"screen_disabled",p.active(real.toMSecsSinceEpoch())},{"lighting_disabled",rgb.active(real.toMSecsSinceEpoch())},{"screen_pause",p.json()},{"lighting_pause",rgb.json()},{"automatic_pause",pauseReason},{"temperature",appliedValid&&lastApplied?lastApplied->temperature:current.temperature},{"brightness",appliedValid&&lastApplied?lastApplied->brightness:current.brightness},{"target_temperature",target.temperature},{"target_brightness",target.brightness},{"gamma_valid",appliedValid},{"display_count",displays.size()},{"error",error},{"hotkey_error",hotkeyError},{"preview",preview},{"sunrise",QTime(0,0).addSecs(qRound(times.first)).toString("HH:mm").toStdString()},{"sunset",QTime(0,0).addSecs(qRound(times.second)).toString("HH:mm").toStdString()},{"revision",revision}};
+        return {{"managed",document.value("managed",false)},{"screen_disabled",p.active(real.toMSecsSinceEpoch())},{"lighting_disabled",rgb.active(real.toMSecsSinceEpoch())},{"screen_pause",p.json()},{"lighting_pause",rgb.json()},{"automatic_pause",pauseReason},{"temperature",appliedValid&&lastApplied?lastApplied->temperature:current.temperature},{"brightness",appliedValid&&lastApplied?lastApplied->brightness:current.brightness},{"target_temperature",target.temperature},{"target_brightness",target.brightness},{"gamma_valid",appliedValid},{"night_weight",std::clamp(current.night,0.,1.)},{"display_count",displays.size()},{"error",error},{"hotkey_error",hotkeyError},{"preview",preview},{"sunrise",QTime(0,0).addSecs(qRound(times.first)).toString("HH:mm").toStdString()},{"sunset",QTime(0,0).addSecs(qRound(times.second)).toString("HH:mm").toStdString()},{"revision",revision}};
     }
     Json snapshot() const {
         auto result=status();const auto& s=document.at("settings");result["settings"]=s;result["temperature_offset"]=document.value("temperature_offset",0.);result["brightness_offset"]=document.value("brightness_offset",0.);result["imported"]=document.value("imported",false);
