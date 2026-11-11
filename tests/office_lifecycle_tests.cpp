@@ -149,14 +149,14 @@ struct OfficeLifecycleTest {
         // Own night level: fades along the cycle; null returns to following the screen.
         auto night=[&](const char* id,Json value){return owner.command({{"command","intensity"},{"target","night"},{"device",id},{"value",value}});};
         night("H6609",50);require(owner.diskConfig.at("device_night_level").at("H6609")==50,"Night level not persisted");
-        owner.displayBrightness.factor=.85;owner.displayBrightness.valid=true;
+        const auto follow=owner.config.at("follow_display_brightness");owner.config["follow_display_brightness"]=true;owner.displayBrightness.factor=.85;owner.displayBrightness.valid=true;
         require(std::abs(owner.dayNightGain("H6609",1.)-.5)<1e-9&&std::abs(owner.dayNightGain("H6609",.5)-.75)<1e-9&&owner.dayNightGain("H6609",0.)==1,"Own night level does not fade along the cycle");
         require(std::abs(owner.dayNightGain("H6609",std::nullopt)-.85)<1e-9,"Without integrated screen adjustment a light must follow display brightness");
         require(std::abs(owner.dayNightGain(owner.devices.back().key,1.)-.85)<1e-9,"Lights without a night level must keep following the screen");
         bool rejected=false;try{night("H6609",101);}catch(const std::exception&){rejected=true;}require(rejected&&owner.config.at("device_night_level").at("H6609")==50,"Invalid night level accepted");
         rejected=false;try{night("missing",40);}catch(const std::exception&){rejected=true;}require(rejected,"Night level accepted for an unknown device");
         auto rows=night("H6609",40);require(rows.at("devices")[0].at("night")==40,"Night level missing from intensity snapshot");
-        owner.displayBrightness.factor=1;
+        owner.displayBrightness.factor=1;owner.config["follow_display_brightness"]=follow;
         {OfficeAmbience::Impl restarted(&api,path,false);require(restarted.config.at("device_night_level").at("H6609")==40,"Night level did not survive restart");}
         night("H6609",nullptr);require(!owner.diskConfig.at("device_night_level").contains("H6609"),"Follow screen did not remove the night level");
         OfficeAmbience::Impl restarted(&api,path,false);require(restarted.config.at("device_intensity").at("H6609")==25,"Per-device intensity did not survive restart");
