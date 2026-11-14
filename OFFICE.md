@@ -226,4 +226,5 @@ colour) output, which distorts colours instead of dimming. On HDR displays the
 screen adjustment therefore scales the Windows *SDR content brightness* (the
 Settings slider, 80-480 nits) from the level found at startup, and restores it on
 exit or pause. Colour temperature is not applied to HDR displays. Moving the slider
-while the app runs becomes the new baseline.
+while the app runs becomes the new baseline. Built-in HDR laptop panels tie this
+level to their backlight and Windows refuses to set it; they are left unchanged.

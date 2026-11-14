@@ -29,7 +29,7 @@ class OfficeScreen final {
         // HDR (advanced colour) output: Windows applies legacy gamma ramps to
         // the encoded HDR signal, which shifts and crushes colours instead of
         // dimming. Such displays are dimmed through the SDR content brightness.
-        bool hdr=false;LUID adapter{};UINT32 target=0;ULONG sdrBaseline=0,sdrApplied=0;
+        bool hdr=false,hdrFixed=false;LUID adapter{};UINT32 target=0;ULONG sdrBaseline=0,sdrApplied=0;
     };
     struct SdrWhiteSet {DISPLAYCONFIG_DEVICE_INFO_HEADER header;ULONG SDRWhiteLevel;BYTE finalValue;};
     // Display-config target for a GDI display name, when it outputs HDR.
@@ -51,9 +51,10 @@ class OfficeScreen final {
         if(DisplayConfigGetDeviceInfo(&value.header)!=ERROR_SUCCESS)return {};return value.SDRWhiteLevel;
     }
     // The Settings "SDR content brightness" slider: 1000 = 80 nits, 6000 = 480 nits.
-    static bool setSdrWhite(LUID adapter,UINT32 target,ULONG level){
+    // Internal HDR panels tie the level to the backlight and return ERROR_NOT_SUPPORTED.
+    static LONG setSdrWhite(LUID adapter,UINT32 target,ULONG level){
         SdrWhiteSet value{};value.header={static_cast<DISPLAYCONFIG_DEVICE_INFO_TYPE>(0xFFFFFFEE),UINT32(sizeof(value)),adapter,target};value.SDRWhiteLevel=level;value.finalValue=1;
-        return DisplayConfigSetDeviceInfo(&value.header)==ERROR_SUCCESS;
+        return DisplayConfigSetDeviceInfo(&value.header);
     }
     QString path;Json document,disk;
     std::vector<Display> displays;
@@ -156,7 +157,7 @@ class OfficeScreen final {
     void restoreDisplays() noexcept {
         bool restored=true;
         for(auto& d:displays){
-            if(d.hdr&&d.owned){if(!setSdrWhite(d.adapter,d.target,d.sdrBaseline)){error="Could not restore the HDR SDR content brightness";restored=false;}}
+            if(d.hdr&&d.owned){if(setSdrWhite(d.adapter,d.target,d.sdrBaseline)!=ERROR_SUCCESS){error="Could not restore the HDR SDR content brightness";restored=false;}}
             else if(d.baselineValid&&d.owned){if(!SetDeviceGammaRamp(d.dc,d.baseline.data())){error="Could not restore a display gamma baseline";restored=false;}}
             if(d.dc)DeleteDC(d.dc);}
         if(restored&&!displays.empty())QFile::remove(baselinePath);
@@ -231,12 +232,14 @@ class OfficeScreen final {
         ensureDisplays();bool all=!displays.empty();const auto gain=screen::multipliers(next);
         if(refreshGamma)++gammaRevision;
         for(auto& display:displays){
+            if(display.hdrFixed)continue;
             if(display.hdr){
                 // Brightness only; colour temperature is not applied to HDR output.
                 const auto desired=static_cast<ULONG>(std::clamp(std::lround(display.sdrBaseline*next.brightness),1000l,6000l));
                 if(display.appliedValid&&desired==display.sdrApplied)continue;
                 display.appliedValid=false;
-                if(!setSdrWhite(display.adapter,display.target,desired)){error="Windows rejected the HDR SDR content brightness";all=false;continue;}
+                if(auto result=setSdrWhite(display.adapter,display.target,desired);result==ERROR_NOT_SUPPORTED){display.hdrFixed=true;continue;}
+                else if(result!=ERROR_SUCCESS){error="Windows rejected the HDR SDR content brightness";all=false;continue;}
                 display.owned=true;display.sdrApplied=desired;
                 auto observed=sdrWhite(display.adapter,display.target);
                 if(!observed||std::abs(long(*observed)-long(desired))>10){error="HDR SDR content brightness readback differs from the requested level";all=false;}else display.appliedValid=true;
@@ -330,7 +333,7 @@ public:
     }
     Json status() const {
         auto real=QDateTime::currentDateTime();auto instant=cycleInstant(real);auto times=solarAt(instant);auto p=pause("screen_pause"),rgb=pause("lighting_pause");
-        return {{"managed",document.value("managed",false)},{"screen_disabled",p.active(real.toMSecsSinceEpoch())},{"lighting_disabled",rgb.active(real.toMSecsSinceEpoch())},{"screen_pause",p.json()},{"lighting_pause",rgb.json()},{"automatic_pause",pauseReason},{"temperature",appliedValid&&lastApplied?lastApplied->temperature:current.temperature},{"brightness",appliedValid&&lastApplied?lastApplied->brightness:current.brightness},{"target_temperature",target.temperature},{"target_brightness",target.brightness},{"gamma_valid",appliedValid},{"night_weight",std::clamp(current.night,0.,1.)},{"display_count",displays.size()},{"hdr_displays",std::count_if(displays.begin(),displays.end(),[](auto& d){return d.hdr;})},{"error",error},{"hotkey_error",hotkeyError},{"preview",preview},{"sunrise",QTime(0,0).addSecs(qRound(times.first)).toString("HH:mm").toStdString()},{"sunset",QTime(0,0).addSecs(qRound(times.second)).toString("HH:mm").toStdString()},{"revision",revision}};
+        return {{"managed",document.value("managed",false)},{"screen_disabled",p.active(real.toMSecsSinceEpoch())},{"lighting_disabled",rgb.active(real.toMSecsSinceEpoch())},{"screen_pause",p.json()},{"lighting_pause",rgb.json()},{"automatic_pause",pauseReason},{"temperature",appliedValid&&lastApplied?lastApplied->temperature:current.temperature},{"brightness",appliedValid&&lastApplied?lastApplied->brightness:current.brightness},{"target_temperature",target.temperature},{"target_brightness",target.brightness},{"gamma_valid",appliedValid},{"night_weight",std::clamp(current.night,0.,1.)},{"display_count",displays.size()},{"hdr_displays",std::count_if(displays.begin(),displays.end(),[](auto& d){return d.hdr&&!d.hdrFixed;})},{"hdr_fixed_displays",std::count_if(displays.begin(),displays.end(),[](auto& d){return d.hdrFixed;})},{"error",error},{"hotkey_error",hotkeyError},{"preview",preview},{"sunrise",QTime(0,0).addSecs(qRound(times.first)).toString("HH:mm").toStdString()},{"sunset",QTime(0,0).addSecs(qRound(times.second)).toString("HH:mm").toStdString()},{"revision",revision}};
     }
     Json snapshot() const {
         auto result=status();const auto& s=document.at("settings");result["settings"]=s;result["temperature_offset"]=document.value("temperature_offset",0.);result["brightness_offset"]=document.value("brightness_offset",0.);result["imported"]=document.value("imported",false);
