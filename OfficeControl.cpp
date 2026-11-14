@@ -555,6 +555,7 @@ class Panel : public officeui::OfficeWindow {
     }
     void load(const Json& snapshot,bool force=false) {
         trace("snapshot-accepted");
+        const bool onlineChanged=snapshot.value("online",Json())!=lastSnapshot.value("online",Json());
         lastSnapshot=snapshot;
         if(lightMixer&&snapshot.contains("intensity"))lightMixer->setState(snapshot.at("intensity"));
         if(snapshot.contains("intensity"))loadNightLevels(snapshot.at("intensity"));
@@ -584,7 +585,9 @@ class Panel : public officeui::OfficeWindow {
             map->zones=selectedZones;restoreTreeSelection(selectedDevice,selectedGroup);
         }
         auto s=snapshot.at("status");
-        if(newHardware && revision)buildDevices();
+        // Disconnected devices keep their settings and are shown in gray.
+        if(onlineChanged && revision)syncTree();
+        if((newHardware || onlineChanged) && revision)buildDevices();
         brightnessStatus->setText(QString("Applied display factor: %1% · %2").arg(s.value("display_brightness_factor",1.)*100,0,'f',1).arg(!snapshot.at("settings").value("follow_display_brightness",true)?"off":s.value("display_brightness_error",std::string()).empty()?(s.value("display_brightness_valid",false)?"following":"waiting for active display"):s.value("display_brightness_valid",false)?"read unavailable; retaining last factor":"read unavailable; using baseline"));
         brightnessStatus->setToolTip(text(s.value("display_brightness_error",std::string())));
         deviceSummary->setText(QString("%1 / %2 devices online  ·  %3 mapped LEDs").arg(s.at("online_devices").get<int>()).arg(layout.size()).arg(s.at("leds").get<int>()));
@@ -626,16 +629,22 @@ class Panel : public officeui::OfficeWindow {
         pending=true;client.send(previewRequest(),[this](const Json& r){response(r,[this](const Json& s){load(s);});});
     }
     void action(const Json& request) {client.send(request,[this](const Json& r){response(r);poll();});}
+    bool connected(size_t d) const {
+        return lastSnapshot.contains("online") && d<lastSnapshot.at("online").size() && lastSnapshot.at("online").at(d).get<bool>();
+    }
     void buildTree() {
         tree->clear();
         for(size_t d=0;d<layout.size();++d) {
             auto* item=new QTreeWidgetItem(tree,{text(layout[d]["name"])});item->setData(0,Qt::UserRole,static_cast<int>(d));item->setData(0,Qt::UserRole+1,-1);
             item->setCheckState(0,layout[d]["enabled"].get<bool>()?Qt::Checked:Qt::Unchecked);
+            const bool available=connected(d);
+            if(!available){item->setForeground(0,officeui::unavailable);item->setToolTip(0,"Disconnected · settings retained");}
             for(size_t g=0;g<layout[d]["groups"].size();++g) {
                 const auto& group=layout[d]["groups"][g];
                 auto* child=new QTreeWidgetItem(item,{QString("%1 · %2 LEDs").arg(text(group["name"])).arg(group["count"].get<unsigned>())});
                 child->setData(0,Qt::UserRole,static_cast<int>(d));child->setData(0,Qt::UserRole+1,static_cast<int>(g));
                 child->setCheckState(0,group.value("enabled",true)?Qt::Checked:Qt::Unchecked);
+                if(!available)child->setForeground(0,officeui::unavailable);
             }item->setExpanded(true);
         }
         tree->setColumnWidth(0,210);
@@ -650,13 +659,12 @@ class Panel : public officeui::OfficeWindow {
             QString glyph=matrix?"keyboard":key=="Logitech"?"fiber_manual_record":"linear_scale";
             auto card=new officeui::Card;card->setSizePolicy(QSizePolicy::Preferred,QSizePolicy::Minimum);auto row=new QHBoxLayout;row->setSpacing(12);
             auto mark=new QLabel;mark->setPixmap(officeui::icon(glyph,matrix?QColor("#a78bfa"):officeui::accent).pixmap(26,26));mark->setFixedSize(38,38);row->addWidget(mark);
-            auto detail=new QVBoxLayout;auto name=officeui::label(text(layout[d]["name"]));name->setFont(officeui::body(16,QFont::Bold));detail->addWidget(name);
+            auto detail=new QVBoxLayout;auto name=officeui::label(text(layout[d]["name"]));name->setFont(officeui::body(16,QFont::Bold));detail->addWidget(name);const bool available=connected(d);if(!available)name->setStyleSheet("color:#6b7785");
             auto metadata=officeui::label(QString("%1  ·  %2 LEDs  ·  %3 zones").arg(matrix?"MATRIX":"LINEAR").arg(layout[d]["regions"].size()).arg(layout[d]["groups"].size()),"hint");detail->addWidget(metadata);row->addLayout(detail,1);
             auto check=new officeui::Switch;check->setAccessibleName("Include "+text(layout[d]["name"])+" in lighting");check->setChecked(layout[d]["enabled"]);
             auto identify=officeui::button("Flash","bolt");identify->setAccessibleName("Identify "+text(layout[d]["name"]));
             identifyButtons.push_back(identify);
-            bool connected=lastSnapshot.contains("online") && lastSnapshot["online"].at(d).get<bool>();
-            auto online=new QLabel(connected?"Connected":"Offline · map retained");online->setStyleSheet(connected?"color:#22d3a5":"color:#ff9f1c");onlineLabels.push_back(online);identify->setEnabled(connected);
+            auto online=new QLabel(available?"Connected":"Offline · map retained");online->setStyleSheet(available?"color:#22d3a5":"color:#ff9f1c");onlineLabels.push_back(online);identify->setEnabled(available);
             row->addWidget(online);row->addWidget(check);auto edit=officeui::button("Topology","hub");row->addWidget(edit);
             auto hardwareButton=officeui::button("Hardware","memory");hardwareButton->setAccessibleName("Hardware settings "+text(layout[d]["name"]));row->addWidget(hardwareButton);row->addWidget(identify);
             connect(hardwareButton,&QPushButton::clicked,this,[this,key]{openHardware(key);});
@@ -673,7 +681,7 @@ class Panel : public officeui::OfficeWindow {
             card->content->activate();deviceList->addWidget(card);
             auto fade=new QGraphicsOpacityEffect(card);fade->setOpacity(layout[d].value("enabled",true)?1.:.48);card->setGraphicsEffect(fade);
             auto dashRow=new QHBoxLayout;auto dashIcon=new QLabel;dashIcon->setPixmap(officeui::icon(glyph).pixmap(20,20));dashRow->addWidget(dashIcon);
-            auto dashName=new officeui::Switch(text(layout[d]["name"]));dashName->setChecked(layout[d]["enabled"]);dashRow->addWidget(dashName,1);
+            auto dashName=new officeui::Switch(text(layout[d]["name"]));if(!available){dashName->textColor=officeui::unavailable;dashName->setToolTip("Disconnected · settings retained");}dashName->setChecked(layout[d]["enabled"]);dashRow->addWidget(dashName,1);
             dashRow->addWidget(officeui::label(QString("%1 LEDs · %2 zones").arg(layout[d]["regions"].size()).arg(layout[d]["groups"].size()),"hint"));
             auto dashEdit=officeui::button("Topology","hub");dashRow->addWidget(dashEdit);auto expand=officeui::button("Zones","hub");expand->setCheckable(true);dashRow->addWidget(expand);auto dashWidget=new QWidget;auto dashLayout=new QVBoxLayout(dashWidget);dashLayout->addLayout(dashRow);auto zones=new QWidget;auto zoneRows=new QVBoxLayout(zones);zoneRows->setContentsMargins(42,0,0,0);for(size_t g=0;g<layout[d]["groups"].size();++g){auto zone=officeui::button(text(layout[d]["groups"][g]["name"]),"hub");zoneRows->addWidget(zone);connect(zone,&QPushButton::clicked,this,[editZone,d,g]{editZone(d,g);});}zones->hide();dashLayout->addWidget(zones);connect(expand,&QPushButton::toggled,zones,&QWidget::setVisible);dashboardList->addWidget(dashWidget);
             connect(dashName,&QCheckBox::toggled,this,[this,d](bool on){layout[d]["enabled"]=on;changed();syncTree();buildDevices();});connect(dashEdit,&QPushButton::clicked,this,[editZone,d]{editZone(d,0);});

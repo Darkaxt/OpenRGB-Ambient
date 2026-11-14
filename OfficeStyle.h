@@ -19,7 +19,7 @@
 #include <stdexcept>
 
 namespace officeui {
-inline const QColor accent("#14f5ff"), ink("#cdd6e0"), muted("#93a4b5");
+inline const QColor accent("#14f5ff"), ink("#cdd6e0"), muted("#93a4b5"), unavailable("#6b7785");
 inline QFont body(int pixels=14,QFont::Weight weight=QFont::Medium) {QFont f("Office Body");f.setPixelSize(pixels);f.setWeight(weight);return f;}
 inline QFont display(int pixels=16) {QFont f("Office Display");f.setPixelSize(pixels);f.setWeight(QFont::Bold);f.setLetterSpacing(QFont::AbsoluteSpacing,2);return f;}
 class DotLabel : public QLabel {
@@ -83,6 +83,7 @@ public:
 class Switch : public QCheckBox {
 public:
     using QCheckBox::QCheckBox;
+    QColor textColor=ink;
     QSize sizeHint() const override {return {46+(text().isEmpty()?0:10+fontMetrics().horizontalAdvance(text())),32};}
     bool hitButton(const QPoint& p) const override {return rect().contains(p);}
     void paintEvent(QPaintEvent*) override {
@@ -91,7 +92,7 @@ public:
         p.setBrush(isChecked()?QColor("#008795"):QColor("#101b25"));p.drawRoundedRect(track,11,11);
         if(isChecked()) {p.setPen(QPen(QColor(20,245,255,28),5));p.setBrush(Qt::NoBrush);p.drawRoundedRect(track,11,11);}
         p.setPen(Qt::NoPen);p.setBrush(isChecked()?accent:QColor("#c5cbd1"));p.drawEllipse(QPointF(isChecked()?33:12,height()/2.),8,8);
-        p.setPen(ink);p.setFont(font());p.drawText(QRect(54,0,width()-54,height()),Qt::AlignVCenter|Qt::AlignLeft,text());
+        p.setPen(textColor);p.setFont(font());p.drawText(QRect(54,0,width()-54,height()),Qt::AlignVCenter|Qt::AlignLeft,text());
         if(hasFocus()) {p.setPen(QPen(accent,1,Qt::DotLine));p.setBrush(Qt::NoBrush);p.drawRoundedRect(QRectF(rect()).adjusted(0,0,-1,-1),5,5);}
     }
 };
