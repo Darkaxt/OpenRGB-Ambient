@@ -555,7 +555,9 @@ class Panel : public officeui::OfficeWindow {
     }
     void load(const Json& snapshot,bool force=false) {
         trace("snapshot-accepted");
-        const bool onlineChanged=snapshot.value("online",Json())!=lastSnapshot.value("online",Json());
+        // lastSnapshot is null before the first snapshot; Json::value() throws on null.
+        auto onlineOf=[](const Json& v){return v.is_object()&&v.contains("online")?v.at("online"):Json();};
+        const bool onlineChanged=onlineOf(snapshot)!=onlineOf(lastSnapshot);
         lastSnapshot=snapshot;
         if(lightMixer&&snapshot.contains("intensity"))lightMixer->setState(snapshot.at("intensity"));
         if(snapshot.contains("intensity"))loadNightLevels(snapshot.at("intensity"));
@@ -630,7 +632,7 @@ class Panel : public officeui::OfficeWindow {
     }
     void action(const Json& request) {client.send(request,[this](const Json& r){response(r);poll();});}
     bool connected(size_t d) const {
-        return lastSnapshot.contains("online") && d<lastSnapshot.at("online").size() && lastSnapshot.at("online").at(d).get<bool>();
+        return lastSnapshot.is_object() && lastSnapshot.contains("online") && d<lastSnapshot.at("online").size() && lastSnapshot.at("online").at(d).get<bool>();
     }
     void buildTree() {
         tree->clear();
