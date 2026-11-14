@@ -599,9 +599,11 @@ struct OfficeLifecycleTest {
         // A supported keyboard attached later joins the running map without a restart.
         api.controllers.push_back(&corsair);
         restarted.resourcesUpdated(RESOURCEMANAGER_UPDATE_REASON_DEVICE_LIST_UPDATED);restarted.tick();
+        require(restarted.devices.size()==6,"No controller is added while discovery is still running");
+        restarted.resourcesUpdated(RESOURCEMANAGER_UPDATE_REASON_DETECTION_COMPLETE);restarted.tick();
         require(restarted.devices.size()==7 && restarted.samples.size()==453 && restarted.layout.size()==7 && restarted.layout[6]["groups"].size()==2 &&
                 corsair.modes==1 && restarted.report()["online_devices"]==6,"Hot-added Corsair keyboard joins the map");
-        restarted.resourcesUpdated(RESOURCEMANAGER_UPDATE_REASON_DEVICE_LIST_UPDATED);restarted.tick();
+        restarted.resourcesUpdated(RESOURCEMANAGER_UPDATE_REASON_DETECTION_COMPLETE);restarted.tick();
         require(restarted.devices.size()==7,"A mapped controller is not added twice");
         {
             // At startup it is appended to the saved six-device map in memory only.
