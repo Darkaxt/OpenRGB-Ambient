@@ -26,7 +26,35 @@ class OfficeScreen final {
         std::wstring name;HDC dc{};std::array<std::array<WORD,256>,3> baseline{},applied{};
         bool baselineValid=false,appliedValid=false,owned=false;
         std::array<std::array<WORD,256>,3> observed{};
+        // HDR (advanced colour) output: Windows applies legacy gamma ramps to
+        // the encoded HDR signal, which shifts and crushes colours instead of
+        // dimming. Such displays are dimmed through the SDR content brightness.
+        bool hdr=false;LUID adapter{};UINT32 target=0;ULONG sdrBaseline=0,sdrApplied=0;
     };
+    struct SdrWhiteSet {DISPLAYCONFIG_DEVICE_INFO_HEADER header;ULONG SDRWhiteLevel;BYTE finalValue;};
+    // Display-config target for a GDI display name, when it outputs HDR.
+    static bool hdrTarget(const std::wstring& name,LUID& adapter,UINT32& target){
+        UINT32 pathCount=0,modeCount=0;if(GetDisplayConfigBufferSizes(QDC_ONLY_ACTIVE_PATHS,&pathCount,&modeCount)!=ERROR_SUCCESS)return false;
+        std::vector<DISPLAYCONFIG_PATH_INFO> paths(pathCount);std::vector<DISPLAYCONFIG_MODE_INFO> modes(modeCount);
+        if(QueryDisplayConfig(QDC_ONLY_ACTIVE_PATHS,&pathCount,paths.data(),&modeCount,modes.data(),nullptr)!=ERROR_SUCCESS)return false;
+        for(UINT32 i=0;i<pathCount;++i){const auto& path=paths[i];
+            DISPLAYCONFIG_SOURCE_DEVICE_NAME source{};source.header={DISPLAYCONFIG_DEVICE_INFO_GET_SOURCE_NAME,UINT32(sizeof(source)),path.sourceInfo.adapterId,path.sourceInfo.id};
+            if(DisplayConfigGetDeviceInfo(&source.header)!=ERROR_SUCCESS||name!=source.viewGdiDeviceName)continue;
+            DISPLAYCONFIG_GET_ADVANCED_COLOR_INFO color{};color.header={DISPLAYCONFIG_DEVICE_INFO_GET_ADVANCED_COLOR_INFO,UINT32(sizeof(color)),path.targetInfo.adapterId,path.targetInfo.id};
+            if(DisplayConfigGetDeviceInfo(&color.header)!=ERROR_SUCCESS)return false;
+            adapter=path.targetInfo.adapterId;target=path.targetInfo.id;return color.advancedColorEnabled;
+        }
+        return false;
+    }
+    static std::optional<ULONG> sdrWhite(LUID adapter,UINT32 target){
+        DISPLAYCONFIG_SDR_WHITE_LEVEL value{};value.header={DISPLAYCONFIG_DEVICE_INFO_GET_SDR_WHITE_LEVEL,UINT32(sizeof(value)),adapter,target};
+        if(DisplayConfigGetDeviceInfo(&value.header)!=ERROR_SUCCESS)return {};return value.SDRWhiteLevel;
+    }
+    // The Settings "SDR content brightness" slider: 1000 = 80 nits, 6000 = 480 nits.
+    static bool setSdrWhite(LUID adapter,UINT32 target,ULONG level){
+        SdrWhiteSet value{};value.header={static_cast<DISPLAYCONFIG_DEVICE_INFO_TYPE>(0xFFFFFFEE),UINT32(sizeof(value)),adapter,target};value.SDRWhiteLevel=level;value.finalValue=1;
+        return DisplayConfigSetDeviceInfo(&value.header)==ERROR_SUCCESS;
+    }
     QString path;Json document,disk;
     std::vector<Display> displays;
     QTimer timer;QElapsedTimer elapsed,previewClock,monotonic;
@@ -45,7 +73,7 @@ class OfficeScreen final {
     std::function<void()> reveal;
     bool standalone=false;int64_t standaloneChecked=-1;
     // Original ramps survive a crash here; normal restoration removes it.
-    QString baselinePath;std::map<std::wstring,std::array<std::array<WORD,256>,3>> recovered;
+    QString baselinePath;std::map<std::wstring,std::array<std::array<WORD,256>,3>> recovered;std::map<std::wstring,ULONG> recoveredSdr;
 
     static Json readFile(const QString& name) {
         QFile file(name);if(!file.open(QIODevice::ReadOnly))throw std::runtime_error("Cannot read screen settings");
@@ -114,18 +142,23 @@ class OfficeScreen final {
     void loadBaselines(){
         QFile file(baselinePath);if(!file.open(QIODevice::ReadOnly))return;auto bytes=file.readAll();
         auto saved=Json::parse(bytes.constData(),bytes.constData()+bytes.size(),nullptr,false);if(!saved.is_object())return;
-        for(auto& [name,ramp]:saved.items()){if(!ramp.is_array()||ramp.size()!=768)continue;std::array<std::array<WORD,256>,3> value{};bool valid=true;
+        for(auto& [name,ramp]:saved.items()){
+            if(name.starts_with("sdr:")&&ramp.is_number_unsigned()&&ramp.get<unsigned>()>=1000&&ramp.get<unsigned>()<=6000){recoveredSdr[QString::fromStdString(name.substr(4)).toStdWString()]=ramp.get<ULONG>();continue;}
+            if(!ramp.is_array()||ramp.size()!=768)continue;std::array<std::array<WORD,256>,3> value{};bool valid=true;
             for(size_t i=0;i<768&&valid;++i){valid=ramp[i].is_number_unsigned()&&ramp[i].get<unsigned>()<=65535;if(valid)value[i/256][i%256]=static_cast<WORD>(ramp[i].get<unsigned>());}
             if(valid)recovered[QString::fromStdString(name).toStdWString()]=value;}
     }
     void saveBaselines(){
-        Json saved=Json::object();for(auto& d:displays){auto ramp=Json::array();for(auto& channel:d.baseline)for(auto v:channel)ramp.push_back(v);saved[QString::fromStdWString(d.name).toStdString()]=ramp;}
+        Json saved=Json::object();for(auto& d:displays){auto ramp=Json::array();for(auto& channel:d.baseline)for(auto v:channel)ramp.push_back(v);saved[QString::fromStdWString(d.name).toStdString()]=ramp;if(d.hdr)saved["sdr:"+QString::fromStdWString(d.name).toStdString()]=d.sdrBaseline;}
         QSaveFile file(baselinePath);auto bytes=saved.dump();
         if(!file.open(QIODevice::WriteOnly)||file.write(bytes.data(),bytes.size())!=static_cast<qint64>(bytes.size())||!file.commit())error="Cannot record the original gamma ramps for crash recovery";
     }
     void restoreDisplays() noexcept {
         bool restored=true;
-        for(auto& d:displays){if(d.baselineValid&&d.owned){if(!SetDeviceGammaRamp(d.dc,d.baseline.data())){error="Could not restore a display gamma baseline";restored=false;}}if(d.dc)DeleteDC(d.dc);}
+        for(auto& d:displays){
+            if(d.hdr&&d.owned){if(!setSdrWhite(d.adapter,d.target,d.sdrBaseline)){error="Could not restore the HDR SDR content brightness";restored=false;}}
+            else if(d.baselineValid&&d.owned){if(!SetDeviceGammaRamp(d.dc,d.baseline.data())){error="Could not restore a display gamma baseline";restored=false;}}
+            if(d.dc)DeleteDC(d.dc);}
         if(restored&&!displays.empty())QFile::remove(baselinePath);
         displays.clear();appliedValid=false;
     }
@@ -143,6 +176,8 @@ class OfficeScreen final {
             // After a crash the current ramp is still our adjusted one; the
             // recorded original is the only correct calibration baseline.
             if(auto found=self.recovered.find(d.name);found!=self.recovered.end()){d.baseline=found->second;self.recovered.erase(found);}
+            if(hdrTarget(d.name,d.adapter,d.target))if(auto level=sdrWhite(d.adapter,d.target)){d.hdr=true;d.sdrBaseline=*level;
+                if(auto found=self.recoveredSdr.find(d.name);found!=self.recoveredSdr.end()){d.sdrBaseline=found->second;self.recoveredSdr.erase(found);}}
             self.displays.push_back(d);return TRUE;
         },reinterpret_cast<LPARAM>(this));
         if(!displays.empty())saveBaselines();
@@ -196,6 +231,17 @@ class OfficeScreen final {
         ensureDisplays();bool all=!displays.empty();const auto gain=screen::multipliers(next);
         if(refreshGamma)++gammaRevision;
         for(auto& display:displays){
+            if(display.hdr){
+                // Brightness only; colour temperature is not applied to HDR output.
+                const auto desired=static_cast<ULONG>(std::clamp(std::lround(display.sdrBaseline*next.brightness),1000l,6000l));
+                if(display.appliedValid&&desired==display.sdrApplied)continue;
+                display.appliedValid=false;
+                if(!setSdrWhite(display.adapter,display.target,desired)){error="Windows rejected the HDR SDR content brightness";all=false;continue;}
+                display.owned=true;display.sdrApplied=desired;
+                auto observed=sdrWhite(display.adapter,display.target);
+                if(!observed||std::abs(long(*observed)-long(desired))>10){error="HDR SDR content brightness readback differs from the requested level";all=false;}else display.appliedValid=true;
+                continue;
+            }
             std::array<std::array<WORD,256>,3> desired{};
             // Multiply the original ramp, preserving ICC calibration and its shape.
             for(size_t c=0;c<3;++c)for(size_t i=0;i<256;++i)desired[c][i]=static_cast<WORD>(std::clamp(std::lround(display.baseline[c][i]*gain[c]),0l,65535l));
@@ -265,7 +311,11 @@ public:
         // GDI exposes no gamma-change notification. Observe once per second and
         // react only to an actual changed ramp, rather than a timed retry window.
         const auto observedTime=monotonic.elapsed();
-        if(observedTime-lastObservation>=1000){lastObservation=observedTime;for(auto& d:displays)if(d.owned){std::array<std::array<WORD,256>,3> observed{};if(GetDeviceGammaRamp(d.dc,observed.data())&&observed!=d.observed){d.observed=observed;int difference=0;for(size_t c=0;c<3;++c)for(size_t i=0;i<256;++i)difference=std::max(difference,std::abs(int(observed[c][i])-int(d.applied[c][i])));if(difference>8)refreshGamma=true;}}}
+        if(observedTime-lastObservation>=1000){lastObservation=observedTime;for(auto& d:displays)if(d.owned&&d.hdr){
+                // A user change of the Settings slider becomes the new baseline.
+                auto level=sdrWhite(d.adapter,d.target);
+                if(level&&std::abs(long(*level)-long(d.sdrApplied))>10&&lastApplied&&lastApplied->brightness>0){d.sdrBaseline=static_cast<ULONG>(std::clamp(std::lround(*level/lastApplied->brightness),1000l,6000l));d.appliedValid=false;refreshGamma=true;saveBaselines();}
+            }else if(d.owned){std::array<std::array<WORD,256>,3> observed{};if(GetDeviceGammaRamp(d.dc,observed.data())&&observed!=d.observed){d.observed=observed;int difference=0;for(size_t c=0;c<3;++c)for(size_t i=0;i<256;++i)difference=std::max(difference,std::abs(int(observed[c][i])-int(d.applied[c][i])));if(difference>8)refreshGamma=true;}}}
         updateForeground();if(preview&&previewClock.elapsed()>=14400)preview=false;auto instant=cycleInstant(real);
         auto times=solarAt(instant);const auto& s=document.at("settings");
         bool on=!pause("screen_pause").active(now)&&pauseReason.empty();auto previousTarget=target,previousCurrent=current;
@@ -280,7 +330,7 @@ public:
     }
     Json status() const {
         auto real=QDateTime::currentDateTime();auto instant=cycleInstant(real);auto times=solarAt(instant);auto p=pause("screen_pause"),rgb=pause("lighting_pause");
-        return {{"managed",document.value("managed",false)},{"screen_disabled",p.active(real.toMSecsSinceEpoch())},{"lighting_disabled",rgb.active(real.toMSecsSinceEpoch())},{"screen_pause",p.json()},{"lighting_pause",rgb.json()},{"automatic_pause",pauseReason},{"temperature",appliedValid&&lastApplied?lastApplied->temperature:current.temperature},{"brightness",appliedValid&&lastApplied?lastApplied->brightness:current.brightness},{"target_temperature",target.temperature},{"target_brightness",target.brightness},{"gamma_valid",appliedValid},{"night_weight",std::clamp(current.night,0.,1.)},{"display_count",displays.size()},{"error",error},{"hotkey_error",hotkeyError},{"preview",preview},{"sunrise",QTime(0,0).addSecs(qRound(times.first)).toString("HH:mm").toStdString()},{"sunset",QTime(0,0).addSecs(qRound(times.second)).toString("HH:mm").toStdString()},{"revision",revision}};
+        return {{"managed",document.value("managed",false)},{"screen_disabled",p.active(real.toMSecsSinceEpoch())},{"lighting_disabled",rgb.active(real.toMSecsSinceEpoch())},{"screen_pause",p.json()},{"lighting_pause",rgb.json()},{"automatic_pause",pauseReason},{"temperature",appliedValid&&lastApplied?lastApplied->temperature:current.temperature},{"brightness",appliedValid&&lastApplied?lastApplied->brightness:current.brightness},{"target_temperature",target.temperature},{"target_brightness",target.brightness},{"gamma_valid",appliedValid},{"night_weight",std::clamp(current.night,0.,1.)},{"display_count",displays.size()},{"hdr_displays",std::count_if(displays.begin(),displays.end(),[](auto& d){return d.hdr;})},{"error",error},{"hotkey_error",hotkeyError},{"preview",preview},{"sunrise",QTime(0,0).addSecs(qRound(times.first)).toString("HH:mm").toStdString()},{"sunset",QTime(0,0).addSecs(qRound(times.second)).toString("HH:mm").toStdString()},{"revision",revision}};
     }
     Json snapshot() const {
         auto result=status();const auto& s=document.at("settings");result["settings"]=s;result["temperature_offset"]=document.value("temperature_offset",0.);result["brightness_offset"]=document.value("brightness_offset",0.);result["imported"]=document.value("imported",false);

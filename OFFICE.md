@@ -52,8 +52,11 @@ clock rate is not a claim that static hardware receives that many fresh frames.
 
 The office path is opt-in: `office-ambience.json` in OpenRGB's private configuration
 directory activates it. Without this file, the upstream desktop capture/settings
-path remains available. The office path requires the verified six-controller,
-314-LED inventory. The lighting owner remains headless. `OfficeControl.exe` is
+path remains available. The office path maps the six office controllers (314 LEDs)
+and, where attached, a Corsair K95 RGB Platinum (120-key matrix plus a 19-LED light
+bar). A supported controller missing from the saved map joins it with default
+regions, at startup or when detected later; Save the topology to persist it. The
+lighting owner remains headless. `OfficeControl.exe` is
 an optional native Qt panel; it neither captures nor submits RGB itself.
 
 ```json
@@ -215,3 +218,12 @@ settings as `device_night_level` and are set through the owner's `intensity` com
 `target: "night"` (`value: null` returns a light to following the screen). Own levels need
 integrated screen adjustment; without it every light follows the measured display gamma.
 Screen pauses return the cycle position to day, so lights go back to full brightness.
+
+## HDR displays
+
+Windows applies legacy gamma ramps to the encoded signal of an HDR (advanced
+colour) output, which distorts colours instead of dimming. On HDR displays the
+screen adjustment therefore scales the Windows *SDR content brightness* (the
+Settings slider, 80-480 nits) from the level found at startup, and restores it on
+exit or pause. Colour temperature is not applied to HDR displays. Moving the slider
+while the app runs becomes the new baseline.

@@ -80,7 +80,7 @@ void loadScreen(const Json& value){
     refresh.setInterval(isVisible()&&pages->currentIndex()==7&&value.value("preview",false)?100:(pages->currentIndex()==1||pages->currentIndex()==4)?200:1000);
     auto reason=value.value("automatic_pause",std::string());
     screenStatus->setText(QString("%1")
-        .arg(!value.value("managed",false)?"Ready to replace standalone LightBulb":screenOff?"Screen adjustments disabled":!reason.empty()?QString("Paused: ")+text(reason):value.value("gamma_valid",false)?QString("Verified on %1 displays").arg(value.value("display_count",0)):"Waiting for verified display gamma"));
+        .arg(!value.value("managed",false)?"Ready to replace standalone LightBulb":screenOff?"Screen adjustments disabled":!reason.empty()?QString("Paused: ")+text(reason):value.value("gamma_valid",false)?QString("Verified on %1 displays").arg(value.value("display_count",0))+(value.value("hdr_displays",0)?QString(" · %1 HDR: dims SDR content brightness, no colour temperature").arg(value.value("hdr_displays",0)):QString()):"Waiting for verified display gamma"));
     screenPreview->setText(value.value("preview",false)?"Stop preview":"Preview full day");
     screenPreview->setEnabled(value.value("managed",false));
     if(!screenDirty){

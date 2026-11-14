@@ -62,7 +62,7 @@ using namespace winrt::Windows::Graphics::DirectX;
 using namespace winrt::Windows::Graphics::DirectX::Direct3D11;
 using Clock=std::chrono::steady_clock;
 using Json=nlohmann::json;
-constexpr unsigned maxSamples=384;
+constexpr unsigned maxSamples=512;
 struct Apartment {
     HRESULT result=RoInitialize(RO_INIT_MULTITHREADED);
     Apartment() { if(FAILED(result) && result!=RPC_E_CHANGED_MODE) check_hresult(result); }
@@ -212,12 +212,12 @@ struct Device {
 std::string deviceKey(RGBControllerInterface* controller) {
     auto name=controller->GetName();
     return name.find("H6609")!=std::string::npos?"H6609":name.find("H8048")!=std::string::npos?"H8048":
-        name.find("Q6 HE ISO")!=std::string::npos?"Keychron":name.find("Lenovo Legion")!=std::string::npos?"Legion":
+        name.find("Q6 HE ISO")!=std::string::npos?"Keychron":name.find("Lenovo Legion")!=std::string::npos?"Legion":name.find("K95 RGB PLATINUM")!=std::string::npos?"Corsair":
         controller->GetDescription().find("NL72S2")!=std::string::npos?"Secretlab":
         (name.find("G502 X PLUS")!=std::string::npos || name.find("G502 X Plus")!=std::string::npos)?"Logitech":"";
 }
 unsigned expectedCount(const std::string& key) {
-    static const std::map<std::string,unsigned> counts={{"H6609",20},{"H8048",20},{"Keychron",109},{"Legion",109},{"Secretlab",48},{"Logitech",8}};
+    static const std::map<std::string,unsigned> counts={{"H6609",20},{"H8048",20},{"Keychron",109},{"Legion",109},{"Secretlab",48},{"Logitech",8},{"Corsair",139}};
     auto found=counts.find(key);if(found==counts.end()) throw std::runtime_error("Unknown office controller identity");return found->second;
 }
 Sample around(float x,float y,float width,float height) {
@@ -246,8 +246,10 @@ std::vector<Sample> deviceSamples(RGBControllerInterface* controller) {
     } else {
         bool laptop=name.find("Lenovo Legion 7 Gen 8")!=std::string::npos && n==109;
         bool keyboard=name.find("Q6 HE ISO")!=std::string::npos && n==109;
+        // Corsair K95 RGB Platinum: 120-key matrix plus a 19-LED top light bar.
+        bool corsair=name.find("K95 RGB PLATINUM")!=std::string::npos && n==139;
         bool mouse=(name.find("G502 X PLUS")!=std::string::npos || name.find("G502 X Plus")!=std::string::npos) && n==8;
-        if(!laptop && !keyboard && !mouse) throw std::runtime_error("Unexpected office device or LED count: "+name);
+        if(!laptop && !keyboard && !corsair && !mouse) throw std::runtime_error("Unexpected office device or LED count: "+name);
         float left=laptop?0.f:mouse?.80f:.25f;
         float top=laptop?.55f:mouse?.75f:.70f;
         float width=laptop?.25f:mouse?.20f:.50f;
@@ -266,6 +268,7 @@ std::vector<Sample> deviceSamples(RGBControllerInterface* controller) {
             for(unsigned index=0;index<n;++index) if(counts[index])
                 points[index]=around(left+width*sx[index]/counts[index],top+height*sy[index]/counts[index],width/columns,height/rows);
         }
+        if(corsair) line(120,19,left,top,width,0,width/19,.04f);
         if(laptop) { line(102,6,left,.98f,width,0,width/6,.04f); points[108]=around(left+width/2,.98f,.04f,.04f); }
     }
     return points;
@@ -756,6 +759,7 @@ struct OfficeAmbience::Impl {
             };
             if(d.key=="H6609") {group("left","Monitor - Left",0,3);group("top","Monitor - Top",3,7);group("right","Monitor - Right",10,4);group("bottom","Monitor - Bottom",14,6);}
             else if(d.key=="H8048") {group("left","Tower - Left",0,10);group("right","Tower - Right",10,10);}
+            else if(d.key=="Corsair") {group("keys","Keyboard",0,120);group("lightbar","Light bar",120,19);}
             else if(d.key=="Legion") {group("keys","Laptop keyboard",0,102);group("front","Laptop front",102,6);group("aux","Laptop auxiliary",108,1);}
             else group("all",d.name.c_str(),0,static_cast<unsigned>(d.count));
             result.push_back({{"id",d.key},{"name",d.name},{"regions",office::encode(regions)},
@@ -764,7 +768,7 @@ struct OfficeAmbience::Impl {
         return result;
     }
     std::vector<Sample> validatedLayout(const Json& candidate) const {
-        if(!candidate.is_array() || candidate.size()!=devices.size()) throw std::runtime_error("The map must contain all six connected devices");
+        if(!candidate.is_array() || candidate.size()!=devices.size()) throw std::runtime_error("The map must contain every office device");
         auto defaults=defaultLayout();std::vector<Sample> result;
         for(size_t i=0;i<devices.size();++i) {
             const auto& value=candidate.at(i);const auto& expected=defaults.at(i);
@@ -1045,7 +1049,10 @@ struct OfficeAmbience::Impl {
             order.push_back(key);
         }
         if(config.contains("layout")) {
-            order.clear();for(auto& d:config["layout"]) order.push_back(d.at("id").get<std::string>());
+            auto liveOrder=std::move(order);order.clear();for(auto& d:config["layout"]) order.push_back(d.at("id").get<std::string>());
+            // A supported controller that is not in the saved map yet (for example
+            // a newly attached keyboard) joins with its default regions.
+            for(auto& key:liveOrder) if(std::find(order.begin(),order.end(),key)==order.end()) order.push_back(key);
         }
         std::set<std::string> identities;
         for(size_t i=0;i<order.size();++i) {
@@ -1062,10 +1069,14 @@ struct OfficeAmbience::Impl {
             devices.push_back({controller,samples.size(),points.size(),std::vector<RGBColor>(points.size()),key,name,names});
             samples.insert(samples.end(),points.begin(),points.end());
         }
-        if(devices.size()!=6 || samples.size()!=314) throw std::runtime_error("Office ambience requires the verified six-device 314-LED inventory");
+        if(devices.empty()) throw std::runtime_error("Office ambience found no supported office controller");
+        if(samples.size()>maxSamples) throw std::runtime_error("Office ambience supports at most 512 LEDs");
         layout=defaultLayout();
         factoryLayout=layout;
-        if(config.contains("layout")) {samples=validatedLayout(config["layout"]);layout=config["layout"];}
+        if(config.contains("layout")) {
+            for(size_t i=config["layout"].size();i<layout.size();++i){config["layout"].push_back(layout[i]);journal->write("device_added",{{"device",devices[i].key}});}
+            samples=validatedLayout(config["layout"]);layout=config["layout"];
+        }
         for(auto& device:devices) if(device.controller) device.controller->SetCustomMode();
         if(!activate) return;
         try {
@@ -1151,6 +1162,31 @@ struct OfficeAmbience::Impl {
         // Mapped devices are rebound first: a hardware identity failure must
         // not leave pointers to controllers freed after this callback returns.
         try {bindHardware(current);} catch(const std::exception& e) {nativeControllers.clear();controllerError=e.what();}
+        pendingControllers.clear();
+        for(auto* c:current){auto key=deviceKey(c);
+            if(!key.empty()&&c->GetLEDCount()==expectedCount(key)&&std::none_of(devices.begin(),devices.end(),[&](const auto& d){return d.key==key;}))pendingControllers.push_back(c);}
+    }
+    // Pointers are valid only under controllersMutex: every removal first
+    // passes resourcesUpdated, which recomputes this list.
+    std::vector<RGBControllerInterface*> pendingControllers;
+    void addPendingControllers() {
+        std::lock_guard lock(controllersMutex);if(pendingControllers.empty()||detectionActive)return;
+        bool added=false;
+        for(auto* c:std::exchange(pendingControllers,{})) {
+            auto key=deviceKey(c);
+            if(std::any_of(devices.begin(),devices.end(),[&](const auto& d){return d.key==key;}))continue;
+            auto points=deviceSamples(c);
+            if(samples.size()+points.size()>maxSamples){controllerError="Too many LEDs to add "+key;continue;}
+            Json names=Json::array();for(unsigned led=0;led<points.size();++led)names.push_back(c->GetLEDName(led));
+            devices.push_back({c,samples.size(),points.size(),std::vector<RGBColor>(points.size()),key,c->GetName(),names});
+            samples.insert(samples.end(),points.begin(),points.end());
+            auto entry=defaultLayout().back();layout.push_back(entry);factoryLayout.push_back(entry);
+            if(config.contains("layout"))config["layout"].push_back(entry);
+            c->SetCustomMode();added=true;
+            journal->write("device_added",{{"device",key},{"leds",points.size()}});
+        }
+        // The sampler is sized for the region count; rebuild it with the new map.
+        if(added){capture.reset();source=nullptr;latest.clear();invalidate=true;dirty=true;++revision;}
     }
     static std::optional<uint32_t> lastInput(){
         LASTINPUTINFO value{sizeof(value)};
@@ -1261,6 +1297,7 @@ struct OfficeAmbience::Impl {
         return sessionLocked?"session-locked":powerSuspended?"power-suspended":displayOff?"display-asleep":automaticSaver?"automatic-screensaver":desktopUnavailable?"secure-desktop":monitorMissing?"monitor-disconnected":rest.active()?"awaiting-user-input":"";
     }
     void tick() {
+        addPendingControllers();
         // RGB pause owns capture lifetime, independently of gamma and Awake.
         const bool paused=outputPaused||screen->lightingPaused();
         const bool nextCapturePaused=captureSuppressed();

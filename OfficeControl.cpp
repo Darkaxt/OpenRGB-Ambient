@@ -321,7 +321,7 @@ public:
                 auto point=[&](Region r){return QPointF(image.left()+(r.left+r.right)*.5*image.width(),image.top()+(r.top+r.bottom)*.5*image.height());};
                 auto a=point(values.front()),z=point(values.back());QLineF line(a,z);
                 // Local order cue instead of a diagonal across a keyboard.
-                auto key=(*layout)[device].value("id",std::string());bool linear=key!="Keychron" && !(key=="Legion" && group==0);
+                auto key=(*layout)[device].value("id",std::string());bool linear=key!="Keychron" && !((key=="Legion" || key=="Corsair") && group==0);
                 if(linear && line.length()>16) {double angle=std::atan2(z.y()-a.y(),z.x()-a.x());QPointF u(std::cos(angle),std::sin(angle)),v(-u.y(),u.x());z=a+u*std::min(36.,line.length());p.setPen(QPen(Qt::white,1.5));p.drawLine(a,z);p.drawLine(z,z-u*7+v*4);p.drawLine(z,z-u*7-v*4);}
                 p.setPen(Qt::white);p.drawText(QRectF(a.x()+5,a.y()-20,80,18),Qt::AlignLeft,QString("LED %1").arg(selectedIds.front().second));
                 auto end=point(values.back());p.setBrush(QColor("#ffd26e"));p.setPen(QPen(QColor("#061b27"),1));p.drawEllipse(a,4,4);p.drawEllipse(end,4,4);p.setPen(Qt::white);p.drawText(QRectF(end.x()+5,end.y()+3,90,18),Qt::AlignLeft,QString("LAST %1").arg(selectedIds.back().second));
@@ -640,7 +640,7 @@ class Panel : public officeui::OfficeWindow {
         while(auto* item=dashboardList->takeAt(0)) {if(item->widget()){item->widget()->hide();item->widget()->deleteLater();}delete item;}
         auto editZone=[this](size_t d,size_t g){select(d,g);tree->setCurrentItem(tree->topLevelItem(d)->child(g));pages->setCurrentIndex(1);};
         for(size_t d=0;d<layout.size();++d) {
-            auto key=layout[d].value("id",std::string());bool matrix=key=="Keychron" || key=="Legion";
+            auto key=layout[d].value("id",std::string());bool matrix=key=="Keychron" || key=="Legion" || key=="Corsair";
             QString glyph=matrix?"keyboard":key=="Logitech"?"fiber_manual_record":"linear_scale";
             auto card=new officeui::Card;card->setSizePolicy(QSizePolicy::Preferred,QSizePolicy::Minimum);auto row=new QHBoxLayout;row->setSpacing(12);
             auto mark=new QLabel;mark->setPixmap(officeui::icon(glyph,matrix?QColor("#a78bfa"):officeui::accent).pixmap(26,26));mark->setFixedSize(38,38);row->addWidget(mark);

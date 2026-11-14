@@ -593,8 +593,22 @@ struct OfficeLifecycleTest {
         {std::ofstream out(path);out<<saved;}
         api.controllers.erase(api.controllers.begin());
         Controller unknown("Govee ",1);api.controllers.push_back(&unknown);
+        Controller corsair("Corsair K95 RGB PLATINUM",139);
         OfficeAmbience::Impl restarted(&api,path,false);
         require(restarted.devices.size()==6 && restarted.samples.size()==314 && restarted.report()["online_devices"]==5,"Persisted map boots with a missing device");
+        // A supported keyboard attached later joins the running map without a restart.
+        api.controllers.push_back(&corsair);
+        restarted.resourcesUpdated(RESOURCEMANAGER_UPDATE_REASON_DEVICE_LIST_UPDATED);restarted.tick();
+        require(restarted.devices.size()==7 && restarted.samples.size()==453 && restarted.layout.size()==7 && restarted.layout[6]["groups"].size()==2 &&
+                corsair.modes==1 && restarted.report()["online_devices"]==6,"Hot-added Corsair keyboard joins the map");
+        restarted.resourcesUpdated(RESOURCEMANAGER_UPDATE_REASON_DEVICE_LIST_UPDATED);restarted.tick();
+        require(restarted.devices.size()==7,"A mapped controller is not added twice");
+        {
+            // At startup it is appended to the saved six-device map in memory only.
+            OfficeAmbience::Impl booted(&api,path,false);
+            require(booted.devices.size()==7 && booted.samples.size()==453 && booted.devices.back().key=="Corsair","Saved map gains a live supported keyboard at startup");
+        }
+        api.controllers.pop_back();restarted.resourcesUpdated(RESOURCEMANAGER_UPDATE_REASON_DEVICE_LIST_UPDATED);
         owner.resourcesUpdated(RESOURCEMANAGER_UPDATE_REASON_DETECTION_STARTED);
         require(owner.report()["online_devices"]==0,"Rescan releases all borrowed pointers before native deletion");
         owner.chooseSource(Monitor{});owner.dirty=false;owner.tick();

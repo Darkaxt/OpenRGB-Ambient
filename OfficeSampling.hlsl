@@ -15,7 +15,7 @@ void compareCs(uint3 pixelId:SV_DispatchThreadID,uint groupIndex:SV_GroupIndex) 
     if(groupIndex==0 && tileChanged) {uint previous;difference.InterlockedOr(0,1,previous);}
 }
 SamplerState linearSampler : register(s0);
-cbuffer Regions : register(b0) { float4 region[384]; };
+cbuffer Regions : register(b0) { float4 region[512]; };
 cbuffer Options : register(b1) { float4 algorithm; float4 appearance; float4 borders; float4 spare; };
 // Read-only draft preview; LED extraction continues using applied appearance.
 cbuffer PreviewOptions : register(b2) { float4 previewAppearance; };
