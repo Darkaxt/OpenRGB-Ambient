@@ -236,6 +236,10 @@ public:
     bool multipleZones() const {
         return zones.size()>1 || (zones.size()==1 && zones.front().second<0);
     }
+    // Offline devices keep their map but recede: another device can occupy the
+    // same desk position (the Corsair where the office Keychron sits).
+    Json online=Json::array();
+    bool offline(size_t d) const {return d<online.size()&&online[d].is_boolean()&&!online[d].get<bool>();}
     bool visible(int d,unsigned i) const {
         if(view==View::AllDevices)return true;
         auto matches=[&](int target,int g) {
@@ -292,6 +296,7 @@ public:
                     (r[2].get<double>()-r[0].get<double>())*image.width(),(r[3].get<double>()-r[1].get<double>())*image.height());
                 bool active=std::find(selectedIds.begin(),selectedIds.end(),std::pair<int,unsigned>{static_cast<int>(d),static_cast<unsigned>(i)})!=selectedIds.end();
                 if(active!=selectionPass)continue;
+                if(!active&&offline(d)){p.setPen(QPen(QColor(173,184,194,60),1,Qt::DotLine));p.drawRect(box);continue;}
                 if(active && d<effective.size() && i<effective[d].size()) {
                     auto actual=effective[d][i];QRectF sample(image.left()+actual[0].get<double>()*image.width(),image.top()+actual[1].get<double>()*image.height(),(actual[2].get<double>()-actual[0].get<double>())*image.width(),(actual[3].get<double>()-actual[1].get<double>())*image.height());
                     p.setPen(QPen(QColor("#ffd26e"),1,Qt::DashLine));p.drawRect(sample);
@@ -341,7 +346,7 @@ public:
             bool hit=false;
             for(int d=static_cast<int>(layout->size())-1;d>=0 && !hit;--d) {
                 const auto& regions=(*layout)[d]["regions"];
-                for(size_t i=0;i<regions.size();++i) {if(!visible(d,static_cast<unsigned>(i)))continue;auto r=regions[i];if(normalized.x()>=r[0].get<double>() && normalized.x()<=r[2].get<double>() && normalized.y()>=r[1].get<double>() && normalized.y()<=r[3].get<double>()) {if(picked) picked(d,static_cast<int>(i),e->modifiers());hit=true;break;}}
+                for(size_t i=0;i<regions.size();++i) {if(!visible(d,static_cast<unsigned>(i))||offline(static_cast<size_t>(d)))continue;auto r=regions[i];if(normalized.x()>=r[0].get<double>() && normalized.x()<=r[2].get<double>() && normalized.y()>=r[1].get<double>() && normalized.y()<=r[3].get<double>()) {if(picked) picked(d,static_cast<int>(i),e->modifiers());hit=true;break;}}
             }if(!hit) return;
             if(extend){setFocus();e->accept();return;}
         }
@@ -593,6 +598,7 @@ class Panel : public officeui::OfficeWindow {
         diagnostics->setPlainText(QString::fromStdString(s.dump(2)));
         map->colours=snapshot.at("colors");
         map->effective=snapshot.value("effective_regions",Json::array());
+        map->online=snapshot.value("online",Json::array());
         if(snapshot.contains("online")) for(size_t d=0;d<onlineLabels.size();++d) {
             bool online=snapshot.at("online").at(d);onlineLabels[d]->setText(online?"Connected":"Offline · map retained");
             onlineLabels[d]->setStyleSheet(online?"color:#22d3a5":"color:#ff9f1c");
