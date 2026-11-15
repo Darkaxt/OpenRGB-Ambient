@@ -77,7 +77,9 @@ void lightingMixer(QApplication& app){
     auto mute=mixer.findChild<QToolButton*>("lightMute-H6609");mute->click();require(requests.back().at("value")==0,"Device mute did not reach native command");
     state["devices"][0]["value"]=0;respond(replies.size()-1);mute->click();require(requests.back().at("value")==40,"Unmute did not restore device level");
     state["devices"][0]["value"]=40;respond(replies.size()-1);
-    auto offline=mixer.findChild<QLabel*>("lightName-Keychron");require(offline&&offline->text().contains("Offline")&&slider("Keychron")->isEnabled(),"Offline device is missing or cannot retain a future level");
+    auto offline=mixer.findChild<QWidget*>("lightRow-Keychron");auto offlineSlider=mixer.findChild<QSlider*>("lightSlider-Keychron");
+    require(offline&&offline->isHidden()&&offlineSlider&&offlineSlider->value()==100,"Disconnected device must be hidden from the tray and keep its level");
+    {auto reconnected=state;reconnected["devices"][3]["online"]=true;mixer.setState(reconnected);require(!offline->isHidden(),"Reconnected device returns to the tray");mixer.setState(state);require(offline->isHidden(),"Disconnected device hides again");}
     state["fullscreen_active"]=true;mixer.setState(state);require(!mixer.findChild<QLabel*>("lightFullscreenState"),"Fullscreen policy leaked into tray controls");
     const auto output=qEnvironmentVariable("OFFICE_UI_EVIDENCE");Json metrics=Json::array();
     auto render=[&](const char* name){

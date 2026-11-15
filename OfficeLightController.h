@@ -216,7 +216,10 @@ public:
         for(auto& device:value.at("devices")){
             const auto key=device.at("id").get<std::string>();auto name=QString::fromStdString(device.at("name").get<std::string>());
             if(!rows.contains(key))rows.emplace(key,makeRow(key,name,deviceRows));
-            auto& row=rows.at(key);row.name->setText(name+(device.at("online").get<bool>()?"":" · Offline"));row.name->setToolTip(row.name->text());row.box->setProperty("online",device.at("online").get<bool>());setLevel(key,device.at("value"));
+            // The tray lists available devices only; a disconnected device keeps
+            // its level and its row returns when it reconnects.
+            const bool online=device.at("online").get<bool>();
+            auto& row=rows.at(key);row.name->setText(name);row.name->setToolTip(name);row.box->setProperty("online",online);row.box->setVisible(online);setLevel(key,device.at("value"));
         }
         applying=false;if(isVisible())fit();
     }
